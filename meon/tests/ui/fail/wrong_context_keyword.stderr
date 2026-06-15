@@ -1,0 +1,5 @@
+error: expected `sep`, got Some(Ident { sym: sap, span: #0 bytes(52..55) })
+ --> tests/ui/fail/wrong_context_keyword.rs:4:5
+  |
+4 |     sap = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+  |     ^^^

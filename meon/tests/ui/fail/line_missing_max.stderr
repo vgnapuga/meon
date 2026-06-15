@@ -1,0 +1,5 @@
+error: expected literal (line marker max)
+ --> tests/ui/fail/line_missing_max.rs:5:18
+  |
+5 |     lines { line(b'#') |n|: Heading { level: n } => headings [200]; }
+  |                  ^^^^

@@ -1,0 +1,33 @@
+[package]
+name = "meon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+description = "A declarative flat parsing engine for text formats"
+keywords = [ "parser", "dsl", "fast", "simd", "parsing" ]
+categories = [ "text-processing", "parsing" ]
+readme = "README.md"
+
+[features]
+avx2 = []
+avx512 = [ "avx2" ]
+
+[dependencies]
+paste = "1.0"
+memchr = "2.0"
+meon-macros.workspace = true
+
+[dev-dependencies]
+trybuild = "1.0"
+
+[[test]]
+name = "text_parser-mechanisms"
+path = "tests/text_parser/mechanisms/mod.rs"
+
+[[test]]
+name = "trybuild"
+path = "tests/trybuild.rs"

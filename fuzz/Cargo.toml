@@ -1,0 +1,20 @@
+[package]
+name = "fuzz"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+meon.workspace = true
+meon-md.workspace  = true
+
+[[bin]]
+name = "parse_text"
+path = "fuzz_targets/parse_text.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,19 @@
+[package]
+name = "meon-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+description = "Procedural macro crate for the meon parsing engine"
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+proc-macro-crate = "3.0"

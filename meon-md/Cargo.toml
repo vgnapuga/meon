@@ -1,0 +1,20 @@
+[package]
+name = "meon-md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+description = "A fast flat parser for a Markdown subset, built on the meon engine"
+keywords = [ "markdown", "parser", "fast", "meon", "text" ]
+categories = [ "text-processing", "parsing" ]
+readme = "README.md"
+
+[dependencies]
+meon.workspace = true
+
+[[test]]
+name = "text_parser-integration"
+path = "tests/integration.rs"

@@ -1,0 +1,5 @@
+error: expected [N] (inline fallback), got Some(Punct { char: ';', spacing: Alone, span: #0 bytes(136..137) })
+ --> tests/ui/fail/missing_cap.rs:5:31
+  |
+5 |     inline { fallback => texts; }
+  |                               ^
