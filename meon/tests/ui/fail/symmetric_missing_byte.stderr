@@ -1,0 +1,5 @@
+error: expected literal (symmetric byte)
+ --> tests/ui/fail/symmetric_missing_byte.rs:5:43
+  |
+5 |     inline { on_trigger(b'*') { symmetric { 1 => bolds [40], } } }
+  |                                           ^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,219 @@
+# meon-md
+
+[**EN**](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md) | RU
+
+Быстрый плоский парсер подмножества Markdown, построенный на движке
+[`meon`](https://github.com/vgnapuga/meon/blob/main/meon/README.md).
+
+`meon-md` — это одновременно готовый к использованию Markdown-парсер и
+эталонная грамматика, демонстрирующая что `meon` способен выразить в одном
+вызове `define_parser!`.
+
+* **meon**
+  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon/README.md)
+  * [***crates.io***](https://crates.io/crates/meon)
+* **meon-macros**
+  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-macros/README.md)
+  * [***crates.io***](https://crates.io/crates/meon-macros)
+* **meon-md**    <--
+  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
+  * [***crates.io***](https://crates.io/crates/meon-md)
+
+* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
+* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
+* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
+
+---
+
+## Быстрый старт
+
+```toml
+[dependencies]
+meon-md = "0.1"
+```
+
+```rust
+use meon_md::MarkdownParser;
+
+let src = b"# Hello\n**world** and *italic* with `code`\n";
+let c = MarkdownParser::parse(src);
+
+// Доступ по виду элементов — O(1) на вид
+println!("заголовков:  {}", c.headings.len());
+println!("жирных:      {}", c.bolds.len());
+println!("курсивных:   {}", c.italics.len());
+
+// Разрешаем спан в строковый срез
+if let Some((_, span)) = c.headings.first() {
+    println!("текст заголовка: {}", c.str(*span).unwrap());
+}
+```
+
+---
+
+## Поддерживаемые элементы
+
+### Инлайн
+
+| Элемент         | Синтаксис                   | Поле           | Тип           |
+|-----------------|-----------------------------|----------------|---------------|
+| Простой текст   | любые несовпавшие байты     | `texts`        | `Vec<Span>`   |
+| Жирный          | `**текст**`                 | `bolds`        | `Vec<Span>`   |
+| Курсив          | `*текст*`                   | `italics`      | `Vec<Span>`   |
+| Жирный курсив   | `***текст***`               | `bold_italics` | `Vec<Span>`   |
+| Инлайн-код      | `` `код` ``                 | `codes`        | `Vec<Span>`   |
+| Ссылка          | `[текст](url)`              | `links`        | `Vec<Link>`   |
+| Изображение     | `![alt](url)`               | `links`        | `Vec<Link>`   |
+| Автоссылка      | `<url>`                     | `autolinks`    | `Vec<Span>`   |
+| Жёсткий перенос | `\` или `··` в конце строки | `hard_breaks`  | `Vec<Span>`   |
+
+### Строчные
+
+| Элемент          | Синтаксис           | Поле              | Тип                          |
+|------------------|---------------------|-------------------|------------------------------|
+| Заголовок        | `# … ######`        | `headings`        | `Vec<(Heading, Span)>`       |
+| Тематический разрыв | `---`, `***`, `___` | `thematic_breaks` | `Vec<(ThematicBreak, Span)>` |
+
+### Блочные
+
+| Элемент           | Синтаксис        | Поле            | Тип                          |
+|-------------------|------------------|-----------------|------------------------------|
+| Блок кода         | ` ``` … ``` `    | `fenced_codes`  | `Vec<Span>`                  |
+| Цитата            | `> …`            | `blockquotes`   | `Vec<Span>`                  |
+| Элемент списка    | `- / * / +`      | `bullet_items`  | `Vec<(BulletItem, Span)>`    |
+| Нумерованный элемент | `1. / 1)`     | `ordered_items` | `Vec<(OrderedItem, Span)>`   |
+| Параграф          | fallback         | `paragraphs`    | `Vec<Span>`                  |
+
+---
+
+## Выходные типы
+
+```rust
+// Span — полуоткрытый байтовый диапазон [start, end) в срез источника
+pub struct Span { pub start: u32, pub end: u32 }
+
+// Link — несёт спаны текста и url плюс флаг изображения
+pub struct Link {
+    pub is_image: bool,
+    pub text: Span,
+    pub url:  Span,
+}
+
+// Heading — уровень вложенности 1–6
+pub struct Heading { pub level: NonZeroU8 }
+
+// ThematicBreak — ASCII байт разделителя (b'-', b'*' или b'_')
+pub struct ThematicBreak { pub kind: u8 }
+
+// BulletItem — ASCII байт маркера (b'-', b'*' или b'+')
+pub struct BulletItem { pub kind: u8 }
+
+// OrderedItem — разобранное число и байт разделителя (b'.' или b')')
+pub struct OrderedItem { pub kind: u8, pub num: u32 }
+```
+
+---
+
+## Работа со спанами
+
+Контент-структура заимствует оригинальный источник. Используйте встроенные
+хелперы для разрешения спанов:
+
+```rust
+let src = b"**жирный** и *курсив*\n";
+let c = MarkdownParser::parse(src);
+
+// str() возвращает None при невалидном UTF-8 вместо паники
+if let Some(text) = c.str(c.bolds[0]) {
+    println!("жирный: {text}");   // → "жирный"
+}
+
+// bytes() для сырого байтового доступа
+let raw: &[u8] = c.bytes(c.italics[0]);
+
+// _clean() итератор — внутреннее содержимое без байт разделителей
+for text in c.bolds_clean() {
+    println!("{}", std::str::from_utf8(text).unwrap());
+}
+
+// _raw() итератор — полный срез включая байты разделителей
+for raw in c.bolds_raw() {
+    println!("{}", std::str::from_utf8(raw).unwrap());  // → "**жирный**"
+}
+```
+
+---
+
+## Standalone-итераторы
+
+Каждый вид элементов имеет метод `find_*` который сканирует источник без
+полного парса. Используйте его когда нужен только один вид элементов из
+большого документа:
+
+```rust
+use meon_md::MarkdownParser;
+
+let src = long_document.as_bytes();
+
+// ~2–5× быстрее полного парса для одного вида элементов
+for span in MarkdownParser::find_bolds(src) {
+    println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
+}
+
+for link in MarkdownParser::find_links(src) {
+    // link.text, link.url, link.is_image
+}
+
+for (heading, span) in MarkdownParser::find_headings(src) {
+    println!("h{}: {}", heading.level, std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
+}
+```
+
+Standalone-итераторы работают без межэлементного контекста. Они могут
+возвращать спаны которые полный парсер подавил бы (например, маркеры жирного
+текста внутри блока с кодом). Подробнее —
+[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#12-standalone-iterators).
+
+---
+
+## Feature flags
+
+Наследуются от `meon`:
+
+| Feature  | Эффект                                                    |
+|----------|-----------------------------------------------------------|
+| `avx2`   | 32-байтовый SIMD-поиск (требует nightly + AVX2 процессор) |
+| `avx512` | 64-байтовый SIMD-поиск (включает `avx2`)                  |
+
+```toml
+[dependencies]
+meon-md = { version = "0.1", features = ["avx2"] }
+```
+
+---
+
+## Известные ограничения
+
+Это **демонстрационная грамматика**, а не реализация совместимая с CommonMark.
+
+- Цитата содержащая блок кода (`` > ``` ``) производит некорректный спан —
+  ограждение открывается и состояние цитаты теряется.
+- Вложенные цитаты (`> >`) утекают внутренним содержимым во внешний спан.
+- Акцентирование охватывающее несколько строк не обнаруживается.
+- Приоритет акцентирования не соблюдается — побеждает порядок объявления.
+- Ссылочный стиль ссылок, HTML-сущности и блоки кода с отступом не поддерживаются.
+
+Это следствия дизайна движка `meon` — единственный прямой проход, единственный
+слот активного блока. Подробнее —
+[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs).
+
+---
+
+## Лицензия
+
+`meon-md` доступен под лицензией
+[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
+
+Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
+
+Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.

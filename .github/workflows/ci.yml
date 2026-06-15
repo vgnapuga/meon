@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  stable:
+    name: stable
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # --all-targets also compiles the benches and integration tests, so the
+      # benchmark sources are kept building. fuzz is nightly + libfuzzer only,
+      # so it is excluded from every stable step.
+      - name: Clippy
+        run: >
+          cargo clippy --workspace --exclude fuzz --all-targets
+          -- -D warnings -A clippy::manual_is_multiple_of
+
+      - name: Build
+        run: cargo build --workspace --exclude fuzz
+
+      # --workspace runs meon's own lib unit tests (standalone iterators, swar,
+      # span, common) that the previous per-target list silently skipped.
+      - name: Test
+        run: cargo test --workspace --exclude fuzz
+
+  nightly:
+    name: nightly
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-22
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (avx2)
+        run: cargo build --workspace --exclude fuzz --features avx2
+
+      - name: Test (avx2)
+        run: cargo test --workspace --exclude fuzz --features avx2
+
+      - name: Clippy (nightly, avx2)
+        run: >
+          cargo clippy --workspace --exclude fuzz --all-targets --features avx2
+          -- -D warnings -A clippy::manual_is_multiple_of
