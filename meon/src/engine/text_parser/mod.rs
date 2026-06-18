@@ -96,6 +96,34 @@ pub use crate::parse_block;
 /// Steps 2–4 short-circuit: the first match wins and inline scanning is skipped.
 /// When a fence is active (discriminant `0`), step 5 is also suppressed.
 ///
+/// # Search strategy: one source of truth for the line boundary
+///
+/// `current_line_end` is found exactly once per line, via a dedicated
+/// `memchr` call, at the top of the `at_line_start` branch — `parse_block!`
+/// and `parse_line!` need the *full* extent of the line up front (e.g. to
+/// test whether a `line_simple` delimiter run covers the whole line), before
+/// any inline trigger has even been looked for.
+///
+/// Step 5's trigger search reuses that same value as an explicit upper bound
+/// (`&src[pos..current_line_end]`) instead of re-discovering the line end by
+/// folding `eol` into the same `find_any` call as the inline trigger bytes.
+/// Folding it in would do two things, both undesirable: it would rediscover
+/// a boundary already known, and — because `find_any`'s dispatch tier is
+/// `N`-dependent (`memchr`/`memchr2`/`memchr3` for `N` ≤ 3, generic SWAR/SIMD
+/// for `N` ≥ 4) — it would silently widen every grammar's trigger count by
+/// one, demoting small `on_trigger` sets from a hand-tuned `memchr` variant
+/// to the generic path for no benefit. Excluding `eol` keeps the trigger
+/// search at its true `N` and lets `find_any` land on the fastest tier it
+/// actually qualifies for. Running out of triggers before
+/// `current_line_end` (`find_any` returning `None`) is handled exactly the
+/// way "found eol" used to be handled — there is no behavioural difference,
+/// only a narrower, non-redundant search.
+///
+/// A grammar with no `on_trigger` blocks at all reaches this call with an
+/// empty trigger array (`N = 0`); `find_any` is guaranteed to return `None`
+/// immediately for that case (see `swar::find_any`'s own docs) rather than
+/// being special-cased here.
+///
 /// # Standalone iterators
 ///
 /// The generated `find_*` methods (via [`define_standalone_fns!`]) operate
@@ -484,21 +512,21 @@ macro_rules! parse_text {
                 continue;
             }
 
-            match $crate::swar::find_any([$eol, $($f),*], &src[pos..len])
+            // `current_line_end` is already known — see "Search strategy"
+            // above. This search looks only for inline trigger bytes,
+            // bounded to the line whose extent we already computed; it no
+            // longer includes `$eol` in the target set.
+            match $crate::swar::find_any([$($f),*], &src[pos..current_line_end])
                 .map(|r| pos + r)
             {
                 None => {
-                    pos = len;
-                }
-
-                Some(_p) if src[_p] == $eol => {
                     let (_le, _hb) = $crate::parse_text!(
-                        @hb_check _p, text_start as usize, src ; $hb
+                        @hb_check current_line_end, text_start as usize, src ; $hb
                     );
                     flush_text!(_le);
                     $crate::parse_text!(@hb_push state, _le, _hb ; $hb);
-                    text_start = (_p + 1) as u32;
-                    pos = _p + 1;
+                    text_start = if current_line_end < len { current_line_end + 1 } else { len } as u32;
+                    pos = if current_line_end < len { current_line_end + 1 } else { len };
                     at_line_start = true;
                     line_end_valid = false;
                 }

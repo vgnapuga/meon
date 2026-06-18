@@ -8,6 +8,13 @@
 //!
 //! Internally the implementation is split by the number of target bytes:
 //!
+//! - **N = 0**: no target byte can ever match — returns `None` immediately
+//!   without touching `src`. This case did not arise from any call site
+//!   before the `parse_text!` dispatcher stopped folding `eol` into the
+//!   inline trigger set (see `text_parser::mod` for why): a grammar with no
+//!   `on_trigger` blocks at all now reaches `find_any` with an empty target
+//!   array. Guarding it here, rather than at every call site, is what keeps
+//!   this function safe to call with any const array size.
 //! - **N = 1 – 3**: delegates to the [`memchr`] crate (`memchr`, `memchr2`,
 //!   `memchr3`). These routines are hand-tuned with platform SIMD and are the
 //!   fastest available option for small sets.
@@ -32,7 +39,7 @@
 //!
 //! # Invariants
 //!
-//! - The function never panics on any input.
+//! - The function never panics on any input, including `N == 0`.
 //! - The returned index, if `Some(i)`, satisfies `src[i] ∈ targets`.
 //! - Time complexity is O(n) in the length of `src`.
 
@@ -88,12 +95,14 @@ macro_rules! search_simd {
 /// Search `src` for the first byte that appears in `targets`.
 ///
 /// Returns `Some(index)` of the earliest matching byte, or `None` if no
-/// target byte is present in `src`.
+/// target byte is present in `src` (including the trivial case `N == 0`,
+/// where no byte can ever match).
 ///
 /// # Dispatch strategy
 ///
 /// | `N` | Backend                                                  |
 /// |-----|----------------------------------------------------------|
+/// | 0   | Always `None`, no scan                                  |
 /// | 1   | `memchr::memchr`                                         |
 /// | 2   | `memchr::memchr2`                                        |
 /// | 3   | `memchr::memchr3`                                        |
@@ -104,6 +113,7 @@ macro_rules! search_simd {
 #[inline(always)]
 pub fn find_any<const N: usize>(targets: [u8; N], src: &[u8]) -> Option<usize> {
     match N {
+        0 => None,
         1 => memchr::memchr(targets[0], src),
         2 => memchr::memchr2(targets[0], targets[1], src),
         3 => memchr::memchr3(targets[0], targets[1], targets[2], src),
