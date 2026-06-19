@@ -96,34 +96,6 @@ pub use crate::parse_block;
 /// Steps 2–4 short-circuit: the first match wins and inline scanning is skipped.
 /// When a fence is active (discriminant `0`), step 5 is also suppressed.
 ///
-/// # Search strategy: one source of truth for the line boundary
-///
-/// `current_line_end` is found exactly once per line, via a dedicated
-/// `memchr` call, at the top of the `at_line_start` branch — `parse_block!`
-/// and `parse_line!` need the *full* extent of the line up front (e.g. to
-/// test whether a `line_simple` delimiter run covers the whole line), before
-/// any inline trigger has even been looked for.
-///
-/// Step 5's trigger search reuses that same value as an explicit upper bound
-/// (`&src[pos..current_line_end]`) instead of re-discovering the line end by
-/// folding `eol` into the same `find_any` call as the inline trigger bytes.
-/// Folding it in would do two things, both undesirable: it would rediscover
-/// a boundary already known, and — because `find_any`'s dispatch tier is
-/// `N`-dependent (`memchr`/`memchr2`/`memchr3` for `N` ≤ 3, generic SWAR/SIMD
-/// for `N` ≥ 4) — it would silently widen every grammar's trigger count by
-/// one, demoting small `on_trigger` sets from a hand-tuned `memchr` variant
-/// to the generic path for no benefit. Excluding `eol` keeps the trigger
-/// search at its true `N` and lets `find_any` land on the fastest tier it
-/// actually qualifies for. Running out of triggers before
-/// `current_line_end` (`find_any` returning `None`) is handled exactly the
-/// way "found eol" used to be handled — there is no behavioural difference,
-/// only a narrower, non-redundant search.
-///
-/// A grammar with no `on_trigger` blocks at all reaches this call with an
-/// empty trigger array (`N = 0`); `find_any` is guaranteed to return `None`
-/// immediately for that case (see `swar::find_any`'s own docs) rather than
-/// being special-cased here.
-///
 /// # Standalone iterators
 ///
 /// The generated `find_*` methods (via [`define_standalone_fns!`]) operate
@@ -145,7 +117,7 @@ pub use crate::parse_block;
 /// buckets before the final `@body` arm emits the parsing loop:
 ///
 /// ```text
-/// parse_text!(src; sep=…, eol=…, tab=…, escape=…; <sections>)
+/// parse_text!(src; sep=…, eol=…, tab=…, escape=…[, max_nest=…]; <sections>)
 ///    │
 ///    ├─ @cs  — split raw sections into [inline], [lines], [blocks] buckets
 ///    ├─ @ci  — extract inline settings: merge_simple flag, fallback field,
@@ -170,12 +142,22 @@ pub use crate::parse_block;
 ///
 /// # Context bytes
 ///
-/// | Parameter | Meaning            | Typical value |
-/// |-----------|--------------------|---------------|
-/// | `sep`     | Word separator     | `b' '`        |
-/// | `eol`     | Line terminator    | `b'\n'`       |
-/// | `tab`     | Tab character      | `b'\t'`       |
-/// | `escape`  | Escape prefix      | `b'\\'`       |
+/// | Parameter   | Meaning                                            | Typical value |
+/// |-------------|-----------------------------------------------------|---------------|
+/// | `sep`       | Word separator                                     | `b' '`        |
+/// | `eol`       | Line terminator                                    | `b'\n'`       |
+/// | `tab`       | Tab character                                      | `b'\t'`       |
+/// | `escape`    | Escape prefix                                      | `b'\\'`       |
+/// | `max_nest`  | Bounded nesting depth cap, forwarded to            | `4`           |
+/// |             | `parse_inline!` (optional, default `1`)            |               |
+///
+/// `max_nest` bounds the two stacks `parse_inline!` uses for
+/// `symmetric { parse_inside = true; balanced = true; … }` and
+/// `asymmetric { balanced = true; … }` rules — see that macro's own docs for
+/// the full mechanism. Omitting it defaults to `1`, which reproduces the
+/// pre-nesting single-pending-slot / single-outer-span behaviour exactly;
+/// existing grammars are unaffected until they opt in. Block-level
+/// constructs (`cont`, `fence`) do not participate in `max_nest`.
 ///
 /// # Known limitations
 ///
@@ -188,14 +170,31 @@ pub use crate::parse_block;
 ///   order, not by a precedence table.
 #[macro_export]
 macro_rules! parse_text {
+    // No `max_nest` given — default to `1`, which reproduces the pre-nesting
+    // behaviour exactly. Existing call sites — in particular
+    // `define_parser!`'s expansion before it was updated to pass
+    // `max_nest` itself — keep compiling unchanged.
     (
         $src:expr ;
         sep = $sep:literal, eol = $eol:literal,
         tab = $tab:literal, escape = $esc:literal ;
         $($sections:tt)*
     ) => {
+        $crate::parse_text!(
+            $src ;
+            sep = $sep, eol = $eol, tab = $tab, escape = $esc, max_nest = 1 ;
+            $($sections)*
+        )
+    };
+
+    (
+        $src:expr ;
+        sep = $sep:literal, eol = $eol:literal,
+        tab = $tab:literal, escape = $esc:literal, max_nest = $maxn:literal ;
+        $($sections:tt)*
+    ) => {
         $crate::parse_text!(@cs
-            ctx = ($src, $sep, $eol, $tab, $esc)
+            ctx = ($src, $sep, $eol, $tab, $esc, $maxn)
             il  = []
             ln  = []
             bl  = []
@@ -273,14 +272,14 @@ macro_rules! parse_text {
     };
 
     (@ci
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[$merge_il:tt] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
         rem=[]
     ) => {
         $crate::parse_text!(@cb
-            ctx=($src, $sep, $eol, $tab, $esc)
+            ctx=($src, $sep, $eol, $tab, $esc, $maxn)
             merge_il=$merge_il tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -288,14 +287,14 @@ macro_rules! parse_text {
     };
 
     (@ci
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
         rem=[]
     ) => {
         $crate::parse_text!(@cb
-            ctx=($src, $sep, $eol, $tab, $esc)
+            ctx=($src, $sep, $eol, $tab, $esc, $maxn)
             merge_il=false tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -343,14 +342,14 @@ macro_rules! parse_text {
     };
 
     (@cb
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal)
         merge_il=$merge_il:tt tx=$tx:ident ilt=[$($ilt:tt)*] ln=[$($ln:tt)*]
         hb=$hb:tt finders=[$($f:literal)*]
         sr=[$($sr:tt)*] br=[$($br:tt)*] fpara=[$para:ident]
         rem=[]
     ) => {
         $crate::parse_text!(@body
-            $src, $sep, $eol, $tab, $esc,
+            $src, $sep, $eol, $tab, $esc, $maxn,
             $tx, $merge_il,
             [$($ilt)*], [$($ln)*],
             [$($sr)*], [$($br)*],
@@ -362,7 +361,7 @@ macro_rules! parse_text {
 
 
     (@body
-        $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal,
+        $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
         $tx:ident, $merge_il:tt,
         [$($ilt:tt)*], [$($ln:tt)*],
         [$($sr:tt)*], [$($br:tt)*],
@@ -512,21 +511,21 @@ macro_rules! parse_text {
                 continue;
             }
 
-            // `current_line_end` is already known — see "Search strategy"
-            // above. This search looks only for inline trigger bytes,
-            // bounded to the line whose extent we already computed; it no
-            // longer includes `$eol` in the target set.
-            match $crate::swar::find_any([$($f),*], &src[pos..current_line_end])
+            match $crate::swar::find_any([$eol, $($f),*], &src[pos..len])
                 .map(|r| pos + r)
             {
                 None => {
+                    pos = len;
+                }
+
+                Some(_p) if src[_p] == $eol => {
                     let (_le, _hb) = $crate::parse_text!(
-                        @hb_check current_line_end, text_start as usize, src ; $hb
+                        @hb_check _p, text_start as usize, src ; $hb
                     );
                     flush_text!(_le);
                     $crate::parse_text!(@hb_push state, _le, _hb ; $hb);
-                    text_start = if current_line_end < len { current_line_end + 1 } else { len } as u32;
-                    pos = if current_line_end < len { current_line_end + 1 } else { len };
+                    text_start = (_p + 1) as u32;
+                    pos = _p + 1;
                     at_line_start = true;
                     line_end_valid = false;
                 }
@@ -534,7 +533,7 @@ macro_rules! parse_text {
                 Some(_p) => {
                     let new_pos = $crate::parse_inline!(
                         state, src, pos, current_line_end,
-                        $tx, $merge_il, $esc, $sep, $tab ; $($ilt)*
+                        $tx, $merge_il, $esc, $sep, $tab, $maxn ; $($ilt)*
                     );
                     text_start = new_pos as u32;
                     pos = new_pos;

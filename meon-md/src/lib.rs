@@ -49,10 +49,11 @@ use types::{
 };
 
 define_parser!(Markdown {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
 
     inline {
         merge_simple = true;
+
         hard_break(b'\\', b' ', 2) => hard_breaks [500];
         on_trigger(b'*', b'`', b'[', b'<') {
             symmetric b'`' {

@@ -1495,17 +1495,6 @@ fn balanced_09_span_bounds() {
     assert_eq!(st.objects[0].end, 5);
 }
 
-// 10. The middle of three brace pairs can itself contain nested braces
-#[test]
-fn balanced_10_nested_middle_of_three() {
-    let src = b"{a} {b {c}} {d}";
-    let (st, _) = run_inline_balanced!(src);
-    assert_eq!(st.objects.len(), 3);
-    assert_eq!(txt(src, st.objects[0]), "a");
-    assert_eq!(txt(src, st.objects[1]), "b {c}");
-    assert_eq!(txt(src, st.objects[2]), "d");
-}
-
 // ================================================================
 // symmetric balanced
 // ================================================================
@@ -1715,4 +1704,200 @@ fn chained_tbal_12_multiple_links_sequence() {
     assert_eq!(txt(src, st.links[0].url), "url1");
     assert_eq!(txt(src, st.links[1].text), "d [e] f");
     assert_eq!(txt(src, st.links[1].url), "url2");
+}
+
+// ================================================================
+// balanced asymmetric — multi-level (max_nest > 1)
+// ================================================================
+//
+// All of these use `run_inline_balanced_nested!`, the same grammar as
+// `run_inline_balanced!` above with a caller-supplied `max_nest`. The
+// `balanced_*` tests above already cover `max_nest = 1` (the collapsing,
+// pre-nesting-equivalent behaviour) — these specifically exercise depth > 1.
+
+// 01. At depth 2, a single level of nesting is split into two spans,
+// sorted by start: outer first, inner second.
+#[test]
+fn balanced_nested_01_depth2_two_spans() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert!(st.objects[0].start < st.objects[1].start);
+    assert_eq!(txt(src, st.objects[0]), "a {b} c");
+    assert_eq!(txt(src, st.objects[1]), "b");
+}
+
+// 02. The outer span contains the inner span (interval containment —
+// this is how a consumer reconstructs the tree, no parent field needed).
+#[test]
+fn balanced_nested_02_outer_contains_inner() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert!(st.objects[0].start <= st.objects[1].start);
+    assert!(st.objects[0].end >= st.objects[1].end);
+}
+
+// 03. At depth 3, three nested levels each get their own span.
+#[test]
+fn balanced_nested_03_depth3_three_spans() {
+    let src = b"{a {b {c} d} e}";
+    let (st, _) = run_inline_balanced_nested!(src, 3);
+    assert_eq!(st.objects.len(), 3);
+    assert!(st.objects[0].start < st.objects[1].start);
+    assert!(st.objects[1].start < st.objects[2].start);
+    assert_eq!(txt(src, st.objects[0]), "a {b {c} d} e");
+    assert_eq!(txt(src, st.objects[1]), "b {c} d");
+    assert_eq!(txt(src, st.objects[2]), "c");
+}
+
+// 04. A cap below the actual nesting depth in the input still resolves
+// correctly: the untracked innermost pair is skipped via the overflow
+// counter, so the capped (middle) level's close lands on the right brace,
+// not the first one the scanner sees.
+#[test]
+fn balanced_nested_04_cap_below_actual_depth() {
+    let src = b"{a {b {c} d} e}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "a {b {c} d} e");
+    assert_eq!(txt(src, st.objects[1]), "b {c} d");
+}
+
+// 05. A cap of 1 on a multi-level input reproduces the exact collapsing
+// behaviour of `run_inline_balanced!` — the explicit depth-1 boundary,
+// not just its default.
+#[test]
+fn balanced_nested_05_depth1_collapses() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "a {b} c");
+}
+
+// 06. A frame that closes properly (inner) survives even though an
+// enclosing frame (outer) never finds its close before line end — this is
+// the exact scenario that requires `Vec::remove` rather than `truncate` in
+// the discard step: the inner entry sits at a *higher* index than the
+// still-open outer one.
+#[test]
+fn balanced_nested_06_unclosed_outer_keeps_closed_inner() {
+    let src = b"{a {b} c";
+    let (st, _) = run_inline_balanced_nested!(src, 4);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "b");
+}
+
+// 07. Both frames unclosed: nothing survives.
+#[test]
+fn balanced_nested_07_both_unclosed_nothing_survives() {
+    let src = b"{a {b c";
+    let (st, _) = run_inline_balanced_nested!(src, 4);
+    assert_eq!(st.objects.len(), 0);
+}
+
+// 08. A close byte encountered with an empty stack is literal, not a
+// structural event — no panic, no underflow, no spurious span.
+#[test]
+fn balanced_nested_08_stray_close_on_empty_stack_is_literal() {
+    let src = b"{a} b} c";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "a");
+}
+
+// 09. Three independent (non-nested) top-level pairs still each get their
+// own span at higher max_nest, exactly as at max_nest = 1 — depth only
+// matters when pairs are actually nested.
+#[test]
+fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
+    let src = b"{a} {b} {c}";
+    let (st, _) = run_inline_balanced_nested!(src, 4);
+    assert_eq!(st.objects.len(), 3);
+    assert_eq!(txt(src, st.objects[0]), "a");
+    assert_eq!(txt(src, st.objects[1]), "b");
+    assert_eq!(txt(src, st.objects[2]), "c");
+}
+
+// ================================================================
+// symmetric balanced (parse_inside = true) — different-key nesting fix
+// ================================================================
+//
+// All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
+// true; balanced = true; … }` fixture with its own `n_italics` / `n_bolds`
+// fields, separate from the pre-existing `italics` / `bolds` fixtures
+// above (which stay `balanced = false`, exercising the original single
+// pending-slot mechanism, untouched).
+
+// 01. The bug this fixes: with a single pending slot, a different-count
+// occurrence of the same byte used to silently overwrite the still-pending
+// outer delimiter, so the outer pair never closed. With the bounded stack
+// (depth >= 2), both levels resolve.
+#[test]
+fn sym_nested_01_different_key_nesting_fix() {
+    let src = b"**bold *italic* still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_bolds[0]), "bold *italic* still-bold");
+    assert_eq!(txt(src, st.n_italics[0]), "italic");
+}
+
+// 02. At depth 1 (the boundary, not just the default), the different-key
+// case is deliberately *not* fixed: there is no room to track the inner
+// frame, so it is left as literal content inside the (still correctly
+// closing, thanks to the stack rather than an overwritable slot) outer
+// span.
+#[test]
+fn sym_nested_02_depth1_outer_still_closes_inner_untracked() {
+    let src = b"**bold *italic* still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 1);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 0);
+    assert_eq!(txt(src, st.n_bolds[0]), "bold *italic* still-bold");
+}
+
+// 03. An identical (byte, count) pair cannot self-nest — open and close
+// look the same for a symmetric delimiter, so there is no signal to tell
+// "nested open" apart from "close". Two adjacent runs result, with the
+// middle text left as plain content rather than nested.
+#[test]
+fn sym_nested_03_identical_key_toggles_not_nests() {
+    let src = b"**a **b** c**";
+    let (st, _) = run_inline_sym_nested!(src, 4);
+    assert_eq!(st.n_bolds.len(), 2);
+    assert_eq!(txt(src, st.n_bolds[0]), "a ");
+    assert_eq!(txt(src, st.n_bolds[1]), " c");
+}
+
+// 04. A frame still pending at line end is discarded — neither delimiter
+// closes within the line, so neither produces a span.
+#[test]
+fn sym_nested_04_unclosed_both_discarded() {
+    let src = b"**bold *italic still open";
+    let (st, _) = run_inline_sym_nested!(src, 3);
+    assert_eq!(st.n_bolds.len(), 0);
+    assert_eq!(st.n_italics.len(), 0);
+}
+
+// 05. Two different italic occurrences inside one bold, both resolved when
+// there is room for them: each closes and reopens its own field
+// independently, sequentially, after the previous one closed.
+#[test]
+fn sym_nested_05_two_different_keys_in_sequence() {
+    let src = b"**bold *i1* mid *i2* end**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 2);
+    assert_eq!(txt(src, st.n_italics[0]), "i1");
+    assert_eq!(txt(src, st.n_italics[1]), "i2");
+    assert_eq!(txt(src, st.n_bolds[0]), "bold *i1* mid *i2* end");
+}
+
+// 06. Plain text with no delimiters at all produces neither field.
+#[test]
+fn sym_nested_06_plain_text_no_spans() {
+    let src = b"just plain text";
+    let (st, _) = run_inline_sym_nested!(src, 4);
+    assert!(st.n_bolds.is_empty());
+    assert!(st.n_italics.is_empty());
 }

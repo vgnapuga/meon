@@ -48,6 +48,12 @@ define_content!(TestContent {
         codes        [80],
         autolinks    [100],
         objects      [100],
+        // Separate fields for the max_nest > 1 mechanism tests, so the
+        // existing balanced=false `italics`/`bolds` fixtures above (and
+        // their tests, which rely on the original single-pending-slot
+        // behaviour) stay completely untouched.
+        n_italics    [40],
+        n_bolds      [40],
     }
     line {
         headings:        Heading       [200],
@@ -75,7 +81,7 @@ macro_rules! run_inline {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
             hard_break(b'\\', b' ', 2) => hard_breaks;
             on_trigger(b'=') {
                 key_value: KeyValue {
@@ -119,18 +125,74 @@ macro_rules! run_inline {
     }};
 }
 
+/// Single-level balanced asymmetric fixture — `max_nest = 1` fixed, so a
+/// nested same-type region still collapses to one outer span, exactly as
+/// before the nesting stack existed. Kept exactly as the original tests
+/// expect; see `run_inline_balanced_nested!` for depth > 1.
+///
+/// NOTE: `on_trigger` now lists **both** `b'{'` and `b'}'`. The close byte
+/// must be visible to the same scan that finds the open byte — the bounded
+/// stack no longer does an internal forward search for it, unlike the old
+/// single-span mechanism.
 macro_rules! run_inline_balanced {
     ($src:expr) => {{
         let src: &[u8] = $src;
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
-            on_trigger(b'{') {
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
+            on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
                     parse_inside = false;
                     _ => objects
+                }
+            }
+        );
+        (st, consumed)
+    }};
+}
+
+/// Same grammar as `run_inline_balanced!`, with a caller-supplied
+/// `max_nest`, so the same input shape can be exercised at depth 1
+/// (collapsing) and depth > 1 (real per-level emission).
+macro_rules! run_inline_balanced_nested {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'{', b'}') {
+                asymmetric b'{', b'}' {
+                    balanced     = true;
+                    parse_inside = false;
+                    _ => objects
+                }
+            }
+        );
+        (st, consumed)
+    }};
+}
+
+/// `symmetric { parse_inside = true; balanced = true; … }` fixture, using
+/// `n_italics` / `n_bolds` — separate from the pre-existing `italics` /
+/// `bolds` (which stay `balanced = false`, untouched). Exercises the fix for
+/// the single-pending-slot overwrite bug: a different-count occurrence of
+/// the same byte used to silently clobber the still-pending outer
+/// delimiter.
+macro_rules! run_inline_sym_nested {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'*') {
+                symmetric b'*' {
+                    parse_inside = true;
+                    balanced     = true;
+                    1 => n_italics, 2 => n_bolds
                 }
             }
         );
@@ -187,7 +249,7 @@ macro_rules! run_sym_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
             on_trigger(b'"') {
                 symmetric b'"' {
                     parse_inside = false;
@@ -206,7 +268,7 @@ macro_rules! run_chained_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
             on_trigger(b'[') {
                 chained: Link {
                     | b'[', b']' | {

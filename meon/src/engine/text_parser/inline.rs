@@ -17,7 +17,7 @@
 //!
 //! ```text
 //! parse_inline!(state, src, start, line_end, fallback_field,
-//!               merge_flag, escape_byte, sep_byte, tab_byte ; <rules>)
+//!               merge_flag, escape_byte, sep_byte, tab_byte, max_nest ; <rules>)
 //! ```
 //!
 //! Rules inside the `inline` section are:
@@ -42,13 +42,69 @@
 //! The trigger set is searched with [`crate::swar::find_any`], which
 //! dispatches to `memchr` / `memchr2` / `memchr3` for 1–3 bytes and to the
 //! SWAR/SIMD engine for 4 or more bytes.
+//!
+//! # Bounded nesting (`max_nest`)
+//!
+//! Two rule kinds opt into multi-level tracking, sharing the grammar's
+//! `max_nest` depth cap (forwarded from `parse_text!`; defaults to `1`).
+//!
+//! ## `asymmetric { balanced = true; … }`
+//!
+//! `balanced = false` is **entirely unchanged** — its dispatch (the original
+//! `if delim == $ao { … memchr/depth-search for $ac … }` block) is untouched
+//! and still the only thing that ever runs for those rules.
+//!
+//! `balanced = true` is intercepted **before** that block is even reached: a
+//! new check, tried first for every trigger byte, recognises both `$ao` and
+//! `$ac` for every `balanced = true` rule in the grammar (so different
+//! bracket types nest validly with each other) using a bounded stack —
+//! ordinary bracket matching. An open byte pushes a placeholder span
+//! (`start == end`) into the rule's field, back-patched on the matching
+//! close; this keeps the field sorted by `start` even though an outer frame
+//! closes after its inner ones. Beyond the cap, an extra open of the *same*
+//! type increments a one-shot overflow counter instead of pushing a frame,
+//! so the eventual real close still lands on the correct delimiter rather
+//! than an untracked nested one. A close that doesn't match the current top
+//! of stack is left as a literal byte. While any such frame is open, every
+//! other trigger byte is suppressed (the region is opaque) — this matches
+//! the pre-nesting behaviour for `balanced = true`, just split into one span
+//! per level instead of one span for the whole thing. A frame still open at
+//! line end is discarded (`Vec::remove` at its index, not `truncate` — the
+//! same type can self-nest, so a properly-closed inner frame can sit at a
+//! higher index than a still-open outer one and must survive), exactly as an
+//! unclosed bracket used to simply produce no span.
+//!
+//! **Required grammar change**: the close byte must be listed in the same
+//! `on_trigger(...)` set as the open byte — `on_trigger(b'{', b'}')`, not
+//! just `on_trigger(b'{')` — since the close is now found by the same scan
+//! that finds the open, not by an internal forward search.
+//!
+//! ## `symmetric { parse_inside = true; balanced = true; … }`
+//!
+//! `parse_inside = false` and `parse_inside = true, balanced = false` are
+//! **entirely unchanged** — both keep their original code paths verbatim.
+//!
+//! `parse_inside = true, balanced = true` replaces the single pending-slot
+//! with a bounded stack of pending frames, shared across every such rule.
+//! An occurrence whose `(byte, count)` matches the current top closes it;
+//! otherwise, if there is room, it opens a new frame. This is what fixes a
+//! real bug in the single-slot version: a *different*-count occurrence of
+//! the same byte used to silently overwrite the one pending slot, losing
+//! the outer delimiter — `**bold *italic* still-bold**` would never close
+//! the bold. With the stack, the inner `*` (count 1) opens its own frame
+//! instead of clobbering the outer `**` (count 2). Because open and close
+//! look identical for a symmetric delimiter, an *identical* `(byte, count)`
+//! pair still cannot self-nest — `**a **b** c**` resolves as two adjacent
+//! runs, the same as a flat toggle. A frame still open at line end is
+//! discarded, same as the asymmetric stack.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_inline {
     ($state:ident, $src:ident, $start:expr, $le:expr,
-     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal ; $($tail:tt)*) => {
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal ;
+     $($tail:tt)*) => {
         $crate::parse_inline!(
-            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab)
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -65,7 +121,7 @@ macro_rules! parse_inline {
 
     // hard_break rule
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
      (hard_break: )
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -75,7 +131,7 @@ macro_rules! parse_inline {
      tail = [hard_break($hb_esc:literal, $sp:literal, $sp_min:literal) => $hb:ident ; $($rest:tt)*]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
             (hard_break: $hb_esc, $sp, $sp_min => $hb)
             finders  = [$($fi)*]
             sy_rules = [$($sr)*]
@@ -89,7 +145,7 @@ macro_rules! parse_inline {
     // on_trigger(...) { ... } — new canonical name for the byte-trigger block.
     // Replaces the old `memchr(…) { … }` syntax; semantics are identical.
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
      (hard_break: $($hb:tt)*)
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -131,7 +187,7 @@ macro_rules! parse_inline {
      ]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
             (hard_break: $($hb)*)
             finders  = [$($fi)* { $($fn_b),+ }]
             sy_rules = [$($sr)* $( ($sb, $pi, $bal, { $( $sn => $sf ),* }) )*]
@@ -145,7 +201,7 @@ macro_rules! parse_inline {
     // Transition: all sections consumed — flatten buckets and enter @body.
     (
         @collect ($st:ident, $src:ident, $s:expr, $le:expr,
-                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal)
+                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
         (hard_break: $($hb:tt)*)
         finders  = [$($fi:tt)*]
         sy_rules = [$( ($sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* }) )*]
@@ -157,7 +213,7 @@ macro_rules! parse_inline {
                         $kv_kf:ident, $kv_vf:ident, $kv_ty:ident, $kv_f:ident) )*]
         tail = []
     ) => {
-        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab)
+        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
             (hard_break: $($hb)*)
             finders  = [$($fi)*]
             sy_rules = [$( $sb, $pi, $bal, { $( $sn => $sf ),* } )*]
@@ -174,7 +230,7 @@ macro_rules! parse_inline {
 
     (
         @body ($state:ident, $src:ident, $start:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
         (hard_break: $($hb_esc:literal, $sp:literal, $sp_min:literal => $hb:ident)*)
         finders  = [$( { $($fn_b:literal),+ } )*]
         sy_rules = [$( $sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* } )*]
@@ -213,8 +269,27 @@ macro_rules! parse_inline {
 
         let mut pos: usize = $start;
         let mut text_start: usize = $start;
-        // Pending symmetric match: (byte, open_pos, open_count, depth).
+        // Pending symmetric match for the original, untouched
+        // parse_inside=true, balanced=false path: (byte, open_pos, open_count, depth).
         let mut pending: Option<(u8, u32, u32, u32)> = None;
+
+        // Bounded stack for symmetric { parse_inside = true; balanced = true; … }.
+        // Frame = (byte, count, vec_idx_in_field).
+        let mut sym_frames: [(u8, u32, u32); $maxn] = [(0u8, 0u32, 0u32); $maxn];
+        let mut sym_depth: u8 = 0u8;
+
+        // Bounded stack for asymmetric { balanced = true; … }.
+        // Frame = (open_byte, close_byte, run_count, vec_idx_in_field). The
+        // run count is stored so the close / discard sides can re-derive
+        // which `$af` field to touch via the same `match count { $an => … }`
+        // arms the open side used — `$af` is bound inside that inner
+        // repetition, so every access to it must stay inside a matching
+        // `match`, never used bare.
+        let mut asym_frames: [(u8, u8, u32, u32); $maxn] = [(0u8, 0u8, 0u32, 0u32); $maxn];
+        let mut asym_depth: u8 = 0u8;
+        // One-shot overflow counter: extra same-type opens beyond the cap,
+        // so the real tracked frame's close isn't mistaken early.
+        let mut asym_overflow: u32 = 0u32;
 
         loop {
             // Find the next trigger byte using find_any, which dispatches to
@@ -242,6 +317,70 @@ macro_rules! parse_inline {
             let delim_start: u32 = pos as u32;
             let mut count: u32 = 0;
             while pos < parse_end && src[pos] == delim { count += 1; pos += 1; }
+
+            // -------------------------------------------------------------- //
+            // balanced asymmetric: tried first, for every trigger byte,      //
+            // before chained/symmetric/the original asymmetric block below. //
+            // A `balanced = false` rule's $ao/$ac never match $abal here, so //
+            // this block does nothing for them and the original block       //
+            // further down (unmodified) is the only thing that ever runs.   //
+            // -------------------------------------------------------------- //
+            let mut _asym_bal_handled = false;
+            $(
+                if $abal && delim == $ao {
+                    if text_start < delim_start as usize {
+                        push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
+                    }
+                    if (asym_depth as usize) < $maxn {
+                        match count {
+                            $( $an => {
+                                let _vidx = $state.$af.len() as u32;
+                                push_il!($af, $crate::span::Span::new(pos as u32, pos as u32));
+                                asym_frames[asym_depth as usize] = ($ao, $ac, count, _vidx);
+                            } )*
+                            _ => {}
+                        }
+                        asym_depth += 1;
+                        asym_overflow = 0;
+                    } else if asym_depth > 0
+                        && asym_frames[asym_depth as usize - 1].0 == $ao
+                    {
+                        asym_overflow += 1;
+                    }
+                    // A different type beyond the cap is literal.
+                    text_start = pos;
+                    _asym_bal_handled = true;
+                } else if $abal && delim == $ac {
+                    if asym_depth > 0
+                        && asym_frames[asym_depth as usize - 1].1 == $ac
+                    {
+                        if asym_overflow > 0 {
+                            asym_overflow -= 1;
+                        } else {
+                            let (_ob, _cb, _rc, _vidx) = asym_frames[asym_depth as usize - 1];
+                            match _rc {
+                                $( $an => {
+                                    $state.$af[_vidx as usize].end = delim_start;
+                                } )*
+                                _ => {}
+                            }
+                            asym_depth -= 1;
+                            asym_overflow = 0;
+                        }
+                    }
+                    // A close that doesn't match the open top is literal.
+                    text_start = pos;
+                    _asym_bal_handled = true;
+                }
+            )*
+            if _asym_bal_handled {
+                continue;
+            }
+            if asym_depth > 0 {
+                // Inside an open balanced-asymmetric region and this byte
+                // matched none of the rules above — opaque by design.
+                continue;
+            }
 
             // --- chained (e.g. [text](url), ![img](url)) ---
             $(
@@ -328,23 +467,60 @@ macro_rules! parse_inline {
             $(
                 if delim == $sb {
                     if $pi {
-                        if let Some((pb, op, oc, ref mut _depth)) = pending {
-                            if pb == $sb && oc == count {
-                                if $bal && *_depth > 0 {
-                                    *_depth -= 1;
+                        if $bal {
+                            // Bounded stack — replaces the single pending
+                            // slot for this rule's occurrences only.
+                            let _matches_top = sym_depth > 0
+                                && sym_frames[sym_depth as usize - 1].0 == $sb
+                                && sym_frames[sym_depth as usize - 1].1 == count;
+                            if _matches_top {
+                                let (_b, _c, _vidx) = sym_frames[sym_depth as usize - 1];
+                                match _c {
+                                    $( $sn => {
+                                        $state.$sf[_vidx as usize].end = delim_start;
+                                    } )*
+                                    _ => {}
+                                }
+                                sym_depth -= 1;
+                                text_start = pos;
+                            } else if (sym_depth as usize) < $maxn {
+                                if text_start < delim_start as usize {
+                                    push_il!($tx, $crate::span::Span::new(
+                                        text_start as u32, delim_start));
+                                }
+                                match count {
+                                    $( $sn => {
+                                        let _vidx = $state.$sf.len() as u32;
+                                        push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
+                                        sym_frames[sym_depth as usize] = ($sb, count, _vidx);
+                                    } )*
+                                    _ => {}
+                                }
+                                sym_depth += 1;
+                                text_start = pos;
+                            }
+                            // Beyond the cap and not matching the top is literal.
+                            continue;
+                        } else {
+                            // Original single pending-slot mechanism — untouched.
+                            if let Some((pb, op, oc, ref mut _depth)) = pending {
+                                if pb == $sb && oc == count {
+                                    if $bal && *_depth > 0 {
+                                        *_depth -= 1;
+                                        continue;
+                                    }
+                                    if (text_start as u32) < op {
+                                        push_il!($tx, $crate::span::Span::new(text_start as u32, op));
+                                    }
+                                    let clean = $crate::span::Span::new(op + count, delim_start);
+                                    match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
+                                    text_start = pos;
+                                    pending = None;
                                     continue;
                                 }
-                                if (text_start as u32) < op {
-                                    push_il!($tx, $crate::span::Span::new(text_start as u32, op));
-                                }
-                                let clean = $crate::span::Span::new(op + count, delim_start);
-                                match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
-                                text_start = pos;
-                                pending = None;
-                                continue;
                             }
+                            pending = Some(($sb, delim_start, count, 0u32));
                         }
-                        pending = Some(($sb, delim_start, count, 0u32));
                     } else {
                         let cs = pos;
                         let mut _i = pos;
@@ -406,7 +582,10 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- asymmetric (e.g. <autolink>) ---
+            // --- asymmetric (e.g. <autolink>) — unmodified. For balanced =
+            // true rules this is dead code in practice: any occurrence of
+            // $ao or $ac for such a rule was already intercepted above and
+            // `continue`d before the outer loop ever reaches this `if`. ---
             $(
                 if delim == $ao {
                     let cs = pos;
@@ -476,6 +655,52 @@ macro_rules! parse_inline {
                     pos        = val_end + _adv;
                     text_start = pos;
                     continue;
+                }
+            )*
+        }
+
+        // ------------------------------------------------------------------ //
+        // Discard any frame still open at line end on either stack — remove  //
+        // its placeholder rather than leave a dangling, unpatched span.      //
+        //                                                                    //
+        // Asymmetric uses `remove`, not `truncate`: the same type can        //
+        // self-nest (`{ { } }`), so a properly-closed inner frame can sit at //
+        // a *higher* vec index than a still-open outer one — e.g. `{a {b} c`//
+        // closes "b" (pushed second) before line end while the outer `{`    //
+        // never finds its `}`. `truncate(outer_vidx)` would also delete the  //
+        // already-finalised "b" entry sitting after it. `remove(vidx)`      //
+        // deletes only that one placeholder; processing innermost-first     //
+        // (this loop's order) means we always remove the highest still-open //
+        // index first, so no not-yet-processed vidx is invalidated by an    //
+        // earlier removal shifting things underneath it.                    //
+        //                                                                    //
+        // Symmetric keeps `truncate`: an identical (byte, count) cannot      //
+        // self-nest (occurrences of the same key always toggle, never open a //
+        // second frame while one is pending — see the symmetric dispatch    //
+        // above), so each field holds at most one pending placeholder at any //
+        // time, and it is always the last entry in that field's Vec.        //
+        // ------------------------------------------------------------------ //
+        while asym_depth > 0 {
+            asym_depth -= 1;
+            let (_ob, _ocb, _orc, _ovidx) = asym_frames[asym_depth as usize];
+            $(
+                if $abal && $ao == _ob {
+                    match _orc {
+                        $( $an => { $state.$af.remove(_ovidx as usize); } )*
+                        _ => {}
+                    }
+                }
+            )*
+        }
+        while sym_depth > 0 {
+            sym_depth -= 1;
+            let (_sob, _soc, _svidx) = sym_frames[sym_depth as usize];
+            $(
+                if $bal && $pi && $sb == _sob {
+                    match _soc {
+                        $( $sn => { $state.$sf.truncate(_svidx as usize); } )*
+                        _ => {}
+                    }
                 }
             )*
         }

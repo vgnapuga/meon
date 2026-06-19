@@ -26,7 +26,7 @@ mod model;
 mod strip;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Ident, TokenStream as TS2};
+use proc_macro2::{Delimiter, Ident, Literal, TokenStream as TS2, TokenTree as TT};
 use quote::quote;
 
 use crate::codegen::{build_define_content, build_standalone_dsl};
@@ -64,14 +64,21 @@ use crate::strip::strip;
 /// });
 /// ```
 ///
-/// ## Context bytes (required header)
+/// ## Context bytes (required header, plus one optional)
 ///
-/// | Key      | Meaning                                      |
-/// |----------|----------------------------------------------|
-/// | `sep`    | Word separator (typically space)             |
-/// | `eol`    | Line terminator (typically `\n`)             |
-/// | `tab`    | Tab character                                |
-/// | `escape` | Escape prefix that suppresses the next byte  |
+/// | Key         | Meaning                                            |
+/// |-------------|------------------------------------------------------|
+/// | `sep`       | Word separator (typically space)                   |
+/// | `eol`       | Line terminator (typically `\n`)                   |
+/// | `tab`       | Tab character                                      |
+/// | `escape`    | Escape prefix that suppresses the next byte        |
+/// | `max_nest`  | Optional. Bounded nesting depth cap forwarded to   |
+/// |             | `parse_inline!`'s `symmetric { balanced = true; }` |
+/// |             | / `asymmetric { balanced = true; }` stacks. A      |
+/// |             | grammar-wide setting, declared alongside the other |
+/// |             | context bytes — not inside `inline { … }`. Absent  |
+/// |             | ⇒ `1`, which reproduces pre-nesting behaviour      |
+/// |             | exactly: `sep = …, eol = …, tab = …, escape = …, max_nest = 4;` |
 ///
 /// ## `inline { … }` section
 ///
@@ -210,6 +217,18 @@ fn expand(input: TS2) -> Result<TS2> {
     let tab = bc.named_lit("tab")?;
     bc.skip(',');
     let esc = bc.named_lit("escape")?;
+
+    // `max_nest` is an optional fifth context setting, alongside
+    // sep/eol/tab/escape — a grammar-wide value, not specific to `inline`,
+    // even though it currently only bounds `parse_inline!`'s two stacks.
+    // `, max_nest = N` after `escape`, before the header's closing `;`.
+    // Absent ⇒ `1`, which reproduces pre-nesting behaviour exactly.
+    let max_nest: Literal = if matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ',') {
+        bc.advance();
+        bc.named_lit("max_nest")?
+    } else {
+        Literal::usize_unsuffixed(1)
+    };
     bc.skip(';');
 
     let mut inline_ts = TS2::new();
@@ -262,7 +281,8 @@ fn expand(input: TS2) -> Result<TS2> {
             pub fn parse(source: &[u8]) -> #content_name<'_> {
                 #mc::parse_text!(
                     source;
-                    sep = #sep, eol = #eol, tab = #tab, escape = #esc;
+                    sep = #sep, eol = #eol, tab = #tab, escape = #esc,
+                    max_nest = #max_nest;
                     inline { #(#pt_inline)* }
                     lines  { #(#pt_lines)* }
                     blocks { #(#pt_blocks)* }
