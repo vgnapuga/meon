@@ -151,13 +151,17 @@ pub use crate::parse_block;
 /// | `max_nest`  | Bounded nesting depth cap, forwarded to            | `4`           |
 /// |             | `parse_inline!` (optional, default `1`)            |               |
 ///
-/// `max_nest` bounds the two stacks `parse_inline!` uses for
-/// `symmetric { parse_inside = true; balanced = true; … }` and
-/// `asymmetric { balanced = true; … }` rules — see that macro's own docs for
-/// the full mechanism. Omitting it defaults to `1`, which reproduces the
-/// pre-nesting single-pending-slot / single-outer-span behaviour exactly;
-/// existing grammars are unaffected until they opt in. Block-level
-/// constructs (`cont`, `fence`) do not participate in `max_nest`.
+/// `max_nest` bounds the two *stacks* `parse_inline!` uses — one for
+/// `symmetric { parse_inside = true; balanced = true; … }` rules, one for
+/// `asymmetric` rules with `balanced = true` and/or `parse_inside = true` —
+/// see that macro's own docs for the full mechanism. (A third transparent
+/// construct, `chained` with a `parse_inside = true` component, is
+/// activated alongside these but tracks only sequential two-phase state, so
+/// it consumes no depth from `max_nest`.) Omitting `max_nest` defaults it
+/// to `1`, which reproduces the pre-nesting single-pending-slot /
+/// single-outer-span behaviour exactly; existing grammars are unaffected
+/// until they opt in. Block-level constructs (`cont`, `fence`) do not
+/// participate in `max_nest`.
 ///
 /// # Known limitations
 ///

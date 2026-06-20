@@ -53,7 +53,7 @@ define_parser!(Markdown {
     eol = b'\n',
     tab = b'\t',
     escape = b'\\',
-    max_nest = 4;
+    max_nest = 1;
 
     inline {
         merge_simple = true;

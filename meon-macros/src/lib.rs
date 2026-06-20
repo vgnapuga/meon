@@ -66,19 +66,21 @@ use crate::strip::strip;
 ///
 /// ## Context bytes (required header, plus one optional)
 ///
-/// | Key         | Meaning                                            |
-/// |-------------|------------------------------------------------------|
-/// | `sep`       | Word separator (typically space)                   |
-/// | `eol`       | Line terminator (typically `\n`)                   |
-/// | `tab`       | Tab character                                      |
-/// | `escape`    | Escape prefix that suppresses the next byte        |
-/// | `max_nest`  | Optional. Bounded nesting depth cap forwarded to   |
-/// |             | `parse_inline!`'s `symmetric { balanced = true; }` |
-/// |             | / `asymmetric { balanced = true; }` stacks. A      |
-/// |             | grammar-wide setting, declared alongside the other |
-/// |             | context bytes — not inside `inline { … }`. Absent  |
-/// |             | ⇒ `1`, which reproduces pre-nesting behaviour      |
-/// |             | exactly: `sep = …, eol = …, tab = …, escape = …, max_nest = 4;` |
+/// | Key         | Meaning                                                  |
+/// |-------------|----------------------------------------------------------|
+/// | `sep`       | Word separator (typically space)                         |
+/// | `eol`       | Line terminator (typically `\n`)                         |
+/// | `tab`       | Tab character                                            |
+/// | `escape`    | Escape prefix that suppresses the next byte              |
+/// | `max_nest`  | Optional. Bounded nesting depth cap forwarded to         |
+/// |             | `parse_inline!`'s two stacks — `symmetric` with          |
+/// |             | `parse_inside = true; balanced = true;` and              |
+/// |             | `asymmetric` with `balanced = true` and/or               |
+/// |             | `parse_inside = true`. A grammar-wide setting,           |
+/// |             | declared alongside the other context bytes — not         |
+/// |             | inside `inline { … }`. Absent => `1`, which              |
+/// |             | reproduces pre-nesting behaviour exactly:                |
+/// |             | `sep = …, eol = …, tab = …, escape = …, max_nest = 4;` |
 ///
 /// ## `inline { … }` section
 ///

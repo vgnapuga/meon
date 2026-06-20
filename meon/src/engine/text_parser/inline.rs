@@ -45,8 +45,19 @@
 //!
 //! # Bounded nesting (`max_nest`)
 //!
-//! Two rule kinds opt into multi-level tracking, sharing the grammar's
-//! `max_nest` depth cap (forwarded from `parse_text!`; defaults to `1`).
+//! Three rule kinds opt into multi-level / transparent tracking, sharing
+//! the grammar's `max_nest` depth cap (forwarded from `parse_text!`;
+//! defaults to `1`): `asymmetric`, `symmetric`, and `chained`. The first
+//! two use a bounded *stack*; `chained` uses a two-phase transparent state
+//! machine (its components are sequential, never simultaneous, so it needs
+//! no stack). Across all three, the same rule governs the *fallback* field:
+//! plain text is flushed to it only while nothing is open — symmetric and
+//! asymmetric stacks both empty, no chained phase in progress. Text sitting
+//! inside any open construct is that construct's content, not separate
+//! top-level prose, even when no more specific rule claims it (e.g. the gap
+//! between an open `**` and a `*` opening right after it belongs to the
+//! bold). Suppressing the flush there loses nothing: those bytes stay
+//! covered by whichever enclosing span eventually closes around them.
 //!
 //! ## `asymmetric { balanced = …; parse_inside = …; … }`
 //!
@@ -119,6 +130,31 @@
 //! discarded, same as the asymmetric stack. Unlike asymmetric, the run
 //! length here genuinely picks the construct (`*` vs `**` are different
 //! fields), so it is matched as-is, never split byte-by-byte.
+//!
+//! ## `chained: T { … }` with a transparent component
+//!
+//! When *both* components have `parse_inside = false` the original
+//! self-contained two-phase forward search runs **unchanged** — it finds
+//! the text close and the url close by scanning ahead internally, emitting
+//! nothing for any rule encountered in between (opaque).
+//!
+//! When *either* component has `parse_inside = true`, the rule instead runs
+//! through a two-phase transparent state machine, so that other rules can
+//! fire on the bytes scanned over. The two phases (text bracket, then url
+//! paren) are strictly sequential — phase 2 only starts once phase 1 has
+//! fully closed — so a single slot per phase suffices, no stack. Each
+//! phase's own opacity is resolved once when it opens (`!$tpi` / `!$upi`),
+//! tracked independently. Closing the text phase commits nothing by itself;
+//! it only attempts to open the url phase against the byte immediately
+//! after the `]`. Only the url phase closing pushes the combined `T`. If
+//! the byte after `]` is not the url open, the whole match is abandoned and
+//! the opening bracket plus everything scanned over is preserved as literal
+//! text — the same orphan-on-failure trade-off `asymmetric`'s transparent
+//! mode already accepts (anything more specific that fired inside while the
+//! match was still speculative stays committed). An opaque chained phase,
+//! unlike an opaque asymmetric frame, suppresses asymmetric's own
+//! cross-type recognition too, because a chained phase is not part of
+//! asymmetric's shared stack/family.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_inline {
@@ -273,6 +309,27 @@ macro_rules! parse_inline {
             };
         }
 
+        // Top-level flush invariant.
+        //
+        // Plain text is flushed to the fallback field `$tx` only while
+        // nothing is open — both stacks empty, no chained phase active:
+        //
+        //     if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+        //         push_il!($tx, …);
+        //     }
+        //
+        // That guard is written out inline at each of the "flush before
+        // doing X" sites below rather than wrapped in a local
+        // `macro_rules!`: a nested `macro_rules!` does not capture the
+        // surrounding `let` bindings hygienically, so a `flush_tx!` helper
+        // referring to `sym_depth` / `asym_depth` / `ch_in_text` /
+        // `ch_in_url` fails to resolve them. The bindings only exist after
+        // they are declared a few lines down; the inline form sees them by
+        // ordinary lexical scope. The single exception is the final
+        // end-of-line flush, which is unconditional: an abandoned chained
+        // match never clears `ch_in_text` / `ch_in_url`, and gating the
+        // last flush on them would drop the trailing text instead of
+        // emitting it.
 
         // Hard-break detection: trim trailing spaces / backslash before
         // processing the rest of the line.
