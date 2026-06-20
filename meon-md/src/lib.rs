@@ -49,7 +49,11 @@ use types::{
 };
 
 define_parser!(Markdown {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+    sep = b' ',
+    eol = b'\n',
+    tab = b'\t',
+    escape = b'\\',
+    max_nest = 4;
 
     inline {
         merge_simple = true;
@@ -63,7 +67,7 @@ define_parser!(Markdown {
             }
             symmetric b'*' {
                 parse_inside = true;
-                balanced     = false;
+                balanced     = true;
                 1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
             }
             asymmetric b'<', b'>' {

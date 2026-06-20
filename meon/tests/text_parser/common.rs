@@ -145,7 +145,7 @@ macro_rules! run_inline_balanced {
                 asymmetric b'{', b'}' {
                     balanced     = true;
                     parse_inside = false;
-                    _ => objects
+                    1 => objects
                 }
             }
         );
@@ -167,7 +167,7 @@ macro_rules! run_inline_balanced_nested {
                 asymmetric b'{', b'}' {
                     balanced     = true;
                     parse_inside = false;
-                    _ => objects
+                    1 => objects
                 }
             }
         );

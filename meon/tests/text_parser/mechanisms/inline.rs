@@ -1901,3 +1901,190 @@ fn sym_nested_06_plain_text_no_spans() {
     assert!(st.n_bolds.is_empty());
     assert!(st.n_italics.is_empty());
 }
+
+// ================================================================
+// balanced asymmetric — multi-level, continued (run edge cases)
+// ================================================================
+
+// 10. A triple-character open run with max_nest = 3 opens three real
+// levels from one run — each byte of `{{{` is its own event.
+#[test]
+fn balanced_nested_10_triple_run_depth3_three_levels() {
+    let src = b"{{{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 3);
+    assert_eq!(st.objects.len(), 3);
+    assert_eq!(txt(src, st.objects[0]), "{{x}}");
+    assert_eq!(txt(src, st.objects[1]), "{x}");
+    assert_eq!(txt(src, st.objects[2]), "x");
+}
+
+// 11. The same triple-character run with max_nest = 2: the innermost
+// pair is skipped via the overflow counter, the outer two still resolve.
+#[test]
+fn balanced_nested_11_triple_run_depth2_overflow_skips_innermost() {
+    let src = b"{{{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{{x}}");
+    assert_eq!(txt(src, st.objects[1]), "{x}");
+}
+
+// 12. The same triple-character run with max_nest = 1 fully collapses to
+// one span — multi-character runs behave the same as single-character
+// ones at the depth-1 boundary.
+#[test]
+fn balanced_nested_12_triple_run_depth1_collapses() {
+    let src = b"{{{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "{{x}}");
+}
+
+// 13. A close run longer than what's actually needed: the real close
+// consumes one byte, the remaining bytes of that same run are literal
+// text — not lost, not mistaken for anything else.
+#[test]
+fn balanced_nested_13_excess_close_bytes_become_text_not_lost() {
+    let src = b"{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "x");
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "}}");
+}
+
+// 14. An open run longer than what later closes: the outermost level
+// never finds its close and is discarded, while the inner levels that
+// did close survive — and survive at the right indices, since closing
+// uses `Vec::remove`, not `truncate`.
+#[test]
+fn balanced_nested_14_unclosed_outer_discarded_inner_survive() {
+    let src = b"{{{x}}";
+    let (st, _) = run_inline_balanced_nested!(src, 3);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{x}");
+    assert_eq!(txt(src, st.objects[1]), "x");
+}
+
+// 15. At max_nest = 1, three opens followed by only two closes leaves
+// nothing: both available closes are consumed decrementing the overflow
+// counter (for the two untracked extra opens), so the one tracked frame
+// never receives its real close and is discarded entirely.
+#[test]
+fn balanced_nested_15_depth1_overflow_consumes_both_closes_nothing_survives() {
+    let src = b"{{{x}}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(st.objects.len(), 0);
+}
+
+// 16. Two independent multi-level groups on the same line don't share or
+// corrupt each other's bookkeeping — each gets its own pair of levels.
+#[test]
+fn balanced_nested_16_two_independent_multilevel_groups() {
+    let src = b"{{x}} {{y}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 4);
+    assert_eq!(txt(src, st.objects[0]), "{x}");
+    assert_eq!(txt(src, st.objects[1]), "x");
+    assert_eq!(txt(src, st.objects[2]), "{y}");
+    assert_eq!(txt(src, st.objects[3]), "y");
+}
+
+// 17. A stray close byte with nothing open yet (right at the start of the
+// line) is literal text and does not corrupt a properly nested group
+// that follows it.
+#[test]
+fn balanced_nested_17_leading_stray_close_then_valid_group() {
+    let src = b"}{{a}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "}");
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{a}");
+    assert_eq!(txt(src, st.objects[1]), "a");
+}
+
+// 18. Zero-length content at the innermost nested level is captured
+// correctly as an empty span, not skipped or merged with its parent.
+#[test]
+fn balanced_nested_18_innermost_empty_content() {
+    let src = b"{{}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{}");
+    assert_eq!(txt(src, st.objects[1]), "");
+}
+
+// 19. Text between an outer pair's open and a same-type inner pair's open
+// is not a separate top-level text span — same principle as the
+// symmetric tests above, applied to asymmetric. Confirms the existing
+// `balanced_nested_01` shape (`objects` content is unchanged) while also
+// locking in that `texts` stays empty.
+#[test]
+fn balanced_nested_19_filler_between_nested_opens_not_a_separate_text_span() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "a {b} c");
+    assert_eq!(txt(src, st.objects[1]), "b");
+    assert!(st.texts.is_empty());
+}
+
+// ================================================================
+// symmetric balanced (parse_inside = true) — continued (edge cases)
+// ================================================================
+
+// 07. An occurrence whose count matches no declared arm (only 1 and 2
+// are declared; this is a run of 3) is literal — it doesn't open a frame,
+// doesn't move the stack, and doesn't prevent the enclosing pair that's
+// already open from later closing correctly around it.
+#[test]
+fn sym_nested_07_unmatched_count_inside_open_pair_is_literal() {
+    let src = b"**bold ***literal*** still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(txt(src, st.n_bolds[0]), "bold ***literal*** still-bold");
+}
+
+// 08. A different-key occurrence arriving once the stack is already at
+// its cap is literal — it doesn't corrupt the frame already open, and a
+// later, properly-nested occurrence of that same different key still
+// resolves once the cap frees up again. Nothing here ends up in `texts`:
+// every byte not claimed by `n_bolds`/`n_italics` is still content of the
+// open bold, not standalone top-level text.
+#[test]
+fn sym_nested_08_beyond_cap_different_key_is_literal_then_recovers() {
+    let src = b"**a *b**c* d**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(txt(src, st.n_bolds[0]), "a *b**c* d");
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "b**c");
+    assert!(st.texts.is_empty());
+}
+
+// 09. Text between an outer pair's open and an inner, different-key
+// pair's open is not a separate top-level text span — it stays inside the
+// outer pair's own content, exactly like the bytes between the inner
+// pair's close and the outer pair's close.
+#[test]
+fn sym_nested_09_filler_between_open_pairs_not_a_separate_text_span() {
+    let src = b"**bold *italic* still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 1);
+    assert!(st.texts.is_empty());
+}
+
+// 10. An outer frame that never closes (discarded at line end) doesn't
+// affect an inner, different-field frame that already closed properly —
+// the two live in separate Vecs, so discarding one is independent of the
+// other surviving.
+#[test]
+fn sym_nested_10_unclosed_outer_does_not_affect_closed_inner_different_field() {
+    let src = b"**bold *italic* unclosed";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert!(st.n_bolds.is_empty());
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "italic");
+}
