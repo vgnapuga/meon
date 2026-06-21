@@ -135,7 +135,7 @@ format as a grammar and the engine compiles it into a parser at build time:
 use meon::define_parser;
 
 define_parser!(MyFormat {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
 
     inline {
         on_trigger(b'*') {
