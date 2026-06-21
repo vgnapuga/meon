@@ -19,6 +19,7 @@
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*

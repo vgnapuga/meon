@@ -17,6 +17,7 @@ reference grammar, using [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz)
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
 * ***FUZZING.md***    <--
