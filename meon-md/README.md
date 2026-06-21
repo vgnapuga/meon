@@ -69,17 +69,17 @@ if let Some((_, span)) = c.headings.first() {
 
 ### Line
 
-| Element         | Syntax              | Field             | Type                    |
-|-----------------|---------------------|-------------------|-------------------------|
-| Heading         | `# ... ######`       | `headings`        | `Vec<(Heading, Span)>`  |
+| Element         | Syntax              | Field             | Type                         |
+|-----------------|---------------------|-------------------|------------------------------|
+| Heading         | `# ... ######`      | `headings`        | `Vec<(Heading, Span)>`       |
 | Thematic break  | `---`, `***`, `___` | `thematic_breaks` | `Vec<(ThematicBreak, Span)>` |
 
 ### Block
 
 | Element        | Syntax             | Field           | Type                      |
 |----------------|--------------------|-----------------|---------------------------|
-| Fenced code    | ` ``` ... ``` `      | `fenced_codes`  | `Vec<Span>`               |
-| Blockquote     | `> ...`              | `blockquotes`   | `Vec<Span>`               |
+| Fenced code    | ` ``` ... ``` `    | `fenced_codes`  | `Vec<Span>`               |
+| Blockquote     | `> ...`            | `blockquotes`   | `Vec<Span>`               |
 | Bullet item    | `- / * / +`        | `bullet_items`  | `Vec<(BulletItem, Span)>` |
 | Ordered item   | `1. / 1)`          | `ordered_items` | `Vec<(OrderedItem, Span)>`|
 | Paragraph      | fallback           | `paragraphs`    | `Vec<Span>`               |
@@ -171,7 +171,7 @@ for (heading, span) in MarkdownParser::find_headings(src) {
 Standalone iterators operate without cross-element context. They may yield
 spans that the full parser would suppress (e.g. bold markers inside a fenced
 code block). See
-[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#12-standalone-iterators)
+[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*
 for details.
 
 ---
@@ -192,23 +192,48 @@ meon-md = { version = "0.1", features = ["avx2"] }
 
 ---
 
+## Nesting
+
+This grammar sets `max_nest = 4`. Two independent mechanisms opt into it:
+
+- **Blockquotes and fences** nest up to 4 levels deep. `> > text` opens two
+  distinct, correctly-bounded `blockquotes` spans rather than one collapsed
+  span that leaks the inner marker into it; a fenced code block opened on a
+  continuation line inside a blockquote stays scoped to its own span.
+- **Bold and italic** nest up to 4 levels deep. `**bold *italic* still
+  bold**` resolves both the outer bold and the inner italic correctly,
+  instead of the inner delimiter silently overwriting the outer one.
+
+```rust
+let src = b"> > nested quote with **bold *italic* text**\n";
+let c = MarkdownParser::parse(src);
+assert_eq!(c.blockquotes.len(), 2);
+assert_eq!(c.bolds.len(), 1);
+assert_eq!(c.italics.len(), 1);
+```
+
+Links, images, and autolinks remain non-nesting by design — `[a [b] c](url)`
+does not nest its own brackets.
+
+---
+
 ## Known limitations
 
 This is a **demonstration grammar**, not a CommonMark-compliant implementation.
 
-- A blockquote containing a fenced code block (`` > ``` ``) produces an
-  incorrect span — the fence opens and the blockquote state is lost.
-- Nested blockquotes (`> >`) leak inner content into the outer span.
 - Emphasis spanning multiple lines is not detected.
 - Emphasis precedence (CommonMark §6.2) is not enforced — declaration order
   wins.
 - Reference-style links, HTML entities, and indented code blocks are not
   supported.
+- Nesting depth is capped at `max_nest = 4` for blockquotes/fences and for
+  bold/italic; a 5th level of the same construct is left untracked rather
+  than represented as its own span.
 
-These are consequences of the single-forward-pass, single-active-block-slot
-design of the `meon` engine. See
-[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs)
-for the full discussion.
+See
+[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs) - *GitHub*
+for the full discussion of the engine's remaining trade-offs, including the
+bounded `max_nest` cap and the single-active-`chained`-rule constraint.
 
 ---
 

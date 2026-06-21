@@ -71,12 +71,18 @@ is copied. Nothing is decoded unless you ask for it.
 let src = b"**bold** and *italic*\n";
 let c = MarkdownParser::parse(src);
 
-// Resolve a span to a string slice — zero copy, borrow from source
+// Resolve a span to a string slice — zero copy, borrow from source.
+// Returns `None` on invalid UTF-8 instead of panicking.
 let text: &str = c.str(c.bolds[0]).unwrap();
 assert_eq!(text, "bold");
 
-// Or work with raw bytes
+// Or work with raw bytes, no UTF-8 check
 let bytes: &[u8] = c.bytes(c.italics[0]);
+
+// Every field also gets a generated `_clean` (delimiters stripped) and
+// `_raw` (delimiters included) accessor — zero-copy byte-slice iterators.
+let raw: &[u8] = c.bolds_raw().next().unwrap();
+assert_eq!(raw, b"**bold**");
 ```
 
 The content struct borrows the source for its entire lifetime. When the struct

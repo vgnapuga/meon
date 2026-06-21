@@ -28,7 +28,7 @@
 
 ```toml
 [dependencies]
-meon = "0.1"
+meon = "0.2"
 ```
 
 ```rust
@@ -101,7 +101,7 @@ let content = MyFormatParser::parse(b"hello world\n");
 `meon-macros` только производит токены — у него нет рантайм-следа.
 
 Подробное описание каждого этапа — в
-[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#4-grammar-compilation-pipeline).
+[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
 
 ---
 
@@ -126,15 +126,15 @@ error: expected literal (fence min)
 независимо от того как `meon` импортирован или переименован в `Cargo.toml`.
 
 Подробное объяснение — в
-[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#16-cross-crate-macro-hygiene).
+[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene) - *GitHub*.
 
 ---
 
 ## Лицензия
 
 `meon-macros` доступен под лицензией
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
+[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
 
-Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
+Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
 
-Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md).
+Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.

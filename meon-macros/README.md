@@ -31,7 +31,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.1"
+meon = "0.2"
 ```
 
 ```rust
@@ -108,7 +108,7 @@ All runtime behaviour lives in `meon` (the `parse_text!`, `parse_inline!`,
 macros). `meon-macros` only produces tokens; it has no runtime footprint.
 
 For a detailed description of each stage see
-[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#4-grammar-compilation-pipeline).
+[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
 
 ---
 
@@ -133,7 +133,7 @@ All macro calls emitted by the expansion are fully qualified via
 `proc_macro_crate::crate_name` so the generated code resolves correctly
 regardless of how `meon` is imported or renamed in `Cargo.toml`.
 
-See [`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#16-cross-crate-macro-hygiene)
+See [`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene) - *GitHub*
 for the full explanation.
 
 ---
