@@ -58,7 +58,7 @@ For the full grammar reference see
 
 ## What `define_parser!` generates
 
-Given `define_parser!(Name { … })`, the macro expands into:
+Given `define_parser!(Name { ... })`, the macro expands into:
 
 **`NameContent<'a>`** — the output struct. One `pub` field per grammar rule,
 all borrowing from the original source slice via `u32` byte-offset spans.
@@ -95,9 +95,9 @@ Grammar DSL tokens
 [strip.rs]    removes => field [N] annotations
     │          so the cleaned tokens pass to runtime macros
     ▼
-[codegen.rs]  emits define_content!(…) call
+[codegen.rs]  emits define_content!(...) call
 [methods.rs]  emits _clean / _raw accessor impl
-[codegen.rs]  emits define_standalone_fns! { … } call
+[codegen.rs]  emits define_standalone_fns! { ... } call
     │
     ▼
 Final token stream → rustc

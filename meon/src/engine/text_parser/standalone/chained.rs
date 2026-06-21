@@ -3,7 +3,7 @@
 use super::common::*;
 /// Iterator over two-part chained delimiter spans in a byte slice.
 ///
-/// Matches the pattern `[prefix]open1…close1 open2…close2`, where `prefix` is
+/// Matches the pattern `[prefix]open1...close1 open2...close2`, where `prefix` is
 /// an optional single byte (e.g. `!` for image links). The iterator yields one
 /// item per match via the `make` closure, which receives `(is_prefix, span1,
 /// span2)` and constructs the output type `T`.

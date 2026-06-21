@@ -45,7 +45,7 @@ MarkdownContent {
     headings:       Vec<(Heading, Span)>
     fenced_codes:   Vec<Span>
     bullet_items:   Vec<(BulletItem, Span)>
-    …
+    ...
 }
 ```
 
@@ -143,7 +143,7 @@ define_parser!(MyFormat {
 // MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>
-// … и многое другое
+// ... и многое другое
 ```
 
 Всё — контент-структура, метод parse, все find_*-итераторы, все аксессоры — генерируется во время компиляции. Никакого рантайм-диспатча, никаких vtable, никакого интерпретатора грамматики.

@@ -19,16 +19,16 @@
 //!
 //! # Grammar integration
 //!
-//! The macro consumes the `lines { … }` section of a `define_parser!` grammar
+//! The macro consumes the `lines { ... }` section of a `define_parser!` grammar
 //! after `strip` has removed the `=> field [N]` annotations. Two rule kinds are
 //! supported:
 //!
-//! - `line(byte, max = N) |var|: Type { … } => field;`
+//! - `line(byte, max = N) |var|: Type { ... } => field;`
 //!   Matches lines that start with 1–N consecutive occurrences of `byte`
 //!   followed by the separator byte. The count is bound to `var` and passed
-//!   to the type constructor. Example: ATX headings (`# … ######`).
+//!   to the type constructor. Example: ATX headings (`# ... ######`).
 //!
-//! - `line_simple(b1 | b2 | …, min = N) |var|: Type { … } => field;`
+//! - `line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field;`
 //!   Matches lines composed entirely of one repeated delimiter byte (interleaved
 //!   with the separator), with at least `N` occurrences. The delimiter byte is
 //!   bound to `var`. Example: thematic breaks (`---`, `***`, `___`).

@@ -155,7 +155,7 @@ Grammar authors depend on `meon` (which re-exports `define_parser!` from
 
 ## 4. Grammar compilation pipeline
 
-When the compiler expands `define_parser!(Name { … })` the following stages
+When the compiler expands `define_parser!(Name { ... })` the following stages
 run in sequence, entirely at compile time:
 
 ```
@@ -173,13 +173,13 @@ Source tokens (grammar DSL)
         │  so the cleaned tokens can be passed to runtime macros
         ▼
   [codegen.rs] back-end: content struct emission
-        │  emits: define_content!(Name { … })
+        │  emits: define_content!(Name { ... })
         ▼
   [methods.rs] back-end: accessor emission
         │  emits: impl<'a> NameContent<'a> { str, bytes, *_clean, *_raw }
         ▼
   [codegen.rs] back-end: standalone DSL emission
-        │  emits: define_standalone_fns! { … }
+        │  emits: define_standalone_fns! { ... }
         ▼
   Final token stream handed back to rustc
 ```
@@ -235,11 +235,11 @@ accessors (via `methods.rs`). Nothing more is stored.
 
 ```
 mc::define_content!(Name {
-    inline        { field: Type [div], … }
-    inline_simple { field [div], … }
-    line          { field: Type [div], … }
-    block         { field: Type [div], … }
-    block_simple  { field [div], … }
+    inline        { field: Type [div], ... }
+    inline_simple { field [div], ... }
+    line          { field: Type [div], ... }
+    block         { field: Type [div], ... }
+    block_simple  { field [div], ... }
 });
 ```
 
@@ -267,14 +267,14 @@ impl NameParser {
     pub fn parse(source: &[u8]) -> NameContent<'_> {
         mc::parse_text!(
             source;
-            sep = …, eol = …, tab = …, escape = …;
+            sep = ..., eol = ..., tab = ..., escape = ...;
             inline  { /* stripped grammar */ }
             lines   { /* stripped grammar */ }
             blocks  { /* stripped grammar */ }
         )
     }
 
-    mc::define_standalone_fns! { sep=…, eol=…, tab=…, escape=…; … }
+    mc::define_standalone_fns! { sep=..., eol=..., tab=..., escape=...; ... }
 }
 ```
 
@@ -303,7 +303,7 @@ accumulation phases before emitting the actual O(n) parsing loop.
 ### Accumulation stages (compile time)
 
 ```
-parse_text!(src; sep=…, eol=…, tab=…, escape=…; <sections>)
+parse_text!(src; sep=..., eol=..., tab=..., escape=...; <sections>)
     │
     ├─ @cs  — split raw sections into typed buckets [inline], [lines], [blocks]
     │
@@ -350,7 +350,7 @@ while pos < len:
 
     if active fence (discriminant 0) → skip to next line (no inline scan)
 
-    find next trigger byte or eol using find_any([$eol, $($f),*], …)
+    find next trigger byte or eol using find_any([$eol, $($f),*], ...)
 
     if eol hit:
         check hard-break, flush text, advance
@@ -395,7 +395,7 @@ by `parse_text!` when a trigger byte is found before the eol.
 
 ### Accumulation phases (compile time)
 
-The macro first collects all rules from the `inline { … }` section into typed
+The macro first collects all rules from the `inline { ... }` section into typed
 buckets:
 
 ```
@@ -482,7 +482,7 @@ the first match, where `cs` is the byte offset of the first content byte (for
 count is in [1, max] and is followed by `sep` or end of line, a match is
 recorded. The span covers everything after the marker and its sep.
 
-**`line_simple(b1 | b2 | …, min = N)`:** reads the first byte. If it matches
+**`line_simple(b1 | b2 | ..., min = N)`:** reads the first byte. If it matches
 the pattern, the entire line is validated: every byte must be either the same
 delimiter or `sep`. If valid and the delimiter count ≥ min, a match is
 recorded.
@@ -499,7 +499,7 @@ through to block/inline processing.
 
 ### Active phase (`@active`)
 
-If `active` is `Some(…)`, the line belongs to an open block:
+If `active` is `Some(...)`, the line belongs to an open block:
 
 - **Fence (discriminant 0):** check if the line is a closing fence (≥
   `flen` fence bytes, rest is `sep`/`tab` only). If yes, push span and clear
@@ -576,7 +576,7 @@ Iterators use three shared utilities from `standalone/common.rs`:
 | `FenceIter`         | `fence`               | `Span`          |
 | `ContIter`          | `cont`                | `Span`          |
 | `BlockMarkerIter`   | `block (pattern)`     | `(T, Span)`     |
-| `BlockNumberedIter` | `block num(…)`        | `(T, Span)`     |
+| `BlockNumberedIter` | `block num(...)`        | `(T, Span)`     |
 
 ---
 
@@ -710,7 +710,7 @@ dependent crates. Unqualified macro names would fail to resolve. The solution:
 pub(crate) fn crate_path() -> TokenStream {
     match crate_name("meon") {
         Ok(FoundCrate::Itself)       => quote! { crate },
-        Ok(FoundCrate::Name(name))   => { let i = Ident::new(&name, …); quote! { #i } },
+        Ok(FoundCrate::Name(name))   => { let i = Ident::new(&name, ...); quote! { #i } },
         Err(_)                        => quote! { crate },
     }
 }
@@ -727,9 +727,9 @@ Every macro call in the generated code is prefixed with the resolved path:
 ```rust
 let mc = crate_path();
 quote! {
-    #mc::define_content!(…);
-    #mc::parse_text!(…);
-    #mc::define_standalone_fns! { … }
+    #mc::define_content!(...);
+    #mc::parse_text!(...);
+    #mc::define_standalone_fns! { ... }
 }
 ```
 
@@ -740,8 +740,8 @@ the `meon` crate use `$crate::`:
 
 ```rust
 $crate::span::Span
-$crate::parse_text!(@dispatch …)
-$crate::swar::find_any(…)
+$crate::parse_text!(@dispatch ...)
+$crate::swar::find_any(...)
 ```
 
 This is standard declarative macro hygiene and works regardless of how `meon`

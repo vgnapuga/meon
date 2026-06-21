@@ -998,3 +998,130 @@ fn integ_edge_05_ordered_followed_by_bullet() {
     assert_eq!(c.ordered_items.len(), 1);
     assert_eq!(c.bullet_items.len(), 1);
 }
+
+// ================================================================
+// nesting
+// ================================================================
+//
+// These exercise `max_nest = 4`, set in this grammar's header. Two
+// independent rule families opt into the engine's bounded nesting: the
+// block-level active-block stack (blockquotes, fences) and the inline-level
+// symmetric stack (bold/italic). Before `max_nest` was wired up, both of
+// these collapsed to the single-slot / single-active-block behaviour — a
+// nested blockquote would leak its inner marker into the outer span, and a
+// different-count inner emphasis delimiter would silently overwrite the
+// single pending slot and lose the outer pair entirely. See this crate's
+// `# Nesting` doc section for the full description.
+
+// 01. Two nested blockquote markers on one line open two distinct spans,
+//     not one collapsed span with the inner marker leaking into it.
+#[test]
+fn integ_nest_01_blockquote_two_levels() {
+    let src = b"> > nested text\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 2);
+}
+
+// 02. The two spans satisfy interval containment — outer.start <= inner.start
+//     and outer.end >= inner.end — which is how a consumer reconstructs the
+//     quote hierarchy from flat spans, with no parent pointer needed.
+#[test]
+fn integ_nest_02_blockquote_two_levels_containment() {
+    let src = b"> > nested text\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 2);
+    let (outer, inner) = if c.blockquotes[0].start <= c.blockquotes[1].start {
+        (&c.blockquotes[0], &c.blockquotes[1])
+    } else {
+        (&c.blockquotes[1], &c.blockquotes[0])
+    };
+    assert!(outer.start <= inner.start);
+    assert!(outer.end >= inner.end);
+}
+
+// 03. Three nested blockquote markers on one line open three distinct levels.
+#[test]
+fn integ_nest_03_blockquote_three_levels() {
+    let src = b"> > > deep\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 3);
+}
+
+// 04. Inline content inside a doubly-nested blockquote is still parsed
+//     normally — bold resolves at the innermost level.
+#[test]
+fn integ_nest_04_blockquote_nested_with_inline() {
+    let src = b"> > **bold** text\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 2);
+    assert_eq!(c.bolds.len(), 1);
+}
+
+// 05. A fenced code block opened on a continuation line inside a blockquote
+//     is scoped to its own span — the block stack lets a fence nest one
+//     level inside an already-open `cont` frame without the fence
+//     absorbing the surrounding `>` markers or vice versa.
+#[test]
+fn integ_nest_05_fence_inside_blockquote() {
+    let src = b"> ```rust\n> code line\n> ```\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 1);
+    assert_eq!(c.fenced_codes.len(), 1);
+}
+
+// 06. Content inside a fence nested inside a blockquote stays opaque to
+//     inline scanning — fence opacity holds regardless of nesting depth.
+#[test]
+fn integ_nest_06_fence_inside_blockquote_no_inline() {
+    let src = b"> ```\n> **not bold**\n> ```\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.fenced_codes.len(), 1);
+    assert_eq!(c.bolds.len(), 0);
+}
+
+// 07. Nested emphasis: a different-count inner delimiter inside an outer
+//     bold now resolves both levels — the inner `*` opens its own frame on
+//     the bounded stack instead of overwriting the single pending slot the
+//     pre-nesting engine used, which used to lose the outer `**` entirely.
+#[test]
+fn integ_nest_07_nested_emphasis_bold_then_italic() {
+    let src = b"**bold *italic* still-bold**\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "bold *italic* still-bold");
+    assert_eq!(txt(src, c.italics[0]), "italic");
+}
+
+// 08. Two distinct inner italic spans inside one outer bold both resolve
+//     independently, each closing before the next opens.
+#[test]
+fn integ_nest_08_nested_emphasis_two_italics_in_one_bold() {
+    let src = b"**bold *one* mid *two* end**\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(c.italics.len(), 2);
+    assert_eq!(txt(src, c.italics[0]), "one");
+    assert_eq!(txt(src, c.italics[1]), "two");
+}
+
+// 09. Block-level nesting (blockquote) and inline-level nesting (emphasis)
+//     compose without interference — they are independent stacks.
+#[test]
+fn integ_nest_09_blockquote_and_emphasis_nested_together() {
+    let src = b"> > **bold *italic* bold** text\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 2);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(c.italics.len(), 1);
+}
+
+// 10. A nested blockquote followed by an unrelated paragraph closes both
+//     levels cleanly at the blank line and does not leak into what follows.
+#[test]
+fn integ_nest_10_nested_blockquote_then_paragraph() {
+    let src = b"> > quote\n\nparagraph\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 2);
+    assert_eq!(c.paragraphs.len(), 1);
+}

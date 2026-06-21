@@ -50,7 +50,7 @@ assert_eq!(content.texts.len(), 1);
 
 ## How it works
 
-`define_parser!(Name { … })` expands into:
+`define_parser!(Name { ... })` expands into:
 
 - `NameContent<'a>` — the output struct. Every grammar rule produces one `pub`
   field. All fields borrow from the original source slice.
@@ -69,9 +69,9 @@ Spans are `u32` byte offsets. Input must not exceed 4 GiB (`span::MAX_INPUT_LEN`
 define_parser!(Name {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
-    inline  { … }
-    lines   { … }
-    blocks  { … }
+    inline  { ... }
+    lines   { ... }
+    blocks  { ... }
 });
 ```
 
@@ -106,14 +106,14 @@ Field type: `Vec<T>`.
 
 ---
 
-#### `on_trigger(b1, b2, …) { … }`
+#### `on_trigger(b1, b2, ...) { ... }`
 
 Declares a set of trigger bytes. When any of them is found on a line the
 block is entered and rules are tried in declaration order.
 
 ---
 
-##### `symmetric byte { … }` — same open and close delimiter
+##### `symmetric byte { ... }` — same open and close delimiter
 
 ```
 on_trigger(b'*') {
@@ -138,7 +138,7 @@ on_trigger(b'*') {
 
 ---
 
-##### `asymmetric open, close { … }` — different open and close bytes
+##### `asymmetric open, close { ... }` — different open and close bytes
 
 ```
 on_trigger(b'<') {
@@ -157,7 +157,7 @@ on_trigger(b'<') {
 
 ---
 
-##### `chained: Type { … }` — two-part delimiter (e.g. links)
+##### `chained: Type { ... }` — two-part delimiter (e.g. links)
 
 ```
 on_trigger(b'[') {
@@ -169,7 +169,7 @@ on_trigger(b'[') {
 }
 ```
 
-Matches the pattern `[prefix]open1…close1 open2…close2`.
+Matches the pattern `[prefix]open1...close1 open2...close2`.
 
 - Two `| open, close |` pairs define the two components.
 - `prefix | byte |` declares an optional single byte immediately before `open1`
@@ -180,7 +180,7 @@ Matches the pattern `[prefix]open1…close1 open2…close2`.
 
 ---
 
-##### `key_value: Type { … }` — `key = value` pairs
+##### `key_value: Type { ... }` — `key = value` pairs
 
 ```
 on_trigger(b'=') {
@@ -230,7 +230,7 @@ content portion after the marker.
 
 ---
 
-##### `line(byte, max = N) |var|: Type { … } => field [div]`
+##### `line(byte, max = N) |var|: Type { ... } => field [div]`
 
 Matches lines that start with 1–N consecutive occurrences of `byte` followed
 by `sep` or end of line. `var` receives the count.
@@ -243,7 +243,7 @@ line(b'#', max = 6) |n|:
 
 ---
 
-##### `line_simple(b1 | b2 | …, min = N) |var|: Type { … } => field [div]`
+##### `line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field [div]`
 
 Matches lines composed entirely of one repeated delimiter byte (interleaved
 with `sep`), appearing at least `min` times. `var` receives the delimiter byte.
@@ -262,7 +262,7 @@ Block elements begin on one line and end on a later line.
 
 ---
 
-#### `block_simple { … }` — multi-line spans, no per-line metadata
+#### `block_simple { ... }` — multi-line spans, no per-line metadata
 
 Field type: `Vec<Span>`.
 
@@ -289,11 +289,11 @@ cont(b'>') => blockquotes [200];
 
 ---
 
-#### `block { … }` — per-line items with metadata
+#### `block { ... }` — per-line items with metadata
 
 Field type: `Vec<(Type, Span)>` — one entry per matching line.
 
-##### `(pattern) |var|: Type { … } => field [div]`
+##### `(pattern) |var|: Type { ... } => field [div]`
 
 Matches lines where, after optional leading whitespace, a single byte
 satisfying `pattern` is followed by `sep` or `tab`. `var` receives the marker
@@ -305,7 +305,7 @@ byte.
     => bullet_items [80];
 ```
 
-##### `num(digit_pat, end = end_pat) |n, k|: Type { … } => field [div]`
+##### `num(digit_pat, end = end_pat) |n, k|: Type { ... } => field [div]`
 
 Matches lines where a digit run (up to 9 digits) is followed by a byte
 satisfying `end_pat` and then `sep` or `tab`. `n` receives the parsed number,

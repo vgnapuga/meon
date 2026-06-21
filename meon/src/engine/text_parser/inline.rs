@@ -11,7 +11,7 @@
 //!
 //! # Grammar integration
 //!
-//! The macro consumes the `inline { … }` section of a `define_parser!`
+//! The macro consumes the `inline { ... }` section of a `define_parser!`
 //! grammar after `strip` has removed the `=> field [N]` annotations.  The
 //! entry point is:
 //!
@@ -25,19 +25,19 @@
 //! - `merge_simple = true | false;`  — whether adjacent text spans are merged.
 //! - `fallback => field;`            — field that receives plain-text spans.
 //! - `hard_break(esc, sp, min) => field;` — trailing hard-break detection.
-//! - `on_trigger(b1, …) { <inline rules> }` — byte-triggered inline block
-//!   (replaces the old `memchr(…) { … }` syntax).
+//! - `on_trigger(b1, ...) { <inline rules> }` — byte-triggered inline block
+//!   (replaces the old `memchr(...) { ... }` syntax).
 //!
 //! # `on_trigger` dispatch
 //!
-//! `on_trigger(b1, b2, …)` declares a set of *trigger bytes*. When the
+//! `on_trigger(b1, b2, ...)` declares a set of *trigger bytes*. When the
 //! scanner finds any of those bytes in the current line it enters the block
 //! and tries each rule in order:
 //!
-//! - `symmetric byte { … }` — paired delimiters with the same open/close byte.
-//! - `asymmetric open, close { … }` — paired delimiters with different bytes.
-//! - `chained: Type { … }` — two-part delimiters (e.g. `[text](url)`).
-//! - `key_value: Type { … }` — `key = value` pairs.
+//! - `symmetric byte { ... }` — paired delimiters with the same open/close byte.
+//! - `asymmetric open, close { ... }` — paired delimiters with different bytes.
+//! - `chained: Type { ... }` — two-part delimiters (e.g. `[text](url)`).
+//! - `key_value: Type { ... }` — `key = value` pairs.
 //!
 //! The trigger set is searched with [`crate::swar::find_any`], which
 //! dispatches to `memchr` / `memchr2` / `memchr3` for 1–3 bytes and to the
@@ -59,7 +59,7 @@
 //! bold). Suppressing the flush there loses nothing: those bytes stay
 //! covered by whichever enclosing span eventually closes around them.
 //!
-//! ## `asymmetric { balanced = …; parse_inside = …; … }`
+//! ## `asymmetric { balanced = ...; parse_inside = ...; ... }`
 //!
 //! `balanced` and `parse_inside` are independent and both gate the bounded
 //! stack — a rule needs only *one* of them `true` to be on it at all:
@@ -78,10 +78,27 @@
 //!   transparent again once back outside it.
 //!
 //! Only a rule with **both** flags `false` ever runs the original,
-//! untouched `if delim == $ao { … memchr/depth-search for $ac … }` block —
+//! untouched `if delim == $ao { ... memchr/depth-search for $ac ... }` block —
 //! for any other rule that block is unreachable dead code, since the new
 //! check (tried first, for every trigger byte) already intercepted and
 //! `continue`d past it.
+//!
+//! **Cost for `balanced = false, parse_inside = false` rules (the default,
+//! pre-nesting shape):** the `($abal || $api)` guard is a `bool` expression
+//! over two *compile-time* literals supplied per-rule by the grammar (`$abal`
+//! and `$api` come from that rule's own `balanced = ...` / `parse_inside = ...`
+//! settings, substituted at macro-expansion time, not runtime state), so for
+//! such a rule the whole condition is `false || false` at every call site
+//! touching that rule's `$ao`/`$ac`. This is not a separate path *chosen by
+//! the macro itself* at expansion time — the macro still emits the guarded
+//! block as ordinary, always-`if`-wrapped code. `rustc`/LLVM is relied on to
+//! fold the constant and dead-code-eliminate the guarded block at codegen
+//! time, the same way it already elides `if false { ... }`. In `--release`
+//! this reliably costs nothing measurable; in unoptimised builds (`debug`, or
+//! `opt-level = 0`) the branch is still emitted *and evaluated*, just always
+//! `false`. A grammar relying on guaranteed low overhead in debug builds too
+//! should not assume this folding happens and should benchmark with
+//! `--release`.
 //!
 //! The new check recognises both `$ao` and `$ac` for every stack-eligible
 //! rule in the grammar (so different bracket types nest validly with each
@@ -110,7 +127,35 @@
 //! just `on_trigger(b'{')` — since the close is now found by the same scan
 //! that finds the open, not by an internal forward search.
 //!
-//! ## `symmetric { parse_inside = true; balanced = true; … }`
+//! **Close-byte sharing across rules**: two different `asymmetric` rules in
+//! the same `on_trigger` block may share a close byte (e.g. `(`, `)` and
+//! `[`, `)`) as long as their open bytes differ. This is handled by a
+//! *single, unified* close pass — not one independent block per rule. An
+//! earlier shape of this mechanism gave each rule its own top-level
+//! `if delim == $ac { ... }` arm (mirroring the per-rule open-side arms); that
+//! is unsound the moment two rules share a close byte, because each rule's
+//! arm is an independent `if`, not a mutually-exclusive branch of the
+//! *other* rules' arms. When `delim` matched more than one rule's `$ac`,
+//! every matching rule's arm ran in sequence within the same scan-loop
+//! iteration — including one that ran *after* an earlier rule's arm had
+//! already popped the stack. The later arm would then see the *new* top of
+//! stack left behind by the earlier close and, if that new top's open byte
+//! happened to belong to it, close it too — collapsing two distinct frames
+//! on a single input byte instead of closing only the one actually intended.
+//!
+//! The close side instead first computes, once, a single `bool` — whether
+//! `delim` is recognised as a close byte by *any* `$abal || $api` rule at
+//! all (a plain `||`-reduction across the rule set, not a per-rule branch).
+//! If so, exactly one `for _k in 0..count` pass runs, closing **at most one
+//! frame per character** — the current top of stack, if its own recorded
+//! close byte matches `delim` — and dispatches the field write by that
+//! frame's own recorded *open* byte (`_ob`), not by which rule happened to
+//! be checked first. This mirrors the shape the end-of-line discard loop
+//! (further below) has always used, and for the same reason: it is a single
+//! pass over the stack, never one parallel block per rule reacting
+//! independently to the same byte.
+//!
+//! ## `symmetric { parse_inside = true; balanced = true; ... }`
 //!
 //! `parse_inside = false` and `parse_inside = true, balanced = false` are
 //! **entirely unchanged** — both keep their original code paths verbatim.
@@ -131,7 +176,7 @@
 //! length here genuinely picks the construct (`*` vs `**` are different
 //! fields), so it is matched as-is, never split byte-by-byte.
 //!
-//! ## `chained: T { … }` with a transparent component
+//! ## `chained: T { ... }` with a transparent component
 //!
 //! When *both* components have `parse_inside = false` the original
 //! self-contained two-phase forward search runs **unchanged** — it finds
@@ -201,7 +246,7 @@ macro_rules! parse_inline {
     };
 
     // on_trigger(...) { ... } — new canonical name for the byte-trigger block.
-    // Replaces the old `memchr(…) { … }` syntax; semantics are identical.
+    // Replaces the old `memchr(...) { ... }` syntax; semantics are identical.
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
                $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
      (hard_break: $($hb:tt)*)
@@ -315,7 +360,7 @@ macro_rules! parse_inline {
         // nothing is open — both stacks empty, no chained phase active:
         //
         //     if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
-        //         push_il!($tx, …);
+        //         push_il!($tx, ...);
         //     }
         //
         // That guard is written out inline at each of the "flush before
@@ -353,7 +398,7 @@ macro_rules! parse_inline {
         // parse_inside=true, balanced=false path: (byte, open_pos, open_count, depth).
         let mut pending: Option<(u8, u32, u32, u32)> = None;
 
-        // Bounded stack for symmetric { parse_inside = true; balanced = true; … }.
+        // Bounded stack for symmetric { parse_inside = true; balanced = true; ... }.
         // Frame = (byte, count, vec_idx_in_field).
         let mut sym_frames: [(u8, u32, u32); $maxn] = [(0u8, 0u32, 0u32); $maxn];
         let mut sym_depth: u8 = 0u8;
@@ -378,7 +423,7 @@ macro_rules! parse_inline {
         // is_opaque). `per_char_count` is always `1` — see the run-splitting
         // note below — stored anyway so the close / discard sides can
         // re-derive which `$af` field to touch via the same
-        // `match … { $an => … }` arms the open side used: `$af` is bound
+        // `match ... { $an => ... }` arms the open side used: `$af` is bound
         // inside that inner repetition, so every access to it must stay
         // inside a matching `match`, never used bare.
         let mut asym_frames: [(u8, u8, u32, u32, bool); $maxn] =
@@ -474,6 +519,7 @@ macro_rules! parse_inline {
 
             let mut _asym_bal_handled = false;
             if !_chained_opaque_active {
+                // --- open side: per-rule, structurally unchanged. ---
                 $(
                     if ($abal || $api) && delim == $ao {
                         if text_start < delim_start as usize {
@@ -527,30 +573,66 @@ macro_rules! parse_inline {
                             // Else literal: text_start stays put.
                         }
                         _asym_bal_handled = true;
-                    } else if ($abal || $api) && delim == $ac {
+                    }
+                )*
+
+                // --- close side: a single, unified pass — not one block
+                // per rule. ---
+                //
+                // Earlier versions of this dispatch lived *inside* the
+                // per-rule `$(...)*` above, as a parallel `else if delim ==
+                // $ac { ... }` arm for each rule. That shape is unsound the
+                // moment two different `asymmetric` rules share a close
+                // byte: each rule's block is an *independent* top-level
+                // `if`, so when `delim` matches more than one rule's `$ac`,
+                // every matching rule's block runs in sequence — including
+                // any that ran *after* an earlier rule's block already
+                // popped the stack. The later block then sees the *new*
+                // top of stack (left behind by the earlier close) and, if
+                // that new top's open byte happens to belong to it, closes
+                // it too — collapsing two distinct frames on a single
+                // input byte instead of closing only the intended one.
+                //
+                // The fix: determine *once*, via a plain OR across every
+                // `$abal || $api` rule's `$ac`, whether `delim` is
+                // recognised as a close byte by anything at all — not
+                // which specific rule it belongs to. Then run exactly one
+                // `for _k in 0..count` pass that closes at most one frame
+                // per character, dispatching the field write by the
+                // *frame's own recorded open byte* (`_ob`), not by which
+                // rule's per-rule block happened to be checked first. This
+                // mirrors the already-correct end-of-line discard loop
+                // further below, which has always dispatched this way
+                // because it is a single standalone loop, never nested
+                // inside a per-rule iteration of itself.
+                if !_asym_bal_handled {
+                    let mut _asym_is_close_byte = false;
+                    $( if ($abal || $api) && delim == $ac { _asym_is_close_byte = true; } )*
+
+                    if _asym_is_close_byte {
                         for _k in 0..count {
                             let _close_char_pos = delim_start + _k;
-                            let mut _consumed = false;
                             if asym_depth > 0
-                                && asym_frames[asym_depth as usize - 1].1 == $ac
+                                && asym_frames[asym_depth as usize - 1].1 == delim
                             {
                                 if asym_overflow > 0 {
                                     asym_overflow -= 1;
                                 } else {
                                     let (_ob, _cb, _rc, _vidx, _op) =
                                         asym_frames[asym_depth as usize - 1];
-                                    match _rc {
-                                        $( $an => {
-                                            $state.$af[_vidx as usize].end = _close_char_pos;
-                                        } )*
-                                        _ => {}
-                                    }
+                                    $(
+                                        if ($abal || $api) && _ob == $ao {
+                                            match _rc {
+                                                $( $an => {
+                                                    $state.$af[_vidx as usize].end = _close_char_pos;
+                                                } )*
+                                                _ => {}
+                                            }
+                                        }
+                                    )*
                                     asym_depth -= 1;
                                     asym_overflow = 0;
                                 }
-                                _consumed = true;
-                            }
-                            if _consumed {
                                 text_start = (_close_char_pos + 1) as usize;
                             }
                             // A close character that doesn't match the
@@ -559,7 +641,7 @@ macro_rules! parse_inline {
                         }
                         _asym_bal_handled = true;
                     }
-                )*
+                }
             }
             if _asym_bal_handled {
                 continue;
@@ -571,21 +653,21 @@ macro_rules! parse_inline {
             // -------------------------------------------------------------- //
             // chained, transparent phases: a rule with *either* component's  //
             // `parse_inside = true` uses this state-machine for *both*       //
-            // phases (so phase 1 → phase 2 hand-off never needs to switch    //
-            // mechanisms mid-match); each phase's own opacity is still       //
-            // tracked independently in `ch_text_opaque` / `ch_url_opaque`,   //
-            // resolved once at the moment that phase opens. A rule where     //
-            // *both* components are `parse_inside = false` never matches     //
-            // `$tpi || $upi` here, so this block does nothing for it and the //
+            // phases (so phase 1 → phase 2 hand-off never needs to switch     //
+            // mechanisms mid-match); each phase's own opacity is still        //
+            // tracked independently in `ch_text_opaque` / `ch_url_opaque`,    //
+            // resolved once at the moment that phase opens. A rule where      //
+            // *both* components are `parse_inside = false` never matches      //
+            // `$tpi || $upi` here, so this block does nothing for it and the  //
             // original two-phase self-contained search further below         //
-            // (unmodified) is the only thing that ever runs for it.          //
+            // (unmodified) is the only thing that ever runs for it.           //
             //                                                                //
-            // Closing the text phase never commits anything by itself — it   //
-            // only attempts to open the url phase immediately. Only closing  //
-            // the url phase actually pushes the combined `$ch_ty` struct.    //
-            // If the byte right after the text close isn't `$uo`, the whole  //
-            // match is abandoned and the opening bracket plus everything     //
-            // scanned over is preserved as literal text — nothing committed. //
+            // Closing the text phase never commits anything by itself — it    //
+            // only attempts to open the url phase immediately. Only closing   //
+            // the url phase actually pushes the combined `$ch_ty` struct.     //
+            // If the byte right after the text close isn't `$uo`, the whole   //
+            // match is abandoned and the opening bracket plus everything      //
+            // scanned over is preserved as literal text — nothing committed.  //
             // -------------------------------------------------------------- //
             let mut _chained_handled = false;
             $(

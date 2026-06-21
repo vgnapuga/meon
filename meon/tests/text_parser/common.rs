@@ -48,10 +48,6 @@ define_content!(TestContent {
         codes        [80],
         autolinks    [100],
         objects      [100],
-        // Separate fields for the max_nest > 1 mechanism tests, so the
-        // existing balanced=false `italics`/`bolds` fixtures above (and
-        // their tests, which rely on the original single-pending-slot
-        // behaviour) stay completely untouched.
         n_italics    [40],
         n_bolds      [40],
     }
@@ -125,15 +121,6 @@ macro_rules! run_inline {
     }};
 }
 
-/// Single-level balanced asymmetric fixture — `max_nest = 1` fixed, so a
-/// nested same-type region still collapses to one outer span, exactly as
-/// before the nesting stack existed. Kept exactly as the original tests
-/// expect; see `run_inline_balanced_nested!` for depth > 1.
-///
-/// NOTE: `on_trigger` now lists **both** `b'{'` and `b'}'`. The close byte
-/// must be visible to the same scan that finds the open byte — the bounded
-/// stack no longer does an internal forward search for it, unlike the old
-/// single-span mechanism.
 macro_rules! run_inline_balanced {
     ($src:expr) => {{
         let src: &[u8] = $src;
@@ -153,9 +140,6 @@ macro_rules! run_inline_balanced {
     }};
 }
 
-/// Same grammar as `run_inline_balanced!`, with a caller-supplied
-/// `max_nest`, so the same input shape can be exercised at depth 1
-/// (collapsing) and depth > 1 (real per-level emission).
 macro_rules! run_inline_balanced_nested {
     ($src:expr, $maxn:literal) => {{
         let src: &[u8] = $src;
@@ -175,12 +159,6 @@ macro_rules! run_inline_balanced_nested {
     }};
 }
 
-/// `symmetric { parse_inside = true; balanced = true; … }` fixture, using
-/// `n_italics` / `n_bolds` — separate from the pre-existing `italics` /
-/// `bolds` (which stay `balanced = false`, untouched). Exercises the fix for
-/// the single-pending-slot overwrite bug: a different-count occurrence of
-/// the same byte used to silently clobber the still-pending outer
-/// delimiter.
 macro_rules! run_inline_sym_nested {
     ($src:expr, $maxn:literal) => {{
         let src: &[u8] = $src;
@@ -223,9 +201,38 @@ macro_rules! run_block {
     ($active:expr, $src:expr, $pos:expr, $le:expr) => {{
         let src: &[u8] = $src;
         let mut st = ParseState::new(src.len());
-        let _tmp = $active;
+        let mut _stack: [(u8, u8, u8, u32); 1] = [(0u8, 0u8, 0u8, 0u32); 1];
+        let mut _depth: usize = 0;
+        if let Some((d, b, c, s)) = *$active {
+            _stack[0] = (d, b, c, s);
+            _depth = 1;
+        }
         let result = meon::parse_block!(
-            _tmp, st, src, $pos, $le, sep = b' ', tab = b'\t';
+            _stack, _depth, st, src, $pos, $le, sep = b' ', tab = b'\t', max_nest = 1;
+            block_simple {
+                fence(b'`', min = 3) => fenced_codes;
+                cont(b'>')            => blockquotes;
+            }
+            block {
+                (b'-' | b'*' | b'+') |b|:
+                    BulletItem { kind: b }
+                    => bullet_items;
+                num(b'0'..=b'9', end = b'.' | b')') |n, k|:
+                    OrderedItem { kind: k, num: n }
+                    => ordered_items;
+            }
+        );
+        *$active = if _depth > 0 { Some(_stack[0]) } else { None };
+        (st, result)
+    }};
+}
+
+macro_rules! run_block_nested {
+    ($stack:ident, $depth:ident, $src:expr, $pos:expr, $le:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let mut st = ParseState::new(src.len());
+        let result = meon::parse_block!(
+            $stack, $depth, st, src, $pos, $le, sep = b' ', tab = b'\t', max_nest = $maxn;
             block_simple {
                 fence(b'`', min = 3) => fenced_codes;
                 cont(b'>')            => blockquotes;

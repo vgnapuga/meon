@@ -1823,7 +1823,7 @@ fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
 // ================================================================
 //
 // All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
-// true; balanced = true; … }` fixture with its own `n_italics` / `n_bolds`
+// true; balanced = true; ... }` fixture with its own `n_italics` / `n_bolds`
 // fields, separate from the pre-existing `italics` / `bolds` fixtures
 // above (which stay `balanced = false`, exercising the original single
 // pending-slot mechanism, untouched).
@@ -2087,4 +2087,139 @@ fn sym_nested_10_unclosed_outer_does_not_affect_closed_inner_different_field() {
     assert!(st.n_bolds.is_empty());
     assert_eq!(st.n_italics.len(), 1);
     assert_eq!(txt(src, st.n_italics[0]), "italic");
+}
+
+// ---------------------------------------------------------------
+// max_nest = 0 (degenerate, but legal — front-end doesn't reject it)
+// ---------------------------------------------------------------
+
+// 01. At max_nest = 0, a balanced asymmetric pair never opens at all — the
+//     cap is 0, so `(asym_depth as usize) < _cap` is false on the very
+//     first occurrence, and the open byte is left as literal text rather
+//     than panicking on a zero-sized array.
+#[test]
+fn maxnest_zero_01_balanced_asymmetric_never_opens() {
+    let src = b"{hello}";
+    let (st, _) = run_inline_balanced_nested!(src, 0);
+    assert_eq!(st.objects.len(), 0);
+}
+
+// 02. At max_nest = 0, the open and close bytes both surface as plain text
+//     (no panic, no lost bytes — the overflow counter never engages for
+//     `balanced = true` outside the open path, so the close byte falls
+//     through to ordinary text accumulation).
+#[test]
+fn maxnest_zero_02_bytes_preserved_as_text() {
+    let src = b"{x}";
+    let (st, _) = run_inline_balanced_nested!(src, 0);
+    assert!(st.objects.is_empty());
+    let all: String = st.texts.iter().map(|&s| txt(src, s)).collect();
+    assert_eq!(all, "{x}");
+}
+
+// 03. At max_nest = 0, a symmetric balanced rule (parse_inside = true,
+//     balanced = true) likewise never opens a frame — same cap-is-zero
+//     reasoning as the asymmetric case, exercised on the other stack.
+#[test]
+fn maxnest_zero_03_symmetric_balanced_never_opens() {
+    let src = b"*italic*";
+    let (st, _) = run_inline_sym_nested!(src, 0);
+    assert!(st.n_italics.is_empty());
+    assert!(st.n_bolds.is_empty());
+}
+
+// ---------------------------------------------------------------
+// asymmetric rules sharing a close byte (documented caveat, not rejected)
+// ---------------------------------------------------------------
+//
+// Fixture: two asymmetric rules in one on_trigger block, `(`,`)` and `[`,`)`
+// — chosen so the OPEN bytes differ (so the dispatcher can tell which rule
+// opened a given frame) but the CLOSE byte (`)`) is identical between them.
+// This is the exact shape flagged in inline.rs's doc-comment: the frame on
+// the stack still resolves by its own recorded close byte, but the
+// `match _rc { $an => … }` arm that actually receives the close is whichever
+// rule's `1 => field` happens to be reached for count `1` in declaration
+// order inside that match — which, since both rules declare their exact
+// arm as `1`, are not actually ambiguous at the match level (each rule's
+// `$an => $af` pair is distinct token-wise), but the open byte is what
+// decides which frame (and therefore which field) is on the stack in the
+// first place. These tests lock in that the OPEN byte — not just "any
+// occurrence of the shared close byte" — determines routing.
+
+macro_rules! run_inline_shared_close_nested {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'(', b')', b'[') {
+                asymmetric b'(', b')' {
+                    balanced     = true;
+                    parse_inside = false;
+                    1 => objects
+                }
+                asymmetric b'[', b')' {
+                    balanced     = true;
+                    parse_inside = false;
+                    1 => n_italics
+                }
+            }
+        );
+        (st, consumed)
+    }};
+}
+
+// 04. A `(...)` pair routes to its own rule's field (`objects`), matching
+//     close byte `)` against the frame's own recorded `$ac` — not against
+//     whichever rule happens to be declared first.
+#[test]
+fn shared_close_04_paren_pair_routes_to_objects() {
+    let src = b"(hello)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "hello");
+    assert!(st.n_italics.is_empty());
+}
+
+// 05. A `[...)` pair (mismatched-looking but matching this fixture's second
+//     rule, which declares open `[` / close `)`) routes to that rule's own
+//     field (`n_italics`), not to `objects` — confirming routing keys off
+//     the *open* byte recorded on the frame, not just "first rule whose
+//     close byte matches".
+#[test]
+fn shared_close_05_bracket_paren_pair_routes_to_n_italics() {
+    let src = b"[hello)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "hello");
+    assert!(st.objects.is_empty());
+}
+
+// 06. Two independent pairs, one of each rule, on the same line: each
+//     resolves to its own field without cross-contamination, even though
+//     both close on the identical byte `)`.
+#[test]
+fn shared_close_06_both_rules_independent_on_same_line() {
+    let src = b"(a) [b)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "a");
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "b");
+}
+
+// 07. A `(` opened while a `[` frame is already on top of the stack nests
+//     correctly using each frame's own recorded close byte: the inner `(`
+//     closes on the first `)`, and because the outer `[`'s recorded close
+//     byte is also `)`, the *second* `)` correctly closes the outer frame
+//     rather than being mistaken for stray input.
+#[test]
+fn shared_close_07_nested_different_open_bytes_shared_close() {
+    let src = b"[a (b) c)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "b");
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "a (b) c");
 }

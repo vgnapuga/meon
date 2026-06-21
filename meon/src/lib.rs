@@ -13,7 +13,7 @@
 //! invocation and get back:
 //!
 //! - a **content struct** with `Vec` fields for every element kind,
-//! - a **`…Parser` type** with a `parse(source: &[u8]) -> …Content<'_>` method
+//! - a **`...Parser` type** with a `parse(source: &[u8]) -> ...Content<'_>` method
 //!   for full single-pass parsing,
 //! - **`find_*` standalone iterators** for lazily scanning one element kind
 //!   without parsing the whole document.

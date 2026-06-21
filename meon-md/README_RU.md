@@ -71,15 +71,15 @@ if let Some((_, span)) = c.headings.first() {
 
 | Элемент          | Синтаксис           | Поле              | Тип                          |
 |------------------|---------------------|-------------------|------------------------------|
-| Заголовок        | `# … ######`        | `headings`        | `Vec<(Heading, Span)>`       |
+| Заголовок        | `# ... ######`        | `headings`        | `Vec<(Heading, Span)>`       |
 | Тематический разрыв | `---`, `***`, `___` | `thematic_breaks` | `Vec<(ThematicBreak, Span)>` |
 
 ### Блочные
 
 | Элемент           | Синтаксис        | Поле            | Тип                          |
 |-------------------|------------------|-----------------|------------------------------|
-| Блок кода         | ` ``` … ``` `    | `fenced_codes`  | `Vec<Span>`                  |
-| Цитата            | `> …`            | `blockquotes`   | `Vec<Span>`                  |
+| Блок кода         | ` ``` ... ``` `    | `fenced_codes`  | `Vec<Span>`                  |
+| Цитата            | `> ...`            | `blockquotes`   | `Vec<Span>`                  |
 | Элемент списка    | `- / * / +`      | `bullet_items`  | `Vec<(BulletItem, Span)>`    |
 | Нумерованный элемент | `1. / 1)`     | `ordered_items` | `Vec<(OrderedItem, Span)>`   |
 | Параграф          | fallback         | `paragraphs`    | `Vec<Span>`                  |

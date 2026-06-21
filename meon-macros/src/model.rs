@@ -7,7 +7,7 @@ use proc_macro2::{Ident, Literal, Span as PS, TokenStream as TS2};
 use quote::quote;
 
 /// Resolve the path to the runtime crate (the one exporting `span`,
-/// `define_content!`, `define_standalone_fns!`, …) as named in the dependent
+/// `define_content!`, `define_standalone_fns!`, ...) as named in the dependent
 /// crate's `Cargo.toml`.
 ///
 /// Yields `crate` when expanded inside the runtime crate itself, otherwise the

@@ -1,7 +1,7 @@
 //! Hand-rolled cursor over a `TokenStream`.
 //!
 //! A thin reader with peek/advance and a handful of grammar-aware helpers
-//! (`next_group`, `arrow_field_cap`, `collect_lit_alternation`, …) shared by the
+//! (`next_group`, `arrow_field_cap`, `collect_lit_alternation`, ...) shared by the
 //! front-end.
 //!
 //! The structural methods (`next_ident`, `next_group`, `named_lit`,
@@ -110,7 +110,7 @@ impl Cursor {
             .ok_or_else(|| Error::new(span, format!("expected literal ({ctx})")))
     }
 
-    /// Consume a `lit | lit | …` alternation of literals.
+    /// Consume a `lit | lit | ...` alternation of literals.
     pub(crate) fn collect_lit_alternation(&mut self) -> Vec<Literal> {
         let mut lits = Vec::new();
         while let Some(TT::Literal(l)) = self.peek().cloned() {
@@ -127,7 +127,7 @@ impl Cursor {
         lits
     }
 
-    /// Consume a `|a, b, …|` capture list, returning the bound identifiers.
+    /// Consume a `|a, b, ...|` capture list, returning the bound identifiers.
     pub(crate) fn skip_pipe_vars_returning(&mut self) -> Vec<Ident> {
         let mut vars = Vec::new();
         if let Some(TT::Punct(p)) = self.peek() {

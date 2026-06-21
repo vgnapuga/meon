@@ -3,17 +3,17 @@
 //!
 //! # Entry points
 //!
-//! - [`collect_inline`] — processes the `inline { … }` section.
-//! - [`collect_lines`]  — processes the `lines { … }` section.
-//! - [`collect_blocks`] — processes the `blocks { … }` section.
+//! - [`collect_inline`] — processes the `inline { ... }` section.
+//! - [`collect_lines`]  — processes the `lines { ... }` section.
+//! - [`collect_blocks`] — processes the `blocks { ... }` section.
 //!
 //! All three return [`Result`] so a malformed grammar surfaces as a located
 //! `compile_error!` rather than a panic.
 //!
 //! # `on_trigger` keyword
 //!
-//! Inside `inline { … }`, byte-triggered inline blocks are introduced with
-//! `on_trigger(b1, b2, …) { … }`.  This keyword replaced the old `memchr(…)`
+//! Inside `inline { ... }`, byte-triggered inline blocks are introduced with
+//! `on_trigger(b1, b2, ...) { ... }`.  This keyword replaced the old `memchr(...)`
 //! alias and better reflects the declarative intent: "when any of these bytes
 //! is encountered, apply the following rules".
 //!
@@ -32,7 +32,7 @@ use crate::cursor::Cursor;
 use crate::error::Result;
 use crate::model::{CF, StandaloneRule};
 
-/// Walk the `inline { … }` section.
+/// Walk the `inline { ... }` section.
 pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
     let mut c = Cursor::new(ts);
     while let Some(tt) = c.peek().cloned() {
@@ -76,7 +76,7 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
     Ok(())
 }
 
-/// Walk an `on_trigger(..) { … }` body.
+/// Walk an `on_trigger(..) { ... }` body.
 ///
 /// Contains `symmetric`, `asymmetric`, `chained` and `key_value` sub-rules.
 fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
@@ -383,7 +383,7 @@ fn collect_kv_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF) -> R
     Ok(())
 }
 
-/// Collect the `… => field [N]` arms of a symmetric/asymmetric block.
+/// Collect the `... => field [N]` arms of a symmetric/asymmetric block.
 ///
 /// Named settings listed in `skip_settings` are consumed and discarded.
 fn collect_match_arms(ts: TS2, skip_settings: &[&str], cf: &mut CF) -> Result<()> {
@@ -415,7 +415,7 @@ fn collect_match_arms(ts: TS2, skip_settings: &[&str], cf: &mut CF) -> Result<()
     Ok(())
 }
 
-/// Walk the `lines { … }` section (`line` / `line_simple`).
+/// Walk the `lines { ... }` section (`line` / `line_simple`).
 pub(crate) fn collect_lines(ts: TS2, cf: &mut CF) -> Result<()> {
     let mut c = Cursor::new(ts);
     while let Some(tt) = c.peek().cloned() {
@@ -471,7 +471,7 @@ pub(crate) fn collect_lines(ts: TS2, cf: &mut CF) -> Result<()> {
     Ok(())
 }
 
-/// Walk the `blocks { … }` section (`block_simple` / `block` / `fallback`).
+/// Walk the `blocks { ... }` section (`block_simple` / `block` / `fallback`).
 pub(crate) fn collect_blocks(ts: TS2, cf: &mut CF) -> Result<()> {
     let mut c = Cursor::new(ts);
     while c.peek().is_some() {
@@ -505,7 +505,7 @@ pub(crate) fn collect_blocks(ts: TS2, cf: &mut CF) -> Result<()> {
     Ok(())
 }
 
-/// Walk a `block_simple { … }` body (`fence` / `cont`).
+/// Walk a `block_simple { ... }` body (`fence` / `cont`).
 fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
     let mut c = Cursor::new(ts);
     while let Some(tt) = c.peek().cloned() {
@@ -538,7 +538,7 @@ fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
     Ok(())
 }
 
-/// Walk a `block { … }` body (marker `(…)` blocks and `num(…)` blocks).
+/// Walk a `block { ... }` body (marker `(...)` blocks and `num(...)` blocks).
 fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
     let mut c = Cursor::new(ts);
     while c.peek().is_some() {

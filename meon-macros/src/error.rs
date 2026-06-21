@@ -27,7 +27,7 @@ impl Error {
         }
     }
 
-    /// Render as a `compile_error!{ "…" }` invocation spanned at the offending
+    /// Render as a `compile_error!{ "..." }` invocation spanned at the offending
     /// token, suitable as the whole expansion of the proc-macro.
     pub(crate) fn to_compile_error(&self) -> TS2 {
         let msg = &self.msg;

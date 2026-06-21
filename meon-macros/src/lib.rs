@@ -2,7 +2,7 @@
 //!
 //! The single entry point is [`define_parser!`]. It consumes a grammar
 //! description and expands to: the content struct (via `define_content!`), a
-//! `…Parser` type whose `parse` method drives the runtime `parse_text!` macro,
+//! `...Parser` type whose `parse` method drives the runtime `parse_text!` macro,
 //! the standalone `find_*` iterator functions, and the `_clean` / `_raw`
 //! accessor methods.
 //!
@@ -58,31 +58,44 @@ use crate::strip::strip;
 /// define_parser!(Name {
 ///     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 ///
-///     inline  { … }
-///     lines   { … }
-///     blocks  { … }
+///     inline  { ... }
+///     lines   { ... }
+///     blocks  { ... }
 /// });
 /// ```
 ///
 /// ## Context bytes (required header, plus one optional)
 ///
-/// | Key         | Meaning                                                  |
-/// |-------------|----------------------------------------------------------|
-/// | `sep`       | Word separator (typically space)                         |
-/// | `eol`       | Line terminator (typically `\n`)                         |
-/// | `tab`       | Tab character                                            |
-/// | `escape`    | Escape prefix that suppresses the next byte              |
-/// | `max_nest`  | Optional. Bounded nesting depth cap forwarded to         |
-/// |             | `parse_inline!`'s two stacks — `symmetric` with          |
-/// |             | `parse_inside = true; balanced = true;` and              |
-/// |             | `asymmetric` with `balanced = true` and/or               |
-/// |             | `parse_inside = true`. A grammar-wide setting,           |
-/// |             | declared alongside the other context bytes — not         |
-/// |             | inside `inline { … }`. Absent => `1`, which              |
-/// |             | reproduces pre-nesting behaviour exactly:                |
-/// |             | `sep = …, eol = …, tab = …, escape = …, max_nest = 4;` |
+/// | Key         | Meaning                                                        |
+/// |-------------|----------------------------------------------------------------|
+/// | `sep`       | Word separator (typically space)                               |
+/// | `eol`       | Line terminator (typically `\n`)                               |
+/// | `tab`       | Tab character                                                  |
+/// | `escape`    | Escape prefix that suppresses the next byte                    |
+/// | `max_nest`  | Optional. Bounded nesting depth cap forwarded to               |
+/// |             | `parse_inline!`'s two stacks — `symmetric` with                |
+/// |             | `parse_inside = true; balanced = true;` and                    |
+/// |             | `asymmetric` with `balanced = true` and/or                     |
+/// |             | `parse_inside = true`. A grammar-wide setting,                 |
+/// |             | declared alongside the other context bytes — not               |
+/// |             | inside `inline { ... }`.                                       |
+/// |             |                                                                |
+/// |             | **Absent => `1`**, which reproduces pre-nesting behaviour      |
+/// |             | exactly (single pending slot / single outer span, no           |
+/// |             | self-nesting). This is the default and is also the fast        |
+/// |             | path: at `max_nest = 1`, every grammar rule whose own          |
+/// |             | `balanced` and `parse_inside` flags are both `false` skips     |
+/// |             | the bounded-stack machinery entirely and runs the original,    |
+/// |             | unmodified single-pass scan — there is no per-iteration cost   |
+/// |             | from the nesting feature unless a rule actually opts into it.  |
+/// |             |                                                                |
+/// |             | To opt in to deeper, type-aware nesting (e.g. for `{ [ ] }`    |
+/// |             | style structures, or `**bold *italic* bold**`), set it         |
+/// |             | explicitly to the deepest level your grammar needs, alongside  |
+/// |             | the other context bytes, e.g.:                                 |
+/// |             | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
 ///
-/// ## `inline { … }` section
+/// ## `inline { ... }` section
 ///
 /// Declares elements that appear inside lines. All inline rules are triggered
 /// by specific bytes declared in `on_trigger`; unmatched bytes fall through to
@@ -96,7 +109,7 @@ use crate::strip::strip;
 ///     // Detects trailing hard-break sequences: `esc` byte OR ≥ `min`
 ///     // consecutive `sp` bytes at end of line. Emits a zero-length Span.
 ///
-///     on_trigger(b1, b2, …) {
+///     on_trigger(b1, b2, ...) {
 ///         symmetric byte {
 ///             parse_inside = true | false;
 ///             balanced     = true | false;
@@ -108,8 +121,8 @@ use crate::strip::strip;
 ///             N => field [div],
 ///         }
 ///         chained: Type {
-///             | open1, close1 | { parse_inside = …; balanced = …; } => text_field,
-///             | open2, close2 | { parse_inside = …; balanced = …; } => url_field,
+///             | open1, close1 | { parse_inside = ...; balanced = ...; } => text_field,
+///             | open2, close2 | { parse_inside = ...; balanced = ...; } => url_field,
 ///             prefix | byte | => prefix_field,
 ///         } => field [div]
 ///         key_value: Type {
@@ -125,25 +138,25 @@ use crate::strip::strip;
 /// }
 /// ```
 ///
-/// ## `lines { … }` section
+/// ## `lines { ... }` section
 ///
 /// Declares whole-line elements. A matching line is consumed entirely; inline
 /// scanning is skipped for it.
 ///
 /// ```text
 /// lines {
-///     line(byte, max = N) |var|: Type { … } => field [div];
+///     line(byte, max = N) |var|: Type { ... } => field [div];
 ///     // Matches 1–N leading `byte` bytes followed by `sep` or EOL.
 ///     // `var` receives the count. Produces Vec<(Type, Span)>.
 ///
-///     line_simple(b1 | b2 | …, min = N) |var|: Type { … } => field [div];
+///     line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field [div];
 ///     // Matches a line composed entirely of one delimiter byte (interleaved
 ///     // with `sep`), at least `min` times. `var` receives the delimiter byte.
 ///     // Produces Vec<(Type, Span)>.
 /// }
 /// ```
 ///
-/// ## `blocks { … }` section
+/// ## `blocks { ... }` section
 ///
 /// Declares multi-line constructs and single-line items with metadata.
 ///
@@ -160,12 +173,12 @@ use crate::strip::strip;
 ///     }
 ///
 ///     block {
-///         (pattern) |var|: Type { … } => field [div];
+///         (pattern) |var|: Type { ... } => field [div];
 ///         // Single-line item: marker byte matching `pattern`, followed by
 ///         // `sep` or `tab`. `var` receives the marker byte.
 ///         // Produces Vec<(Type, Span)>.
 ///
-///         num(digit_pat, end = end_pat) |n, k|: Type { … } => field [div];
+///         num(digit_pat, end = end_pat) |n, k|: Type { ... } => field [div];
 ///         // Single-line numbered item: digit run followed by byte matching
 ///         // `end_pat`. `n` receives the parsed number, `k` the delimiter byte.
 ///         // Produces Vec<(Type, Span)>.
@@ -386,7 +399,7 @@ mod tests {
         let idx = s.find("define_content").expect("define_content missing");
         assert!(
             s[..idx].ends_with(":: "),
-            "define_content! must be qualified (preceded by ::), got: …{}…",
+            "define_content! must be qualified (preceded by ::), got: ...{}...",
             &s[idx.saturating_sub(20)..idx + 20]
         );
     }
@@ -398,7 +411,7 @@ mod tests {
         let idx = s.find("parse_text").expect("parse_text missing");
         assert!(
             s[..idx].ends_with(":: "),
-            "parse_text! must be qualified (preceded by ::), got: …{}…",
+            "parse_text! must be qualified (preceded by ::), got: ...{}...",
             &s[idx.saturating_sub(20)..idx + 20]
         );
     }
@@ -477,5 +490,35 @@ mod tests {
             }
         });
         assert!(e.contains("fence min"));
+    }
+
+    // 16. max_nest, when present, is forwarded verbatim into the parse_text!
+    //     call instead of the implicit default of 1.
+    #[test]
+    fn test_16_explicit_max_nest_forwarded() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+            inline { fallback => texts [10]; }
+            }
+        };
+        let s = expand_str(g);
+        assert!(s.contains("max_nest"));
+        let idx = s.find("max_nest").expect("max_nest missing");
+        // The literal 4 must appear shortly after the max_nest keyword.
+        assert!(s[idx..idx + 30].contains('4'));
+    }
+
+    // 17. max_nest, when absent, still appears in the expansion with the
+    //     implicit default value of 1 (parse_text! always receives it).
+    #[test]
+    fn test_17_absent_max_nest_defaults_to_one() {
+        let s = expand_str(valid());
+        let idx = s.find("max_nest").expect("max_nest missing from expansion");
+        assert!(
+            s[idx..idx + 20].contains('1'),
+            "expected default max_nest = 1, got: ...{}...",
+            &s[idx..idx + 20]
+        );
     }
 }

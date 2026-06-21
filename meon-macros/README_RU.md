@@ -55,7 +55,7 @@ let content = MyFormatParser::parse(b"hello world\n");
 
 ## Что генерирует `define_parser!`
 
-Для вызова `define_parser!(Name { … })` макрос разворачивается в:
+Для вызова `define_parser!(Name { ... })` макрос разворачивается в:
 
 **`NameContent<'a>`** — выходная структура. По одному `pub`-полю на каждое правило грамматики, все заимствуют оригинальный срез источника через `u32` байтовые смещения-спаны.
 
@@ -88,9 +88,9 @@ let content = MyFormatParser::parse(b"hello world\n");
 [strip.rs]    удаляет аннотации => field [N]
     │          чтобы очищенные токены прошли в рантайм-макросы
     ▼
-[codegen.rs]  эмитирует вызов define_content!(…)
+[codegen.rs]  эмитирует вызов define_content!(...)
 [methods.rs]  эмитирует impl с аксессорами _clean / _raw
-[codegen.rs]  эмитирует вызов define_standalone_fns! { … }
+[codegen.rs]  эмитирует вызов define_standalone_fns! { ... }
     │
     ▼
 Финальный поток токенов → rustc
