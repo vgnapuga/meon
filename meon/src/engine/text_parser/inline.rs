@@ -11,7 +11,7 @@
 //!
 //! # Grammar integration
 //!
-//! The macro consumes the `inline { ... }` section of a `define_parser!`
+//! The macro consumes the `inline { … }` section of a `define_parser!`
 //! grammar after `strip` has removed the `=> field [N]` annotations.  The
 //! entry point is:
 //!
@@ -25,19 +25,19 @@
 //! - `merge_simple = true | false;`  — whether adjacent text spans are merged.
 //! - `fallback => field;`            — field that receives plain-text spans.
 //! - `hard_break(esc, sp, min) => field;` — trailing hard-break detection.
-//! - `on_trigger(b1, ...) { <inline rules> }` — byte-triggered inline block
-//!   (replaces the old `memchr(...) { ... }` syntax).
+//! - `on_trigger(b1, …) { <inline rules> }` — byte-triggered inline block
+//!   (replaces the old `memchr(…) { … }` syntax).
 //!
 //! # `on_trigger` dispatch
 //!
-//! `on_trigger(b1, b2, ...)` declares a set of *trigger bytes*. When the
+//! `on_trigger(b1, b2, …)` declares a set of *trigger bytes*. When the
 //! scanner finds any of those bytes in the current line it enters the block
 //! and tries each rule in order:
 //!
-//! - `symmetric byte { ... }` — paired delimiters with the same open/close byte.
-//! - `asymmetric open, close { ... }` — paired delimiters with different bytes.
-//! - `chained: Type { ... }` — two-part delimiters (e.g. `[text](url)`).
-//! - `key_value: Type { ... }` — `key = value` pairs.
+//! - `symmetric byte { … }` — paired delimiters with the same open/close byte.
+//! - `asymmetric open, close { … }` — paired delimiters with different bytes.
+//! - `chained: Type { … }` — two-part delimiters (e.g. `[text](url)`).
+//! - `key_value: Type { … }` — `key = value` pairs.
 //!
 //! The trigger set is searched with [`crate::swar::find_any`], which
 //! dispatches to `memchr` / `memchr2` / `memchr3` for 1–3 bytes and to the
@@ -59,7 +59,7 @@
 //! bold). Suppressing the flush there loses nothing: those bytes stay
 //! covered by whichever enclosing span eventually closes around them.
 //!
-//! ## `asymmetric { balanced = ...; parse_inside = ...; ... }`
+//! ## `asymmetric { balanced = …; parse_inside = …; … }`
 //!
 //! `balanced` and `parse_inside` are independent and both gate the bounded
 //! stack — a rule needs only *one* of them `true` to be on it at all:
@@ -77,23 +77,27 @@
 //!   execution actually enters the `[`, then opaque for its content, then
 //!   transparent again once back outside it.
 //!
-//! Only a rule with **both** flags `false` ever runs the original,
-//! untouched `if delim == $ao { ... memchr/depth-search for $ac ... }` block —
-//! for any other rule that block is unreachable dead code, since the new
-//! check (tried first, for every trigger byte) already intercepted and
-//! `continue`d past it.
+//! Only a rule with **both** flags `false` ever reaches the historical
+//! `if delim == $ao { … memchr/depth-search for $ac … }` block — for any
+//! other rule that block is unreachable dead code, since the new check
+//! (tried first, for every trigger byte) already intercepted and
+//! `continue`d past it. This block's own *closing* search now also skips an
+//! escaped candidate close byte (see `@is_escaped` below) — independent of,
+//! and unrelated to, the opacity question of whether content fires other
+//! rules; a `balanced = false, parse_inside = false` rule stays fully opaque
+//! to other rules while still correctly refusing to close on `\$ac`.
 //!
 //! **Cost for `balanced = false, parse_inside = false` rules (the default,
 //! pre-nesting shape):** the `($abal || $api)` guard is a `bool` expression
 //! over two *compile-time* literals supplied per-rule by the grammar (`$abal`
-//! and `$api` come from that rule's own `balanced = ...` / `parse_inside = ...`
+//! and `$api` come from that rule's own `balanced = …` / `parse_inside = …`
 //! settings, substituted at macro-expansion time, not runtime state), so for
 //! such a rule the whole condition is `false || false` at every call site
 //! touching that rule's `$ao`/`$ac`. This is not a separate path *chosen by
 //! the macro itself* at expansion time — the macro still emits the guarded
 //! block as ordinary, always-`if`-wrapped code. `rustc`/LLVM is relied on to
 //! fold the constant and dead-code-eliminate the guarded block at codegen
-//! time, the same way it already elides `if false { ... }`. In `--release`
+//! time, the same way it already elides `if false { … }`. In `--release`
 //! this reliably costs nothing measurable; in unoptimised builds (`debug`, or
 //! `opt-level = 0`) the branch is still emitted *and evaluated*, just always
 //! `false`. A grammar relying on guaranteed low overhead in debug builds too
@@ -132,7 +136,7 @@
 //! `[`, `)`) as long as their open bytes differ. This is handled by a
 //! *single, unified* close pass — not one independent block per rule. An
 //! earlier shape of this mechanism gave each rule its own top-level
-//! `if delim == $ac { ... }` arm (mirroring the per-rule open-side arms); that
+//! `if delim == $ac { … }` arm (mirroring the per-rule open-side arms); that
 //! is unsound the moment two rules share a close byte, because each rule's
 //! arm is an independent `if`, not a mutually-exclusive branch of the
 //! *other* rules' arms. When `delim` matched more than one rule's `$ac`,
@@ -155,10 +159,27 @@
 //! pass over the stack, never one parallel block per rule reacting
 //! independently to the same byte.
 //!
-//! ## `symmetric { parse_inside = true; balanced = true; ... }`
+//! ## `symmetric { parse_inside = true; balanced = true; … }`
 //!
-//! `parse_inside = false` and `parse_inside = true, balanced = false` are
-//! **entirely unchanged** — both keep their original code paths verbatim.
+//! `parse_inside = true, balanced = false` (the original single
+//! pending-slot mechanism) is **entirely unchanged** — it keeps its
+//! original code path verbatim, since it already runs through the outer
+//! per-character dispatch loop, which has always checked escaping for every
+//! trigger byte it lands on.
+//!
+//! `parse_inside = false` (greedy mode) keeps its *opacity* unchanged — the
+//! content between open and close is still never scanned for other rules —
+//! but its internal forward search now also skips an escaped candidate
+//! closing run (see `@is_escaped`) instead of accepting the first byte-match
+//! `memchr` finds regardless of a preceding `\`. These are independent
+//! properties: opacity is about whether *other rules* fire on the content;
+//! escape-awareness is about whether *this rule's own* closing delimiter is
+//! correctly distinguished from a literal, escaped occurrence of the same
+//! byte. Coupling them was an accident of the original implementation (the
+//! fast path happened to be a raw `memchr` loop that never went through the
+//! outer loop's escape check), not a deliberate design choice — a `parse_inside
+//! = false` rule with `balanced = false` or `balanced = true` both gain this
+//! fix identically.
 //!
 //! `parse_inside = true, balanced = true` replaces the single pending-slot
 //! with a bounded stack of pending frames, shared across every such rule.
@@ -176,12 +197,16 @@
 //! length here genuinely picks the construct (`*` vs `**` are different
 //! fields), so it is matched as-is, never split byte-by-byte.
 //!
-//! ## `chained: T { ... }` with a transparent component
+//! ## `chained: T { … }` with a transparent component
 //!
 //! When *both* components have `parse_inside = false` the original
-//! self-contained two-phase forward search runs **unchanged** — it finds
-//! the text close and the url close by scanning ahead internally, emitting
-//! nothing for any rule encountered in between (opaque).
+//! self-contained two-phase forward search runs with its opacity
+//! **unchanged** — it still finds the text close and the url close by
+//! scanning ahead internally, emitting nothing for any rule encountered in
+//! between. Its own forward search now also skips an escaped candidate
+//! close byte for each component (see `@is_escaped`), exactly like the
+//! legacy `asymmetric` block above — the same independence between opacity
+//! and escape-awareness applies here.
 //!
 //! When *either* component has `parse_inside = true`, the rule instead runs
 //! through a two-phase transparent state machine, so that other rules can
@@ -246,7 +271,7 @@ macro_rules! parse_inline {
     };
 
     // on_trigger(...) { ... } — new canonical name for the byte-trigger block.
-    // Replaces the old `memchr(...) { ... }` syntax; semantics are identical.
+    // Replaces the old `memchr(…) { … }` syntax; semantics are identical.
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
                $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
      (hard_break: $($hb:tt)*)
@@ -360,7 +385,7 @@ macro_rules! parse_inline {
         // nothing is open — both stacks empty, no chained phase active:
         //
         //     if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
-        //         push_il!($tx, ...);
+        //         push_il!($tx, …);
         //     }
         //
         // That guard is written out inline at each of the "flush before
@@ -398,7 +423,7 @@ macro_rules! parse_inline {
         // parse_inside=true, balanced=false path: (byte, open_pos, open_count, depth).
         let mut pending: Option<(u8, u32, u32, u32)> = None;
 
-        // Bounded stack for symmetric { parse_inside = true; balanced = true; ... }.
+        // Bounded stack for symmetric { parse_inside = true; balanced = true; … }.
         // Frame = (byte, count, vec_idx_in_field).
         let mut sym_frames: [(u8, u32, u32); $maxn] = [(0u8, 0u32, 0u32); $maxn];
         let mut sym_depth: u8 = 0u8;
@@ -423,7 +448,7 @@ macro_rules! parse_inline {
         // is_opaque). `per_char_count` is always `1` — see the run-splitting
         // note below — stored anyway so the close / discard sides can
         // re-derive which `$af` field to touch via the same
-        // `match ... { $an => ... }` arms the open side used: `$af` is bound
+        // `match … { $an => … }` arms the open side used: `$af` is bound
         // inside that inner repetition, so every access to it must stay
         // inside a matching `match`, never used bare.
         let mut asym_frames: [(u8, u8, u32, u32, bool); $maxn] =
@@ -444,12 +469,14 @@ macro_rules! parse_inline {
         // slot per phase is enough, no bounded array. Closing phase 1 never
         // commits anything by itself; it only enables attempting to open
         // phase 2. Only phase 2 actually closing pushes the combined
-        // `$ch_ty` struct. This mirrors the original (and still-untouched,
-        // for components with `parse_inside = false`) self-contained
-        // two-phase search exactly — the only behavioural change introduced
+        // `$ch_ty` struct. This mirrors the original self-contained
+        // two-phase search's opacity exactly for components with
+        // `parse_inside = false` — the only behavioural change introduced
         // by `parse_inside = true` is that other rules can now fire on the
         // bytes being scanned over, with the same orphan-on-failure
         // trade-off already accepted for `asymmetric`'s transparent mode.
+        // Independently of opacity, every component's own forward search
+        // (transparent or opaque) now skips an escaped candidate close.
         //
         // Scoped to a single active `chained` rule: if a grammar ever
         // declared more than one and two were mid-scan at once, they would
@@ -498,12 +525,13 @@ macro_rules! parse_inline {
 
             // -------------------------------------------------------------- //
             // asymmetric, balanced and/or transparent: tried first, for      //
-            // every trigger byte, before chained/symmetric/the original      //
+            // every trigger byte, before chained/symmetric/the legacy        //
             // memchr-only asymmetric block below. A rule with both           //
             // `balanced = false` and `parse_inside = false` never matches    //
             // `$abal || $api` here, so this block does nothing for it and    //
-            // the original block further down (unmodified) is the only       //
-            // thing that ever runs for it.                                   //
+            // the legacy block further down is the only thing that ever      //
+            // runs for it (its own closing search now skips escaped          //
+            // candidates too — see `@is_escaped` — independent of opacity).  //
             //                                                                //
             // Gated by `!_chained_opaque_active`: an opaque chained phase    //
             // (text or url component with `parse_inside = false`) isn't      //
@@ -581,7 +609,7 @@ macro_rules! parse_inline {
                 //
                 // Earlier versions of this dispatch lived *inside* the
                 // per-rule `$(...)*` above, as a parallel `else if delim ==
-                // $ac { ... }` arm for each rule. That shape is unsound the
+                // $ac { … }` arm for each rule. That shape is unsound the
                 // moment two different `asymmetric` rules share a close
                 // byte: each rule's block is an *independent* top-level
                 // `if`, so when `delim` matches more than one rule's `$ac`,
@@ -659,8 +687,9 @@ macro_rules! parse_inline {
             // resolved once at the moment that phase opens. A rule where      //
             // *both* components are `parse_inside = false` never matches      //
             // `$tpi || $upi` here, so this block does nothing for it and the  //
-            // original two-phase self-contained search further below         //
-            // (unmodified) is the only thing that ever runs for it.           //
+            // legacy two-phase self-contained search further below is the    //
+            // only thing that ever runs for it (each component's own         //
+            // closing search now skips escaped candidates too).              //
             //                                                                //
             // Closing the text phase never commits anything by itself — it    //
             // only attempts to open the url phase immediately. Only closing   //
@@ -796,10 +825,12 @@ macro_rules! parse_inline {
                         let mut _depth: i32 = 1;
                         let mut _found: Option<usize> = None;
                         while _i < parse_end {
-                            if src[_i] == $co { _depth += 1; }
-                            else if src[_i] == $cc {
-                                _depth -= 1;
-                                if _depth == 0 { _found = Some(_i); break; }
+                            if !$crate::parse_inline!(@is_escaped src, _i, $start, $esc) {
+                                if src[_i] == $co { _depth += 1; }
+                                else if src[_i] == $cc {
+                                    _depth -= 1;
+                                    if _depth == 0 { _found = Some(_i); break; }
+                                }
                             }
                             _i += 1;
                         }
@@ -807,7 +838,12 @@ macro_rules! parse_inline {
                     } else {
                         let mut _found: Option<usize> = None;
                         while _i < parse_end {
-                            if src[_i] == $cc { _found = Some(_i); break; }
+                            if src[_i] == $cc
+                                && !$crate::parse_inline!(@is_escaped src, _i, $start, $esc)
+                            {
+                                _found = Some(_i);
+                                break;
+                            }
                             _i += 1;
                         }
                         _found
@@ -820,10 +856,12 @@ macro_rules! parse_inline {
                                 let mut _depth: i32 = 1;
                                 let mut _found: Option<usize> = None;
                                 while _j < parse_end {
-                                    if src[_j] == $uo { _depth += 1; }
-                                    else if src[_j] == $uc {
-                                        _depth -= 1;
-                                        if _depth == 0 { _found = Some(_j); break; }
+                                    if !$crate::parse_inline!(@is_escaped src, _j, $start, $esc) {
+                                        if src[_j] == $uo { _depth += 1; }
+                                        else if src[_j] == $uc {
+                                            _depth -= 1;
+                                            if _depth == 0 { _found = Some(_j); break; }
+                                        }
                                     }
                                     _j += 1;
                                 }
@@ -831,7 +869,12 @@ macro_rules! parse_inline {
                             } else {
                                 let mut _found: Option<usize> = None;
                                 while _j < parse_end {
-                                    if src[_j] == $uc { _found = Some(_j); break; }
+                                    if src[_j] == $uc
+                                        && !$crate::parse_inline!(@is_escaped src, _j, $start, $esc)
+                                    {
+                                        _found = Some(_j);
+                                        break;
+                                    }
                                     _j += 1;
                                 }
                                 _found
@@ -966,6 +1009,10 @@ macro_rules! parse_inline {
                                     None => break,
                                     Some(r) => {
                                         let p = _i + r;
+                                        if $crate::parse_inline!(@is_escaped src, p, $start, $esc) {
+                                            _i = p + 1;
+                                            continue;
+                                        }
                                         let mut c: u32 = 0;
                                         let mut tmp = p;
                                         while tmp < parse_end && src[tmp] == $sb {
@@ -990,6 +1037,10 @@ macro_rules! parse_inline {
                                     None => break,
                                     Some(r) => {
                                         let p = _i + r;
+                                        if $crate::parse_inline!(@is_escaped src, p, $start, $esc) {
+                                            _i = p + 1;
+                                            continue;
+                                        }
                                         let mut c: u32 = 0;
                                         let mut tmp = p;
                                         while tmp < parse_end && src[tmp] == $sb {
@@ -1027,16 +1078,34 @@ macro_rules! parse_inline {
                         let mut _i = pos;
                         let mut found = None;
                         while _i < parse_end {
-                            if src[_i] == $ao { depth += 1; }
-                            else if src[_i] == $ac {
-                                depth -= 1;
-                                if depth == 0 { found = Some(_i); break; }
+                            if !$crate::parse_inline!(@is_escaped src, _i, $start, $esc) {
+                                if src[_i] == $ao { depth += 1; }
+                                else if src[_i] == $ac {
+                                    depth -= 1;
+                                    if depth == 0 { found = Some(_i); break; }
+                                }
                             }
                             _i += 1;
                         }
                         found
                     } else {
-                        $crate::memchr::memchr($ac, &src[pos..parse_end]).map(|r| pos + r)
+                        let mut _i = pos;
+                        let mut _found: Option<usize> = None;
+                        loop {
+                            match $crate::memchr::memchr($ac, &src[_i..parse_end]) {
+                                None => break,
+                                Some(r) => {
+                                    let p = _i + r;
+                                    if $crate::parse_inline!(@is_escaped src, p, $start, $esc) {
+                                        _i = p + 1;
+                                    } else {
+                                        _found = Some(p);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        _found
                     };
                     if let Some(cp) = close_pos {
                         if text_start < delim_start as usize {
@@ -1166,4 +1235,35 @@ macro_rules! parse_inline {
             $best = Some(match $best { Some(cur) if cur <= r => cur, _ => r });
         }
     };
+
+    // ------------------------------------------------------------------ //
+    // @is_escaped: shared escape-check for a single candidate position.  //
+    //                                                                    //
+    // Counts consecutive `$esc` bytes immediately preceding `$pos`; an   //
+    // odd count means `$pos` is escaped. This is the exact check the     //
+    // outer per-character dispatch loop already applies to every trigger //
+    // byte it finds — factored out here so every *internal* forward      //
+    // search (symmetric greedy mode, the legacy asymmetric memchr/depth   //
+    // search, and chained's legacy two-phase search) can apply the same   //
+    // check to a *candidate closing byte* found mid-search, not just to   //
+    // the first trigger byte the outer loop happens to land on.           //
+    //                                                                    //
+    // Escape-awareness and opacity (`parse_inside`) are independent axes: //
+    // a rule can fully ignore its content for other rules' purposes       //
+    // while still correctly skipping an escaped occurrence of its own     //
+    // closing delimiter. Before this arm existed, only paths reached       //
+    // through the outer loop (e.g. `parse_inside = true` pending mode)     //
+    // ever saw this check; every internal raw forward search bypassed it   //
+    // entirely, since it never goes through the outer loop's own escape    //
+    // check at all.                                                        //
+    // ------------------------------------------------------------------ //
+    (@is_escaped $src:ident, $pos:expr, $start:expr, $esc:literal) => {{
+        let _p = $pos;
+        _p > $start && {
+            let mut _bs: u32 = 0;
+            let mut _ei = _p;
+            while _ei > $start && $src[_ei - 1] == $esc { _bs += 1; _ei -= 1; }
+            _bs % 2 == 1
+        }
+    }};
 }

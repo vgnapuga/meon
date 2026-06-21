@@ -2223,3 +2223,154 @@ fn shared_close_07_nested_different_open_bytes_shared_close() {
     assert_eq!(st.n_italics.len(), 1);
     assert_eq!(txt(src, st.n_italics[0]), "a (b) c");
 }
+
+// ================================================================
+// escaped closing delimiters — internal forward-search fix
+// ================================================================
+//
+// These exercise the `@is_escaped` check added to every *internal*
+// forward search that previously bypassed the outer dispatch loop's
+// escape-awareness entirely:
+//
+//   - symmetric greedy mode (`parse_inside = false`), both `balanced`
+//     settings — used for code spans and balanced quote-like rules;
+//   - the legacy asymmetric memchr search (`balanced = false,
+//     parse_inside = false`) — used for autolinks;
+//   - the legacy chained two-phase search (both components
+//     `parse_inside = false`) — used for `[text](url)`-style links.
+//
+// Opacity (`parse_inside`) is unaffected in every case below — none of
+// these rules scan their own content for other rules' triggers, before or
+// after this fix. What changed is purely whether the *closing* delimiter
+// itself is correctly distinguished from a literal, backslash-escaped
+// occurrence of the same byte. The existing `sym_bal_02_doubled_is_escape`
+// test (unescaped doubled-quote content) already covers the regression
+// case that this fix must not disturb — content with no backslash involved
+// at all — so it isn't duplicated here.
+
+// 01. An escaped closing backtick inside an open code span does not close
+//     it; the search continues and finds the real, unescaped closing run.
+//     Before this fix, the first (escaped) backtick closed immediately,
+//     leaving "b`" stray outside the span.
+#[test]
+fn escape_close_01_code_span_escaped_backtick_skipped() {
+    let src = br"`a\`b`";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), r"a\`b");
+}
+
+// 02. Two consecutively, individually escaped backticks are both skipped
+//     in turn before the real, unescaped close is found.
+#[test]
+fn escape_close_02_code_span_two_escaped_backticks() {
+    let src = br"`a\`\`b`";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), r"a\`\`b");
+}
+
+// 03. With nothing between the escaped backtick and the real close, the
+//     span still resolves correctly. Before this fix, this exact input
+//     produced no code span at all: the two adjacent backticks right after
+//     the escaped one formed a count-2 run that never matched the
+//     count-1 opener, and the search found nothing else to close on.
+#[test]
+fn escape_close_03_code_span_escaped_then_immediate_close() {
+    let src = br"`\``";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), r"\`");
+}
+
+// 04. An escaped quote inside a balanced-greedy symmetric match (the same
+//     mechanism that treats an unescaped doubled quote as literal content)
+//     is treated as literal content too, not mistaken for the close.
+#[test]
+fn escape_close_04_balanced_symmetric_escaped_quote() {
+    let src = b"\"a\\\"b\"";
+    let st = run_sym_balanced!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), "a\\\"b");
+}
+
+// 05. An escaped closing `>` on an autolink (the legacy asymmetric memchr
+//     path) is skipped; the real, unescaped `>` closes it instead.
+#[test]
+fn escape_close_05_autolink_escaped_close() {
+    let src = br"<http://example.com\>more>";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), r"http://example.com\>more");
+}
+
+// 06. A chained link's text bracket, non-balanced (tbal = false): an
+//     escaped `]` does not close the text component.
+#[test]
+fn escape_close_06_chained_text_escaped_bracket_no_nesting() {
+    let src = br"[a\]b](url)";
+    let st = run_chained_balanced!(src, false, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), r"a\]b");
+    assert_eq!(txt(src, st.links[0].url), "url");
+}
+
+// 07. A chained link's text bracket, balanced (tbal = true): an escaped
+//     `]` inside genuine nested brackets is neither mistaken for the close
+//     nor for a depth-decrementing event — it doesn't disrupt the depth
+//     count for the real, unescaped nested pair.
+#[test]
+fn escape_close_07_chained_text_escaped_bracket_with_real_nesting() {
+    let src = br"[a [b\]c] d](url)";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), r"a [b\]c] d");
+    assert_eq!(txt(src, st.links[0].url), "url");
+}
+
+// 08. A chained link's url paren, non-balanced (ubal = false): an escaped
+//     `)` does not close the url component.
+#[test]
+fn escape_close_08_chained_url_escaped_paren_no_nesting() {
+    let src = br"[text](a\)b)";
+    let st = run_chained_balanced!(src, false, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), r"a\)b");
+}
+
+// 09. A chained link's url paren, balanced (ubal = true): an escaped `)`
+//     inside genuine nested parens neither closes early nor disrupts the
+//     depth count for the real, unescaped nested pair.
+#[test]
+fn escape_close_09_chained_url_escaped_paren_with_real_nesting() {
+    let src = br"[text](a(b\)c) d)";
+    let st = run_chained_balanced!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), r"a(b\)c) d");
+}
+
+// 10. Span bounds stay within source length across every path touched by
+//     this fix — a basic sanity invariant, not specific to escaping itself.
+#[test]
+fn escape_close_10_span_bounds_sane_across_fixed_paths() {
+    let len_check = |src: &[u8], spans: &[meon::span::Span]| {
+        let len = src.len() as u32;
+        for s in spans {
+            assert!(s.start <= s.end && s.end <= len);
+        }
+    };
+
+    let src1 = br"`a\`b`";
+    let (st1, _) = run_inline!(src1);
+    len_check(src1, &st1.codes);
+
+    let src2: &[u8] = br"<http://example.com\>more>";
+    let (st2, _) = run_inline!(src2);
+    len_check(src2, &st2.autolinks);
+
+    let src3: &[u8] = br"[a [b\]c] d](url)";
+    let st3 = run_chained_balanced!(src3, true, false);
+    let link_spans: Vec<meon::span::Span> =
+        st3.links.iter().flat_map(|l| [l.text, l.url]).collect();
+    len_check(src3, &link_spans);
+}
