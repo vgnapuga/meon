@@ -19,6 +19,8 @@ deeper than the public API.
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * ***ARCHITECTURE.md***    <--
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
@@ -105,8 +107,10 @@ meon/                          ← workspace root
 
 **Single forward pass.** The full parser (`parse_text!`) scans the source
 exactly once, left-to-right. There is no backtracking, no look-ahead beyond
-the current line, and no heap allocation for parser state (the active-block
-slot is a single stack-allocated `Option<(u8, u8, u8, u32)>`).
+the current line, and no heap allocation for parser state — the active-block
+state and the inline engine's bounded symmetric/asymmetric stacks are all
+fixed-size, stack-allocated arrays sized by the grammar's `max_nest` setting
+(see §9, §11, §17 for the mechanism and its bounds).
 
 **Flat SoA output.** The content struct stores one `Vec` per element kind.
 All spans are `u32` byte offsets into the original source slice, which is
@@ -155,7 +159,7 @@ Grammar authors depend on `meon` (which re-exports `define_parser!` from
 
 ## 4. Grammar compilation pipeline
 
-When the compiler expands `define_parser!(Name { … })` the following stages
+When the compiler expands `define_parser!(Name { ... })` the following stages
 run in sequence, entirely at compile time:
 
 ```
@@ -163,7 +167,8 @@ Source tokens (grammar DSL)
         │
         ▼
   [cursor.rs] hand-rolled TokenStream cursor
-        │  walks the token soup section by section
+        │  walks the token soup section by section (including the optional
+        │  `max_nest` context value, alongside sep/eol/tab/escape)
         ▼
   [collect.rs] grammar front-end
         │  fills CF (collected fields) and Vec<StandaloneRule>
@@ -173,13 +178,13 @@ Source tokens (grammar DSL)
         │  so the cleaned tokens can be passed to runtime macros
         ▼
   [codegen.rs] back-end: content struct emission
-        │  emits: define_content!(Name { … })
+        │  emits: define_content!(Name { ... })
         ▼
   [methods.rs] back-end: accessor emission
         │  emits: impl<'a> NameContent<'a> { str, bytes, *_clean, *_raw }
         ▼
   [codegen.rs] back-end: standalone DSL emission
-        │  emits: define_standalone_fns! { … }
+        │  emits: define_standalone_fns! { ... }
         ▼
   Final token stream handed back to rustc
 ```
@@ -225,6 +230,11 @@ Each variant carries exactly the literals and identifiers needed to emit both
 the `find_*` method (via `define_standalone_fns!`) and the `_clean` / `_raw`
 accessors (via `methods.rs`). Nothing more is stored.
 
+Note that `max_nest` itself is *not* part of `CF` — it is parsed directly in
+`lib.rs`'s `expand()` as a standalone `Literal`, alongside `sep`/`eol`/`tab`/
+`escape`, and forwarded straight through to `parse_text!`'s call site rather
+than being threaded through the collected-fields structure.
+
 ---
 
 ## 6. Code generation
@@ -235,11 +245,11 @@ accessors (via `methods.rs`). Nothing more is stored.
 
 ```
 mc::define_content!(Name {
-    inline        { field: Type [div], … }
-    inline_simple { field [div], … }
-    line          { field: Type [div], … }
-    block         { field: Type [div], … }
-    block_simple  { field [div], … }
+    inline        { field: Type [div], ... }
+    inline_simple { field [div], ... }
+    line          { field: Type [div], ... }
+    block         { field: Type [div], ... }
+    block_simple  { field [div], ... }
 });
 ```
 
@@ -267,16 +277,20 @@ impl NameParser {
     pub fn parse(source: &[u8]) -> NameContent<'_> {
         mc::parse_text!(
             source;
-            sep = …, eol = …, tab = …, escape = …;
+            sep = ..., eol = ..., tab = ..., escape = ..., max_nest = ...;
             inline  { /* stripped grammar */ }
             lines   { /* stripped grammar */ }
             blocks  { /* stripped grammar */ }
         )
     }
 
-    mc::define_standalone_fns! { sep=…, eol=…, tab=…, escape=…; … }
+    mc::define_standalone_fns! { sep=..., eol=..., tab=..., escape=...; ... }
 }
 ```
+
+`max_nest` is always forwarded explicitly to `parse_text!`, even when the
+grammar omitted it — `lib.rs`'s `expand()` defaults the literal to `1` before
+emitting this call, rather than relying on `parse_text!`'s own default arm.
 
 The grammar sections passed to `parse_text!` have been stripped of their
 `=> field [N]` annotations by `strip.rs` — those annotations are only
@@ -303,7 +317,7 @@ accumulation phases before emitting the actual O(n) parsing loop.
 ### Accumulation stages (compile time)
 
 ```
-parse_text!(src; sep=…, eol=…, tab=…, escape=…; <sections>)
+parse_text!(src; sep=..., eol=..., tab=..., escape=..., max_nest=...; <sections>)
     │
     ├─ @cs  — split raw sections into typed buckets [inline], [lines], [blocks]
     │
@@ -334,23 +348,26 @@ pos = 0
 while pos < len:
 
     if at_line_start:
-        if blank line → flush paragraph, close active cont block, advance
+        if blank line → flush paragraph, close active block frames, advance
         find current_line_end
 
         loop:
             try parse_block! active arm
-                → Some((false, cs))  — active block consumed this line
+                → Some((false, cs))  — active stack consumed/continued this line
             try parse_block! open arm
-                → Some((true,  cs))  — new block opened
+                → Some((true,  cs))  — new block opened (possibly several, nested)
             try parse_line!
                 → Some(cs)           — whole-line rule matched
+            if the active stack's depth changed without a match (an outer
+                continuation just closed mid-line) → retry from the same
+                line start against the now-shallower stack
             break if no progress
 
         if any of the above matched → continue to next line
 
-    if active fence (discriminant 0) → skip to next line (no inline scan)
+    if innermost active frame is a fence → skip to next line (no inline scan)
 
-    find next trigger byte or eol using find_any([$eol, $($f),*], …)
+    find next trigger byte or eol using find_any([$eol, $($f),*], ...)
 
     if eol hit:
         check hard-break, flush text, advance
@@ -370,7 +387,7 @@ The content struct has five field categories, each with a distinct storage
 layout that directly reflects parsing semantics:
 
 | Section        | Field type              | Populated by        |
-|----------------|-------------------------|---------------------|
+|----------------|--------------------------|---------------------|
 | `inline`       | `Vec<T>`                | `parse_inline!`     |
 | `inline_simple`| `Vec<Span>`             | `parse_inline!`     |
 | `line`         | `Vec<(T, Span)>`        | `parse_line!`       |
@@ -395,7 +412,7 @@ by `parse_text!` when a trigger byte is found before the eol.
 
 ### Accumulation phases (compile time)
 
-The macro first collects all rules from the `inline { … }` section into typed
+The macro first collects all rules from the `inline { ... }` section into typed
 buckets:
 
 ```
@@ -415,43 +432,71 @@ At the start of each line, hard-break detection trims the line end: if the
 last byte is the escape byte, or if there are ≥ min trailing sep bytes, the
 effective line end is shortened and a hard-break flag is set.
 
-The main inner loop:
+Three rule kinds opt into bounded multi-level nesting, sharing the grammar's
+`max_nest` depth cap (forwarded from `parse_text!`; defaults to `1`, which
+reproduces the original single-pending-slot behaviour exactly — see §17 for
+what the cap does and does not buy):
 
-```
-pos = start of line
-text_start = start of line
-pending: Option<(byte, open_pos, open_count, depth)> = None
+**Symmetric, `parse_inside = true, balanced = true`.** A bounded stack of
+pending frames (`sym_frames: [(byte, count, vec_idx); max_nest]`, with a
+`sym_depth` counter) replaces the single pending slot the engine used before
+nesting existed. An occurrence whose `(byte, count)` matches the current top
+of stack closes it; otherwise, if there is room, it opens a new frame. This
+also fixes a real bug the single-slot design had: a *different*-count
+occurrence of the same byte used to silently overwrite the one pending slot,
+losing the outer delimiter — `**bold *italic* still-bold**` would never close
+the bold. An *identical* `(byte, count)` pair still cannot self-nest, since
+open and close look identical for a symmetric delimiter — `**a **b** c**`
+resolves as two adjacent runs, not as nesting. A frame still open at line end
+is discarded via `truncate` (an identical key never opens a second frame
+while one is pending, so at most one placeholder per field is ever live).
 
-loop:
-    find next trigger byte using find_any(finders, src[pos..line_end])
-    if none → break
+`parse_inside = false` (greedy mode, used for code spans) keeps its original,
+untouched forward-search code path — nesting is not wanted there.
 
-    check escape (odd number of preceding escape bytes → skip)
+**Asymmetric, `balanced = true` and/or `parse_inside = true`.** A bounded
+stack (`asym_frames: [(open_byte, close_byte, count, vec_idx, opaque);
+max_nest]`, with an `asym_depth` counter) tracks open frames across *every*
+asymmetric rule declared in the same `on_trigger` block, not just one —
+different bracket types (e.g. `{`/`}` and `[`/`]`) nest validly with each
+other. `balanced` sets a type's own effective depth cap (the grammar-wide
+`max_nest` if it may self-nest, else a hard `1`, matching the pre-nesting
+behaviour for that type exactly); `parse_inside` controls opacity, recorded
+per frame at push time, so a transparent type containing an opaque type stays
+transparent right up until execution actually enters the opaque one.
 
-    count consecutive delimiter bytes (count, delim_start)
+Closing is a single unified pass — not one independent block per rule. The
+engine first determines, once, whether the current byte is recognised as a
+close byte by *any* eligible rule (a plain OR across every rule's close
+byte), then runs exactly one loop that closes at most one frame per
+character — the current top of stack, if its own recorded close byte matches
+— dispatching the field write by *that frame's own recorded open byte*, not
+by which rule happened to be checked first. This matters whenever two rules
+share a close byte (e.g. `(`/`)` and `[`/`)`): giving each rule its own
+independent close-check block instead would let two distinct frames be
+cascade-closed by a single input byte, since the second rule's block would
+see the *already-popped* stack left behind by the first. A frame still open
+at line end is discarded via `Vec::remove` at its index, not `truncate` — a
+same-type self-nesting frame can close while an ancestor of the same type
+never does, leaving a correctly-closed inner entry at a *higher* vec index
+than the still-open outer one, which must survive the discard pass.
 
-    try chained rules (open1 delimiter)
-    try symmetric rules (matching delimiter)
-    try asymmetric rules (open delimiter)
-    try key_value rules (eq delimiter)
+`balanced = false, parse_inside = false` (used for autolinks) keeps the
+original `if delim == $ao { … memchr/depth-search for $ac … }` block, fully
+unreachable for any rule that opts into the stack.
 
-flush remaining text_start..line_end
-emit hard-break if flagged
-```
-
-**Symmetric `parse_inside = true` (pending mode):** the first run of `count`
-bytes sets `pending`. The next run of the same byte and same count closes the
-span. Content between them is scanned for inline elements by the outer loop
-(since the loop continues after setting pending). This handles nesting like
-`*italic with **bold** inside*`.
-
-**Symmetric `parse_inside = false` (greedy mode):** used for code spans. On
-finding an opening run of `count` bytes, the macro immediately scans forward
-for a matching closing run using `memchr`. If found, the span is emitted and
-the outer loop jumps past it. Content inside is not scanned.
-
-**Balanced mode:** when `balanced = true`, nested pairs of the same delimiter
-increment/decrement a depth counter before the outer close is accepted.
+**Chained, with a transparent component.** When both components (text
+bracket, url paren) have `parse_inside = false`, the original self-contained
+two-phase forward search runs unchanged, opaque to everything in between. When
+either has `parse_inside = true`, a two-phase transparent state machine takes
+over instead, so other rules can fire on the bytes scanned over. The two
+phases are strictly sequential — phase 2 only starts once phase 1 has fully
+closed — so a single slot per phase suffices, no stack. This mechanism is
+scoped to a single active `chained` rule per grammar: two rules declared with
+overlapping in-progress matches would alias the same scratch state. Every
+grammar seen so far declares exactly one `chained` rule, so this is accepted
+as a documented limitation (see §17) rather than built out to a per-rule
+array.
 
 ### `find_any` dispatch
 
@@ -482,7 +527,7 @@ the first match, where `cs` is the byte offset of the first content byte (for
 count is in [1, max] and is followed by `sep` or end of line, a match is
 recorded. The span covers everything after the marker and its sep.
 
-**`line_simple(b1 | b2 | …, min = N)`:** reads the first byte. If it matches
+**`line_simple(b1 | b2 | ..., min = N)`:** reads the first byte. If it matches
 the pattern, the entire line is validated: every byte must be either the same
 delimiter or `sep`. If valid and the delimiter count ≥ min, a match is
 recorded.
@@ -495,40 +540,66 @@ through to block/inline processing.
 
 ## 11. Block parsing
 
-`parse_block!` operates in two phases on every line:
+`parse_block!` resolves a line's full block structure in one call, via two
+phases:
 
-### Active phase (`@active`)
+### Peel phase
 
-If `active` is `Some(…)`, the line belongs to an open block:
+Every currently-open frame is matched against the line from the outside in:
+continuation markers are consumed, a still-open fence either closes or
+swallows the line, and a frame whose marker is gone is closed — together
+with everything nested inside it.
 
-- **Fence (discriminant 0):** check if the line is a closing fence (≥
-  `flen` fence bytes, rest is `sep`/`tab` only). If yes, push span and clear
-  active. Return `Some((false, next_line))` in all cases — fenced content is
-  never passed to inline scanning.
-- **Cont (discriminant 1):** check if the line starts with the continuation
-  byte. If yes, return `Some((false, cs))` advancing past the marker. If no,
-  push span and clear active, return `None` so the line is re-processed by
-  the open phase.
+### Open phase
 
-### Open phase (`@open_simple` then `@open_block`)
+At the position left after peeling, new frames are opened — as many as nest
+on a single line (e.g. a fence opening inside an already-open blockquote) —
+bounded by `max_nest`.
 
-`@open_simple` tries `fence` and `cont` rules to start a new multi-line block.
-`@open_block` tries marker and numbered rules to open a new single-line item.
+### Active block stack (`max_nest`)
 
-These phases are tried only if the active phase returned `None`. The first
-match wins.
+The active block state is a bounded stack `[(u8, u8, u8, u32); max_nest]`
+plus a depth counter, sharing the grammar-wide `max_nest` cap with the inline
+engine (§9). `max_nest = 1` reduces it to a single slot and reproduces the
+original, single-active-block behaviour exactly: at most one block open at a
+time, no block opening inside another.
 
-### Active block encoding
+| Discriminant (field 0) | Meaning            | Field 1  | Field 2 | Field 3  |
+|-------------------------|---------------------|----------|---------|----------|
+| `0`                     | Open fence          | `byte`   | `count` | `start`  |
+| `1`                     | Continuation (`>`)  | `byte`   | `0`     | `start`  |
 
-The active slot `Option<(u8, u8, u8, u32)>` encodes:
+Two structural invariants make the stack tractable:
 
-```
-(0, fence_byte, fence_count, start_offset)  — open fence
-(1, cont_byte,  0,           start_offset)  — open continuation
-```
+- **A fence is always the top frame.** Fence content is opaque — no block
+  can open inside it — so when a fence is the innermost open block it
+  consumes the whole line and the open phase never runs; nothing is ever
+  pushed above a fence.
+- **Continuations may self-nest.** Unlike an inline symmetric delimiter
+  (where open and close are indistinguishable, so an identical key can't
+  nest), a `cont` opens positionally — at the line start, after the outer
+  markers have been peeled — and closes by *absence* of its marker, so
+  `> >` is two genuinely nested blockquote frames.
 
-Only one block can be active at a time. This is a deliberate constraint (see
-§17).
+`block` items (bullets, ordered lists) are per-line leaves: they push nothing
+onto the stack and so consume no depth. They may still open *inside* a
+`cont`, but only when `max_nest > 1` — at `max_nest = 1` the open phase never
+runs inside an already-open block, exactly as before.
+
+If an outer continuation's marker is gone mid-line while inner frames were
+still open, those inner frames close together with it (innermost-first), the
+depth drops, and `parse_text!`'s main loop re-runs from the same line start
+so the remainder of the line is reprocessed fresh against the now-shallower
+stack — see §7's main-loop pseudocode.
+
+### Return value
+
+`Some((true, cs))` — at least one new block was opened; `cs` is the first
+content byte (or the next line start, for a fence whose info line is
+consumed whole). `Some((false, cs))` — the active stack consumed/continued
+this line without opening anything new. `None` — nothing matched and nothing
+is active, **or** an outer continuation just closed; in the latter case the
+caller re-runs from the same line start to reprocess the remainder.
 
 ---
 
@@ -541,8 +612,10 @@ from `engine/text_parser/standalone/`.
 All standalone iterators share the same contract:
 
 - They scan the raw source independently.
-- They carry no cross-element state (no active block slot, no paragraph
-  tracking, no inline trigger dispatch).
+- They carry no cross-element state (no active-block stack, no paragraph
+  tracking, no inline trigger dispatch, and no bounded-nesting stack of any
+  kind — `symmetric`/`asymmetric` standalone rules match only the *exact*
+  count declared, ignoring `balanced`/`parse_inside` entirely).
 - They may match bytes that `parse_text!` would suppress (e.g. a delimiter
   inside a fenced block).
 - Their output can differ from the full parse by design.
@@ -566,7 +639,7 @@ Iterators use three shared utilities from `standalone/common.rs`:
 ### Iterator types
 
 | Type                | Matching rule         | Item type       |
-|---------------------|-----------------------|-----------------|
+|---------------------|------------------------|-----------------|
 | `SymmetricExactIter`| `symmetric N =>`      | `Span`          |
 | `AsymmetricExactIter`| `asymmetric N =>`    | `Span`          |
 | `ChainedIter`       | `chained`             | `T`             |
@@ -576,7 +649,7 @@ Iterators use three shared utilities from `standalone/common.rs`:
 | `FenceIter`         | `fence`               | `Span`          |
 | `ContIter`          | `cont`                | `Span`          |
 | `BlockMarkerIter`   | `block (pattern)`     | `(T, Span)`     |
-| `BlockNumberedIter` | `block num(…)`        | `(T, Span)`     |
+| `BlockNumberedIter` | `block num(...)`        | `(T, Span)`     |
 
 ---
 
@@ -695,6 +768,11 @@ The raw accessor logic differs per rule type:
 - `BlockMarker`: `start - 2 .. end` (marker + sep)
 - `BlockNumbered`: walks backwards past sep/tab and digit bytes
 
+These accessors are entirely separate from the full-parse bounded-nesting
+mechanism described in §9/§11 — they operate on the (un-nested, exact-count)
+`StandaloneRule` data, consistent with §12's note that standalone scanning
+ignores `balanced`/`parse_inside` altogether.
+
 ---
 
 ## 16. Cross-crate macro hygiene
@@ -710,7 +788,7 @@ dependent crates. Unqualified macro names would fail to resolve. The solution:
 pub(crate) fn crate_path() -> TokenStream {
     match crate_name("meon") {
         Ok(FoundCrate::Itself)       => quote! { crate },
-        Ok(FoundCrate::Name(name))   => { let i = Ident::new(&name, …); quote! { #i } },
+        Ok(FoundCrate::Name(name))   => { let i = Ident::new(&name, ...); quote! { #i } },
         Err(_)                        => quote! { crate },
     }
 }
@@ -727,9 +805,9 @@ Every macro call in the generated code is prefixed with the resolved path:
 ```rust
 let mc = crate_path();
 quote! {
-    #mc::define_content!(…);
-    #mc::parse_text!(…);
-    #mc::define_standalone_fns! { … }
+    #mc::define_content!(...);
+    #mc::parse_text!(...);
+    #mc::define_standalone_fns! { ... }
 }
 ```
 
@@ -740,8 +818,8 @@ the `meon` crate use `$crate::`:
 
 ```rust
 $crate::span::Span
-$crate::parse_text!(@dispatch …)
-$crate::swar::find_any(…)
+$crate::parse_text!(@dispatch ...)
+$crate::swar::find_any(...)
 ```
 
 This is standard declarative macro hygiene and works regardless of how `meon`
@@ -767,26 +845,54 @@ inside the macros. Grammar crates only need to depend on `meon`; `paste` and
 
 ## 17. Known limitations and deliberate trade-offs
 
-### Single active-block slot
+### Bounded nesting depth (`max_nest`)
 
-`parse_text!` holds at most one open block in `active: Option<(u8, u8, u8, u32)>`.
-This means nested block constructs — a continuation block containing a fence,
-or a fence containing a continuation — cannot be represented simultaneously.
+Both the block-level active-block stack (§11) and the inline-level
+symmetric/asymmetric bounded stacks (§9) share one grammar-wide `max_nest`
+setting. Its default, `1`, reproduces the original single-slot/
+single-pending behaviour exactly: at most one block active at a time, no
+self-nesting for `balanced` rules. Setting it higher resolves what used to be
+hard limitations — a blockquote containing a fenced code block, or a
+blockquote nested inside another, used to leak content into the wrong span;
+a different-count inner emphasis delimiter used to silently overwrite the
+single pending slot and lose the outer pair entirely.
 
-Concretely, `> \`\`\`` (blockquote containing fenced code) produces an
-incorrect span: the fence opens and the continuation state is lost. Nested
-`> >` (blockquote inside blockquote) leaks inner content into the outer span.
+`max_nest` is a hard cap, not an unbounded stack — constructs nested deeper
+than `max_nest` are not specially tracked:
 
-The trade-off is deliberate: a single stack-allocated tuple fits in a register,
-produces no heap allocation, and covers the vast majority of real documents.
-A correct solution would require a stack of active blocks, adding allocation
-and complexity.
+- For blocks, depth beyond `max_nest` simply stops opening new frames; a
+  fifth level of blockquote nesting at `max_nest = 4` is left for whatever
+  processing follows (typically literal or inline content) rather than being
+  represented as a fifth span.
+- For inline `asymmetric`/`symmetric` rules with `balanced = true`, an extra
+  same-type open beyond the cap increments a one-shot overflow counter and is
+  treated as literal content instead of opening a frame; the overflow is
+  consumed by the next same-type close, so the real tracked frame's close
+  isn't mistaken early.
+
+The trade-off is the same in spirit as the original single-slot design: a
+small, fixed-size, stack-allocated array — sized by the grammar's own
+`max_nest`, not by input length — avoids heap allocation entirely and keeps
+the common case (`max_nest = 1`, the default) at the same cost as before,
+while letting a grammar opt into deeper nesting only where it actually needs
+it.
+
+### `chained` rules are scoped to one active match per grammar
+
+A `chained` rule with a transparent component (`parse_inside = true` on
+either the text or url side) tracks its in-progress match in a small set of
+local variables shared across every `chained` rule in the grammar, not a
+per-rule array. Two `chained` rules with overlapping in-progress transparent
+matches would alias this shared state. Every grammar seen so far declares
+exactly one `chained` rule, so this is accepted as a documented limitation
+rather than built out further.
 
 ### Context-free inline scanning
 
 `parse_inline!` receives the cleaned line content (after block detection) and
 scans it independently of surrounding lines. There is no cross-line inline
-state. This means:
+state — this is unaffected by `max_nest`, which bounds nesting *within* one
+line, not across lines. This means:
 
 - Emphasis spanning multiple lines is not detected.
 - Precedence between overlapping inline rules follows declaration order, not
@@ -798,10 +904,13 @@ Standalone iterators (`find_*`) produce different results from the full parse
 in several cases:
 
 - A delimiter inside a fenced block is suppressed by the full parser (which
-  tracks the active fence slot) but matched by the standalone iterator (which
-  has no such state).
+  tracks the active-block stack) but matched by the standalone iterator
+  (which has no such state).
 - An escaped delimiter is suppressed by the full parser's escape check but
   may be matched by the standalone iterator if its escape logic differs.
+- Standalone `symmetric`/`asymmetric` rules match only the exact declared
+  count and never participate in bounded nesting at all, regardless of the
+  grammar's `max_nest` or that rule's own `balanced`/`parse_inside` settings.
 
 This is documented and by design. Standalone iterators trade correctness for
 speed in the single-element-kind case.
@@ -838,6 +947,12 @@ Adding a new rule kind requires changes in both crates:
 3. Re-export the struct from `lib.rs`.
 4. Add the new syntax to the appropriate runtime macro (`parse_inline!`,
    `parse_line!`, or `parse_block!`).
+
+If the new rule kind should support nesting, follow the existing `balanced`/
+`parse_inside` pattern already used by `symmetric`/`asymmetric` (§9) rather
+than inventing a new mechanism — reuse the grammar-wide `max_nest` cap and the
+same bounded-stack/single-unified-close-pass shape, so it composes correctly
+with rules that already nest.
 
 ### SIMD backends
 

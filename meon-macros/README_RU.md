@@ -16,6 +16,7 @@
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
@@ -28,7 +29,7 @@
 
 ```toml
 [dependencies]
-meon = "0.1"
+meon = "0.2"
 ```
 
 ```rust
@@ -55,7 +56,7 @@ let content = MyFormatParser::parse(b"hello world\n");
 
 ## Что генерирует `define_parser!`
 
-Для вызова `define_parser!(Name { … })` макрос разворачивается в:
+Для вызова `define_parser!(Name { ... })` макрос разворачивается в:
 
 **`NameContent<'a>`** — выходная структура. По одному `pub`-полю на каждое правило грамматики, все заимствуют оригинальный срез источника через `u32` байтовые смещения-спаны.
 
@@ -88,9 +89,9 @@ let content = MyFormatParser::parse(b"hello world\n");
 [strip.rs]    удаляет аннотации => field [N]
     │          чтобы очищенные токены прошли в рантайм-макросы
     ▼
-[codegen.rs]  эмитирует вызов define_content!(…)
+[codegen.rs]  эмитирует вызов define_content!(...)
 [methods.rs]  эмитирует impl с аксессорами _clean / _raw
-[codegen.rs]  эмитирует вызов define_standalone_fns! { … }
+[codegen.rs]  эмитирует вызов define_standalone_fns! { ... }
     │
     ▼
 Финальный поток токенов → rustc
@@ -101,7 +102,7 @@ let content = MyFormatParser::parse(b"hello world\n");
 `meon-macros` только производит токены — у него нет рантайм-следа.
 
 Подробное описание каждого этапа — в
-[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#4-grammar-compilation-pipeline).
+[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
 
 ---
 
@@ -126,15 +127,15 @@ error: expected literal (fence min)
 независимо от того как `meon` импортирован или переименован в `Cargo.toml`.
 
 Подробное объяснение — в
-[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#16-cross-crate-macro-hygiene).
+[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene) - *GitHub*.
 
 ---
 
 ## Лицензия
 
 `meon-macros` доступен под лицензией
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
+[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
 
-Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
+Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
 
-Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md).
+Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.

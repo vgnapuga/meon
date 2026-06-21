@@ -6,7 +6,7 @@ use quote::quote;
 
 use crate::model::{CF, StandaloneRule};
 
-/// Emit the `<mc>::define_content!(Name { … })` invocation describing every
+/// Emit the `<mc>::define_content!(Name { ... })` invocation describing every
 /// field (with its type and capacity divisor) collected from the grammar.
 ///
 /// `mc` is the resolved crate path (`crate` when expanded inside `meon` itself,

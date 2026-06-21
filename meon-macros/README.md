@@ -19,6 +19,7 @@ which re-exports `define_parser!` and provides the runtime infrastructure.
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
@@ -31,7 +32,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.1"
+meon = "0.2"
 ```
 
 ```rust
@@ -58,7 +59,7 @@ For the full grammar reference see
 
 ## What `define_parser!` generates
 
-Given `define_parser!(Name { … })`, the macro expands into:
+Given `define_parser!(Name { ... })`, the macro expands into:
 
 **`NameContent<'a>`** — the output struct. One `pub` field per grammar rule,
 all borrowing from the original source slice via `u32` byte-offset spans.
@@ -95,9 +96,9 @@ Grammar DSL tokens
 [strip.rs]    removes => field [N] annotations
     │          so the cleaned tokens pass to runtime macros
     ▼
-[codegen.rs]  emits define_content!(…) call
+[codegen.rs]  emits define_content!(...) call
 [methods.rs]  emits _clean / _raw accessor impl
-[codegen.rs]  emits define_standalone_fns! { … } call
+[codegen.rs]  emits define_standalone_fns! { ... } call
     │
     ▼
 Final token stream → rustc
@@ -108,7 +109,7 @@ All runtime behaviour lives in `meon` (the `parse_text!`, `parse_inline!`,
 macros). `meon-macros` only produces tokens; it has no runtime footprint.
 
 For a detailed description of each stage see
-[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#4-grammar-compilation-pipeline).
+[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
 
 ---
 
@@ -133,7 +134,7 @@ All macro calls emitted by the expansion are fully qualified via
 `proc_macro_crate::crate_name` so the generated code resolves correctly
 regardless of how `meon` is imported or renamed in `Cargo.toml`.
 
-See [`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/meon/ARCHITECTURE.md#16-cross-crate-macro-hygiene)
+See [`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene) - *GitHub*
 for the full explanation.
 
 ---

@@ -14,6 +14,7 @@
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
@@ -45,7 +46,7 @@ MarkdownContent {
     headings:       Vec<(Heading, Span)>
     fenced_codes:   Vec<Span>
     bullet_items:   Vec<(BulletItem, Span)>
-    …
+    ...
 }
 ```
 
@@ -58,15 +59,21 @@ MarkdownContent {
 Каждый элемент представлен как `Span { start: u32, end: u32 }` — полуоткрытый байтовый диапазон `[start, end)` в оригинальный срез источника. Ничего не копируется. Ничего не декодируется пока вы сами не попросите.
 
 ```rust
-let src = b"**жирный** и *курсив*\n";
+let src = "**жирный** и *курсив*\n".as_bytes();
 let c = MarkdownParser::parse(src);
 
-// Разрешаем спан в строковый срез — zero copy, borrow из источника
+// Разрешаем спан в строковый срез — zero copy, borrow из источника.
+// Возвращает `None` при невалидном UTF-8 вместо паники.
 let text: &str = c.str(c.bolds[0]).unwrap();
 assert_eq!(text, "жирный");
 
-// Или работаем с сырыми байтами
+// Или работаем с сырыми байтами, без проверки UTF-8
 let bytes: &[u8] = c.bytes(c.italics[0]);
+
+// Каждое поле также получает сгенерированный аксессор `_clean` (разделители
+// вырезаны) и `_raw` (разделители включены) — zero-copy итераторы байтовых срезов.
+let raw: &[u8] = c.bolds_raw().next().unwrap();
+assert_eq!(raw, "**жирный**".as_bytes());
 ```
 
 Контент-структура заимствует источник на всё своё время жизни. Когда структура дропается — источник освобождается. Никаких промежуточных представлений не остаётся.
@@ -143,7 +150,7 @@ define_parser!(MyFormat {
 // MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>
-// … и многое другое
+// ... и многое другое
 ```
 
 Всё — контент-структура, метод parse, все find_*-итераторы, все аксессоры — генерируется во время компиляции. Никакого рантайм-диспатча, никаких vtable, никакого интерпретатора грамматики.
@@ -167,10 +174,10 @@ meon/                 ← корень воркспейса (этот файл)
 
 ## Feature flags
 
-| Feature  | Эффект                                                   |
-|----------|----------------------------------------------------------|
-| `avx2`   | 32-байтовые SIMD-лейны (требует nightly + AVX2 процессор)|
-| `avx512` | 64-байтовые SIMD-лейны (включает `avx2`)                 |
+| Feature  | Эффект                                                     |
+|----------|------------------------------------------------------------|
+| `avx2`   | 32-байтовые SIMD-лейны (требует nightly + AVX2 процессор)  |
+| `avx512` | 64-байтовые SIMD-лейны (включает `avx2`)                   |
 
 Без обоих флагов крейт компилируется на стабильном Rust.
 

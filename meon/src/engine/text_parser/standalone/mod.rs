@@ -27,14 +27,14 @@
 //! |------|-------------|--------|
 //! | [`SymmetricExactIter`] | `symmetric byte { N => field }` | `Span` |
 //! | [`AsymmetricExactIter`] | `asymmetric open, close { N => field }` | `Span` |
-//! | [`ChainedIter`] | `chained: Type { … }` | `T` |
-//! | [`KvIter`] | `key_value: Type { … }` | `T` |
+//! | [`ChainedIter`] | `chained: Type { ... }` | `T` |
+//! | [`KvIter`] | `key_value: Type { ... }` | `T` |
 //! | [`LineMarkerIter`] | `line(byte, max = N)` | `(T, Span)` |
 //! | [`LineUniformIter`] | `line_simple(bytes, min = N)` | `(T, Span)` |
 //! | [`FenceIter`] | `fence(byte, min = N)` | `Span` |
 //! | [`ContIter`] | `cont(byte)` | `Span` |
 //! | [`BlockMarkerIter`] | `block { (pattern) }` | `(T, Span)` |
-//! | [`BlockNumberedIter`] | `block { num(…) }` | `(T, Span)` |
+//! | [`BlockNumberedIter`] | `block { num(...) }` | `(T, Span)` |
 //!
 //! [`SymmetricExactIter`]: symmetric::SymmetricExactIter
 //! [`AsymmetricExactIter`]: asymmetric::AsymmetricExactIter

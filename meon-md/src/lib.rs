@@ -28,14 +28,39 @@
 //! **Block:** fenced code blocks (`` ``` ``/`~~~`), blockquotes (`>`),
 //! bullet lists (`-`, `*`, `+`), ordered lists (`1.`, `1)`), paragraphs.
 //!
+//! # Nesting
+//!
+//! This grammar sets `max_nest = 4`, the engine's bounded-nesting depth cap
+//! (see [`meon::define_parser!`] for the mechanism). Two independent rule
+//! families opt into it:
+//!
+//! - **Blockquotes and fences** (`cont(b'>')`, `fence(b'`', min = 3)`) share
+//!   the block-level active-block stack. A line like `"> > text"` opens two
+//!   distinct, properly contained `blockquotes` spans rather than one; a
+//!   fenced code block opened on a continuation line inside a blockquote
+//!   (`"> ```\n> code\n> ```"`) is scoped to its own fence span without
+//!   absorbing the surrounding `>` markers.
+//! - **Bold and italic** (`symmetric b'*' { parse_inside = true; balanced =
+//!   true; ... }`) share the inline bounded stack. `"**bold *italic*
+//!   still-bold**"` resolves both the outer bold and the inner italic as
+//!   separate, correctly-bounded spans — a different-count inner delimiter
+//!   no longer overwrites the engine's single pending slot and silently
+//!   loses the outer pair.
+//!
+//! `max_nest = 4` means up to four such levels self-nest correctly per
+//! family; a fifth level of the same construct collapses via the engine's
+//! overflow counter (see [`meon::parse_inline!`] and [`meon::parse_block!`]
+//! for the exact behaviour at the cap).
+//!
+//! Autolinks and the `[text](url)` / `![alt](url)` link/image syntax remain
+//! `balanced = false, parse_inside = false` by design — they use the
+//! original single-pass forward search and do not participate in nesting
+//! (e.g. `[a [b] c](url)` does not nest its own brackets).
+//!
 //! # Known limitations
 //!
-//! - A blockquote containing a fenced code block (`> \`\`\``) produces an
-//!   incorrect span due to the single-slot active block state.
-//! - Nested blockquotes (`> >`) leak content into the outer span.
 //! - Emphasis precedence rules are not enforced; declaration order wins.
 //! - This is not a CommonMark-compliant implementation.
-
 pub mod types;
 
 use meon::define_parser;
@@ -49,10 +74,15 @@ use types::{
 };
 
 define_parser!(Markdown {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+    sep = b' ',
+    eol = b'\n',
+    tab = b'\t',
+    escape = b'\\',
+    max_nest = 4;
 
     inline {
         merge_simple = true;
+
         hard_break(b'\\', b' ', 2) => hard_breaks [500];
         on_trigger(b'*', b'`', b'[', b'<') {
             symmetric b'`' {
@@ -62,7 +92,7 @@ define_parser!(Markdown {
             }
             symmetric b'*' {
                 parse_inside = true;
-                balanced     = false;
+                balanced     = true;
                 1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
             }
             asymmetric b'<', b'>' {

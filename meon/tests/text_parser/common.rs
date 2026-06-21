@@ -48,6 +48,8 @@ define_content!(TestContent {
         codes        [80],
         autolinks    [100],
         objects      [100],
+        n_italics    [40],
+        n_bolds      [40],
     }
     line {
         headings:        Heading       [200],
@@ -75,7 +77,7 @@ macro_rules! run_inline {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
             hard_break(b'\\', b' ', 2) => hard_breaks;
             on_trigger(b'=') {
                 key_value: KeyValue {
@@ -125,12 +127,50 @@ macro_rules! run_inline_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
-            on_trigger(b'{') {
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
+            on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
                     parse_inside = false;
-                    _ => objects
+                    1 => objects
+                }
+            }
+        );
+        (st, consumed)
+    }};
+}
+
+macro_rules! run_inline_balanced_nested {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'{', b'}') {
+                asymmetric b'{', b'}' {
+                    balanced     = true;
+                    parse_inside = false;
+                    1 => objects
+                }
+            }
+        );
+        (st, consumed)
+    }};
+}
+
+macro_rules! run_inline_sym_nested {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'*') {
+                symmetric b'*' {
+                    parse_inside = true;
+                    balanced     = true;
+                    1 => n_italics, 2 => n_bolds
                 }
             }
         );
@@ -161,9 +201,38 @@ macro_rules! run_block {
     ($active:expr, $src:expr, $pos:expr, $le:expr) => {{
         let src: &[u8] = $src;
         let mut st = ParseState::new(src.len());
-        let _tmp = $active;
+        let mut _stack: [(u8, u8, u8, u32); 1] = [(0u8, 0u8, 0u8, 0u32); 1];
+        let mut _depth: usize = 0;
+        if let Some((d, b, c, s)) = *$active {
+            _stack[0] = (d, b, c, s);
+            _depth = 1;
+        }
         let result = meon::parse_block!(
-            _tmp, st, src, $pos, $le, sep = b' ', tab = b'\t';
+            _stack, _depth, st, src, $pos, $le, sep = b' ', tab = b'\t', max_nest = 1;
+            block_simple {
+                fence(b'`', min = 3) => fenced_codes;
+                cont(b'>')            => blockquotes;
+            }
+            block {
+                (b'-' | b'*' | b'+') |b|:
+                    BulletItem { kind: b }
+                    => bullet_items;
+                num(b'0'..=b'9', end = b'.' | b')') |n, k|:
+                    OrderedItem { kind: k, num: n }
+                    => ordered_items;
+            }
+        );
+        *$active = if _depth > 0 { Some(_stack[0]) } else { None };
+        (st, result)
+    }};
+}
+
+macro_rules! run_block_nested {
+    ($stack:ident, $depth:ident, $src:expr, $pos:expr, $le:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let mut st = ParseState::new(src.len());
+        let result = meon::parse_block!(
+            $stack, $depth, st, src, $pos, $le, sep = b' ', tab = b'\t', max_nest = $maxn;
             block_simple {
                 fence(b'`', min = 3) => fenced_codes;
                 cont(b'>')            => blockquotes;
@@ -187,7 +256,7 @@ macro_rules! run_sym_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
             on_trigger(b'"') {
                 symmetric b'"' {
                     parse_inside = false;
@@ -206,7 +275,7 @@ macro_rules! run_chained_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t';
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
             on_trigger(b'[') {
                 chained: Link {
                     | b'[', b']' | {

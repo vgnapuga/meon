@@ -1495,17 +1495,6 @@ fn balanced_09_span_bounds() {
     assert_eq!(st.objects[0].end, 5);
 }
 
-// 10. The middle of three brace pairs can itself contain nested braces
-#[test]
-fn balanced_10_nested_middle_of_three() {
-    let src = b"{a} {b {c}} {d}";
-    let (st, _) = run_inline_balanced!(src);
-    assert_eq!(st.objects.len(), 3);
-    assert_eq!(txt(src, st.objects[0]), "a");
-    assert_eq!(txt(src, st.objects[1]), "b {c}");
-    assert_eq!(txt(src, st.objects[2]), "d");
-}
-
 // ================================================================
 // symmetric balanced
 // ================================================================
@@ -1715,4 +1704,673 @@ fn chained_tbal_12_multiple_links_sequence() {
     assert_eq!(txt(src, st.links[0].url), "url1");
     assert_eq!(txt(src, st.links[1].text), "d [e] f");
     assert_eq!(txt(src, st.links[1].url), "url2");
+}
+
+// ================================================================
+// balanced asymmetric — multi-level (max_nest > 1)
+// ================================================================
+//
+// All of these use `run_inline_balanced_nested!`, the same grammar as
+// `run_inline_balanced!` above with a caller-supplied `max_nest`. The
+// `balanced_*` tests above already cover `max_nest = 1` (the collapsing,
+// pre-nesting-equivalent behaviour) — these specifically exercise depth > 1.
+
+// 01. At depth 2, a single level of nesting is split into two spans,
+// sorted by start: outer first, inner second.
+#[test]
+fn balanced_nested_01_depth2_two_spans() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert!(st.objects[0].start < st.objects[1].start);
+    assert_eq!(txt(src, st.objects[0]), "a {b} c");
+    assert_eq!(txt(src, st.objects[1]), "b");
+}
+
+// 02. The outer span contains the inner span (interval containment —
+// this is how a consumer reconstructs the tree, no parent field needed).
+#[test]
+fn balanced_nested_02_outer_contains_inner() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert!(st.objects[0].start <= st.objects[1].start);
+    assert!(st.objects[0].end >= st.objects[1].end);
+}
+
+// 03. At depth 3, three nested levels each get their own span.
+#[test]
+fn balanced_nested_03_depth3_three_spans() {
+    let src = b"{a {b {c} d} e}";
+    let (st, _) = run_inline_balanced_nested!(src, 3);
+    assert_eq!(st.objects.len(), 3);
+    assert!(st.objects[0].start < st.objects[1].start);
+    assert!(st.objects[1].start < st.objects[2].start);
+    assert_eq!(txt(src, st.objects[0]), "a {b {c} d} e");
+    assert_eq!(txt(src, st.objects[1]), "b {c} d");
+    assert_eq!(txt(src, st.objects[2]), "c");
+}
+
+// 04. A cap below the actual nesting depth in the input still resolves
+// correctly: the untracked innermost pair is skipped via the overflow
+// counter, so the capped (middle) level's close lands on the right brace,
+// not the first one the scanner sees.
+#[test]
+fn balanced_nested_04_cap_below_actual_depth() {
+    let src = b"{a {b {c} d} e}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "a {b {c} d} e");
+    assert_eq!(txt(src, st.objects[1]), "b {c} d");
+}
+
+// 05. A cap of 1 on a multi-level input reproduces the exact collapsing
+// behaviour of `run_inline_balanced!` — the explicit depth-1 boundary,
+// not just its default.
+#[test]
+fn balanced_nested_05_depth1_collapses() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "a {b} c");
+}
+
+// 06. A frame that closes properly (inner) survives even though an
+// enclosing frame (outer) never finds its close before line end — this is
+// the exact scenario that requires `Vec::remove` rather than `truncate` in
+// the discard step: the inner entry sits at a *higher* index than the
+// still-open outer one.
+#[test]
+fn balanced_nested_06_unclosed_outer_keeps_closed_inner() {
+    let src = b"{a {b} c";
+    let (st, _) = run_inline_balanced_nested!(src, 4);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "b");
+}
+
+// 07. Both frames unclosed: nothing survives.
+#[test]
+fn balanced_nested_07_both_unclosed_nothing_survives() {
+    let src = b"{a {b c";
+    let (st, _) = run_inline_balanced_nested!(src, 4);
+    assert_eq!(st.objects.len(), 0);
+}
+
+// 08. A close byte encountered with an empty stack is literal, not a
+// structural event — no panic, no underflow, no spurious span.
+#[test]
+fn balanced_nested_08_stray_close_on_empty_stack_is_literal() {
+    let src = b"{a} b} c";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "a");
+}
+
+// 09. Three independent (non-nested) top-level pairs still each get their
+// own span at higher max_nest, exactly as at max_nest = 1 — depth only
+// matters when pairs are actually nested.
+#[test]
+fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
+    let src = b"{a} {b} {c}";
+    let (st, _) = run_inline_balanced_nested!(src, 4);
+    assert_eq!(st.objects.len(), 3);
+    assert_eq!(txt(src, st.objects[0]), "a");
+    assert_eq!(txt(src, st.objects[1]), "b");
+    assert_eq!(txt(src, st.objects[2]), "c");
+}
+
+// ================================================================
+// symmetric balanced (parse_inside = true) — different-key nesting fix
+// ================================================================
+//
+// All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
+// true; balanced = true; ... }` fixture with its own `n_italics` / `n_bolds`
+// fields, separate from the pre-existing `italics` / `bolds` fixtures
+// above (which stay `balanced = false`, exercising the original single
+// pending-slot mechanism, untouched).
+
+// 01. The bug this fixes: with a single pending slot, a different-count
+// occurrence of the same byte used to silently overwrite the still-pending
+// outer delimiter, so the outer pair never closed. With the bounded stack
+// (depth >= 2), both levels resolve.
+#[test]
+fn sym_nested_01_different_key_nesting_fix() {
+    let src = b"**bold *italic* still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_bolds[0]), "bold *italic* still-bold");
+    assert_eq!(txt(src, st.n_italics[0]), "italic");
+}
+
+// 02. At depth 1 (the boundary, not just the default), the different-key
+// case is deliberately *not* fixed: there is no room to track the inner
+// frame, so it is left as literal content inside the (still correctly
+// closing, thanks to the stack rather than an overwritable slot) outer
+// span.
+#[test]
+fn sym_nested_02_depth1_outer_still_closes_inner_untracked() {
+    let src = b"**bold *italic* still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 1);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 0);
+    assert_eq!(txt(src, st.n_bolds[0]), "bold *italic* still-bold");
+}
+
+// 03. An identical (byte, count) pair cannot self-nest — open and close
+// look the same for a symmetric delimiter, so there is no signal to tell
+// "nested open" apart from "close". Two adjacent runs result, with the
+// middle text left as plain content rather than nested.
+#[test]
+fn sym_nested_03_identical_key_toggles_not_nests() {
+    let src = b"**a **b** c**";
+    let (st, _) = run_inline_sym_nested!(src, 4);
+    assert_eq!(st.n_bolds.len(), 2);
+    assert_eq!(txt(src, st.n_bolds[0]), "a ");
+    assert_eq!(txt(src, st.n_bolds[1]), " c");
+}
+
+// 04. A frame still pending at line end is discarded — neither delimiter
+// closes within the line, so neither produces a span.
+#[test]
+fn sym_nested_04_unclosed_both_discarded() {
+    let src = b"**bold *italic still open";
+    let (st, _) = run_inline_sym_nested!(src, 3);
+    assert_eq!(st.n_bolds.len(), 0);
+    assert_eq!(st.n_italics.len(), 0);
+}
+
+// 05. Two different italic occurrences inside one bold, both resolved when
+// there is room for them: each closes and reopens its own field
+// independently, sequentially, after the previous one closed.
+#[test]
+fn sym_nested_05_two_different_keys_in_sequence() {
+    let src = b"**bold *i1* mid *i2* end**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 2);
+    assert_eq!(txt(src, st.n_italics[0]), "i1");
+    assert_eq!(txt(src, st.n_italics[1]), "i2");
+    assert_eq!(txt(src, st.n_bolds[0]), "bold *i1* mid *i2* end");
+}
+
+// 06. Plain text with no delimiters at all produces neither field.
+#[test]
+fn sym_nested_06_plain_text_no_spans() {
+    let src = b"just plain text";
+    let (st, _) = run_inline_sym_nested!(src, 4);
+    assert!(st.n_bolds.is_empty());
+    assert!(st.n_italics.is_empty());
+}
+
+// ================================================================
+// balanced asymmetric — multi-level, continued (run edge cases)
+// ================================================================
+
+// 10. A triple-character open run with max_nest = 3 opens three real
+// levels from one run — each byte of `{{{` is its own event.
+#[test]
+fn balanced_nested_10_triple_run_depth3_three_levels() {
+    let src = b"{{{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 3);
+    assert_eq!(st.objects.len(), 3);
+    assert_eq!(txt(src, st.objects[0]), "{{x}}");
+    assert_eq!(txt(src, st.objects[1]), "{x}");
+    assert_eq!(txt(src, st.objects[2]), "x");
+}
+
+// 11. The same triple-character run with max_nest = 2: the innermost
+// pair is skipped via the overflow counter, the outer two still resolve.
+#[test]
+fn balanced_nested_11_triple_run_depth2_overflow_skips_innermost() {
+    let src = b"{{{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{{x}}");
+    assert_eq!(txt(src, st.objects[1]), "{x}");
+}
+
+// 12. The same triple-character run with max_nest = 1 fully collapses to
+// one span — multi-character runs behave the same as single-character
+// ones at the depth-1 boundary.
+#[test]
+fn balanced_nested_12_triple_run_depth1_collapses() {
+    let src = b"{{{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "{{x}}");
+}
+
+// 13. A close run longer than what's actually needed: the real close
+// consumes one byte, the remaining bytes of that same run are literal
+// text — not lost, not mistaken for anything else.
+#[test]
+fn balanced_nested_13_excess_close_bytes_become_text_not_lost() {
+    let src = b"{x}}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "x");
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "}}");
+}
+
+// 14. An open run longer than what later closes: the outermost level
+// never finds its close and is discarded, while the inner levels that
+// did close survive — and survive at the right indices, since closing
+// uses `Vec::remove`, not `truncate`.
+#[test]
+fn balanced_nested_14_unclosed_outer_discarded_inner_survive() {
+    let src = b"{{{x}}";
+    let (st, _) = run_inline_balanced_nested!(src, 3);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{x}");
+    assert_eq!(txt(src, st.objects[1]), "x");
+}
+
+// 15. At max_nest = 1, three opens followed by only two closes leaves
+// nothing: both available closes are consumed decrementing the overflow
+// counter (for the two untracked extra opens), so the one tracked frame
+// never receives its real close and is discarded entirely.
+#[test]
+fn balanced_nested_15_depth1_overflow_consumes_both_closes_nothing_survives() {
+    let src = b"{{{x}}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(st.objects.len(), 0);
+}
+
+// 16. Two independent multi-level groups on the same line don't share or
+// corrupt each other's bookkeeping — each gets its own pair of levels.
+#[test]
+fn balanced_nested_16_two_independent_multilevel_groups() {
+    let src = b"{{x}} {{y}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 4);
+    assert_eq!(txt(src, st.objects[0]), "{x}");
+    assert_eq!(txt(src, st.objects[1]), "x");
+    assert_eq!(txt(src, st.objects[2]), "{y}");
+    assert_eq!(txt(src, st.objects[3]), "y");
+}
+
+// 17. A stray close byte with nothing open yet (right at the start of the
+// line) is literal text and does not corrupt a properly nested group
+// that follows it.
+#[test]
+fn balanced_nested_17_leading_stray_close_then_valid_group() {
+    let src = b"}{{a}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "}");
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{a}");
+    assert_eq!(txt(src, st.objects[1]), "a");
+}
+
+// 18. Zero-length content at the innermost nested level is captured
+// correctly as an empty span, not skipped or merged with its parent.
+#[test]
+fn balanced_nested_18_innermost_empty_content() {
+    let src = b"{{}}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "{}");
+    assert_eq!(txt(src, st.objects[1]), "");
+}
+
+// 19. Text between an outer pair's open and a same-type inner pair's open
+// is not a separate top-level text span — same principle as the
+// symmetric tests above, applied to asymmetric. Confirms the existing
+// `balanced_nested_01` shape (`objects` content is unchanged) while also
+// locking in that `texts` stays empty.
+#[test]
+fn balanced_nested_19_filler_between_nested_opens_not_a_separate_text_span() {
+    let src = b"{a {b} c}";
+    let (st, _) = run_inline_balanced_nested!(src, 2);
+    assert_eq!(st.objects.len(), 2);
+    assert_eq!(txt(src, st.objects[0]), "a {b} c");
+    assert_eq!(txt(src, st.objects[1]), "b");
+    assert!(st.texts.is_empty());
+}
+
+// ================================================================
+// symmetric balanced (parse_inside = true) — continued (edge cases)
+// ================================================================
+
+// 07. An occurrence whose count matches no declared arm (only 1 and 2
+// are declared; this is a run of 3) is literal — it doesn't open a frame,
+// doesn't move the stack, and doesn't prevent the enclosing pair that's
+// already open from later closing correctly around it.
+#[test]
+fn sym_nested_07_unmatched_count_inside_open_pair_is_literal() {
+    let src = b"**bold ***literal*** still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(txt(src, st.n_bolds[0]), "bold ***literal*** still-bold");
+}
+
+// 08. A different-key occurrence arriving once the stack is already at
+// its cap is literal — it doesn't corrupt the frame already open, and a
+// later, properly-nested occurrence of that same different key still
+// resolves once the cap frees up again. Nothing here ends up in `texts`:
+// every byte not claimed by `n_bolds`/`n_italics` is still content of the
+// open bold, not standalone top-level text.
+#[test]
+fn sym_nested_08_beyond_cap_different_key_is_literal_then_recovers() {
+    let src = b"**a *b**c* d**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(txt(src, st.n_bolds[0]), "a *b**c* d");
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "b**c");
+    assert!(st.texts.is_empty());
+}
+
+// 09. Text between an outer pair's open and an inner, different-key
+// pair's open is not a separate top-level text span — it stays inside the
+// outer pair's own content, exactly like the bytes between the inner
+// pair's close and the outer pair's close.
+#[test]
+fn sym_nested_09_filler_between_open_pairs_not_a_separate_text_span() {
+    let src = b"**bold *italic* still-bold**";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert_eq!(st.n_bolds.len(), 1);
+    assert_eq!(st.n_italics.len(), 1);
+    assert!(st.texts.is_empty());
+}
+
+// 10. An outer frame that never closes (discarded at line end) doesn't
+// affect an inner, different-field frame that already closed properly —
+// the two live in separate Vecs, so discarding one is independent of the
+// other surviving.
+#[test]
+fn sym_nested_10_unclosed_outer_does_not_affect_closed_inner_different_field() {
+    let src = b"**bold *italic* unclosed";
+    let (st, _) = run_inline_sym_nested!(src, 2);
+    assert!(st.n_bolds.is_empty());
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "italic");
+}
+
+// ---------------------------------------------------------------
+// max_nest = 0 (degenerate, but legal — front-end doesn't reject it)
+// ---------------------------------------------------------------
+
+// 01. At max_nest = 0, a balanced asymmetric pair never opens at all — the
+//     cap is 0, so `(asym_depth as usize) < _cap` is false on the very
+//     first occurrence, and the open byte is left as literal text rather
+//     than panicking on a zero-sized array.
+#[test]
+fn maxnest_zero_01_balanced_asymmetric_never_opens() {
+    let src = b"{hello}";
+    let (st, _) = run_inline_balanced_nested!(src, 0);
+    assert_eq!(st.objects.len(), 0);
+}
+
+// 02. At max_nest = 0, the open and close bytes both surface as plain text
+//     (no panic, no lost bytes — the overflow counter never engages for
+//     `balanced = true` outside the open path, so the close byte falls
+//     through to ordinary text accumulation).
+#[test]
+fn maxnest_zero_02_bytes_preserved_as_text() {
+    let src = b"{x}";
+    let (st, _) = run_inline_balanced_nested!(src, 0);
+    assert!(st.objects.is_empty());
+    let all: String = st.texts.iter().map(|&s| txt(src, s)).collect();
+    assert_eq!(all, "{x}");
+}
+
+// 03. At max_nest = 0, a symmetric balanced rule (parse_inside = true,
+//     balanced = true) likewise never opens a frame — same cap-is-zero
+//     reasoning as the asymmetric case, exercised on the other stack.
+#[test]
+fn maxnest_zero_03_symmetric_balanced_never_opens() {
+    let src = b"*italic*";
+    let (st, _) = run_inline_sym_nested!(src, 0);
+    assert!(st.n_italics.is_empty());
+    assert!(st.n_bolds.is_empty());
+}
+
+// ---------------------------------------------------------------
+// asymmetric rules sharing a close byte (documented caveat, not rejected)
+// ---------------------------------------------------------------
+//
+// Fixture: two asymmetric rules in one on_trigger block, `(`,`)` and `[`,`)`
+// — chosen so the OPEN bytes differ (so the dispatcher can tell which rule
+// opened a given frame) but the CLOSE byte (`)`) is identical between them.
+// This is the exact shape flagged in inline.rs's doc-comment: the frame on
+// the stack still resolves by its own recorded close byte, but the
+// `match _rc { $an => … }` arm that actually receives the close is whichever
+// rule's `1 => field` happens to be reached for count `1` in declaration
+// order inside that match — which, since both rules declare their exact
+// arm as `1`, are not actually ambiguous at the match level (each rule's
+// `$an => $af` pair is distinct token-wise), but the open byte is what
+// decides which frame (and therefore which field) is on the stack in the
+// first place. These tests lock in that the OPEN byte — not just "any
+// occurrence of the shared close byte" — determines routing.
+
+macro_rules! run_inline_shared_close_nested {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'(', b')', b'[') {
+                asymmetric b'(', b')' {
+                    balanced     = true;
+                    parse_inside = false;
+                    1 => objects
+                }
+                asymmetric b'[', b')' {
+                    balanced     = true;
+                    parse_inside = false;
+                    1 => n_italics
+                }
+            }
+        );
+        (st, consumed)
+    }};
+}
+
+// 04. A `(...)` pair routes to its own rule's field (`objects`), matching
+//     close byte `)` against the frame's own recorded `$ac` — not against
+//     whichever rule happens to be declared first.
+#[test]
+fn shared_close_04_paren_pair_routes_to_objects() {
+    let src = b"(hello)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "hello");
+    assert!(st.n_italics.is_empty());
+}
+
+// 05. A `[...)` pair (mismatched-looking but matching this fixture's second
+//     rule, which declares open `[` / close `)`) routes to that rule's own
+//     field (`n_italics`), not to `objects` — confirming routing keys off
+//     the *open* byte recorded on the frame, not just "first rule whose
+//     close byte matches".
+#[test]
+fn shared_close_05_bracket_paren_pair_routes_to_n_italics() {
+    let src = b"[hello)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "hello");
+    assert!(st.objects.is_empty());
+}
+
+// 06. Two independent pairs, one of each rule, on the same line: each
+//     resolves to its own field without cross-contamination, even though
+//     both close on the identical byte `)`.
+#[test]
+fn shared_close_06_both_rules_independent_on_same_line() {
+    let src = b"(a) [b)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "a");
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "b");
+}
+
+// 07. A `(` opened while a `[` frame is already on top of the stack nests
+//     correctly using each frame's own recorded close byte: the inner `(`
+//     closes on the first `)`, and because the outer `[`'s recorded close
+//     byte is also `)`, the *second* `)` correctly closes the outer frame
+//     rather than being mistaken for stray input.
+#[test]
+fn shared_close_07_nested_different_open_bytes_shared_close() {
+    let src = b"[a (b) c)";
+    let (st, _) = run_inline_shared_close_nested!(src, 2);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(txt(src, st.objects[0]), "b");
+    assert_eq!(st.n_italics.len(), 1);
+    assert_eq!(txt(src, st.n_italics[0]), "a (b) c");
+}
+
+// ================================================================
+// escaped closing delimiters — internal forward-search fix
+// ================================================================
+//
+// These exercise the `@is_escaped` check added to every *internal*
+// forward search that previously bypassed the outer dispatch loop's
+// escape-awareness entirely:
+//
+//   - symmetric greedy mode (`parse_inside = false`), both `balanced`
+//     settings — used for code spans and balanced quote-like rules;
+//   - the legacy asymmetric memchr search (`balanced = false,
+//     parse_inside = false`) — used for autolinks;
+//   - the legacy chained two-phase search (both components
+//     `parse_inside = false`) — used for `[text](url)`-style links.
+//
+// Opacity (`parse_inside`) is unaffected in every case below — none of
+// these rules scan their own content for other rules' triggers, before or
+// after this fix. What changed is purely whether the *closing* delimiter
+// itself is correctly distinguished from a literal, backslash-escaped
+// occurrence of the same byte. The existing `sym_bal_02_doubled_is_escape`
+// test (unescaped doubled-quote content) already covers the regression
+// case that this fix must not disturb — content with no backslash involved
+// at all — so it isn't duplicated here.
+
+// 01. An escaped closing backtick inside an open code span does not close
+//     it; the search continues and finds the real, unescaped closing run.
+//     Before this fix, the first (escaped) backtick closed immediately,
+//     leaving "b`" stray outside the span.
+#[test]
+fn escape_close_01_code_span_escaped_backtick_skipped() {
+    let src = br"`a\`b`";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), r"a\`b");
+}
+
+// 02. Two consecutively, individually escaped backticks are both skipped
+//     in turn before the real, unescaped close is found.
+#[test]
+fn escape_close_02_code_span_two_escaped_backticks() {
+    let src = br"`a\`\`b`";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), r"a\`\`b");
+}
+
+// 03. With nothing between the escaped backtick and the real close, the
+//     span still resolves correctly. Before this fix, this exact input
+//     produced no code span at all: the two adjacent backticks right after
+//     the escaped one formed a count-2 run that never matched the
+//     count-1 opener, and the search found nothing else to close on.
+#[test]
+fn escape_close_03_code_span_escaped_then_immediate_close() {
+    let src = br"`\``";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), r"\`");
+}
+
+// 04. An escaped quote inside a balanced-greedy symmetric match (the same
+//     mechanism that treats an unescaped doubled quote as literal content)
+//     is treated as literal content too, not mistaken for the close.
+#[test]
+fn escape_close_04_balanced_symmetric_escaped_quote() {
+    let src = b"\"a\\\"b\"";
+    let st = run_sym_balanced!(src);
+    assert_eq!(st.codes.len(), 1);
+    assert_eq!(txt(src, st.codes[0]), "a\\\"b");
+}
+
+// 05. An escaped closing `>` on an autolink (the legacy asymmetric memchr
+//     path) is skipped; the real, unescaped `>` closes it instead.
+#[test]
+fn escape_close_05_autolink_escaped_close() {
+    let src = br"<http://example.com\>more>";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), r"http://example.com\>more");
+}
+
+// 06. A chained link's text bracket, non-balanced (tbal = false): an
+//     escaped `]` does not close the text component.
+#[test]
+fn escape_close_06_chained_text_escaped_bracket_no_nesting() {
+    let src = br"[a\]b](url)";
+    let st = run_chained_balanced!(src, false, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), r"a\]b");
+    assert_eq!(txt(src, st.links[0].url), "url");
+}
+
+// 07. A chained link's text bracket, balanced (tbal = true): an escaped
+//     `]` inside genuine nested brackets is neither mistaken for the close
+//     nor for a depth-decrementing event — it doesn't disrupt the depth
+//     count for the real, unescaped nested pair.
+#[test]
+fn escape_close_07_chained_text_escaped_bracket_with_real_nesting() {
+    let src = br"[a [b\]c] d](url)";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), r"a [b\]c] d");
+    assert_eq!(txt(src, st.links[0].url), "url");
+}
+
+// 08. A chained link's url paren, non-balanced (ubal = false): an escaped
+//     `)` does not close the url component.
+#[test]
+fn escape_close_08_chained_url_escaped_paren_no_nesting() {
+    let src = br"[text](a\)b)";
+    let st = run_chained_balanced!(src, false, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), r"a\)b");
+}
+
+// 09. A chained link's url paren, balanced (ubal = true): an escaped `)`
+//     inside genuine nested parens neither closes early nor disrupts the
+//     depth count for the real, unescaped nested pair.
+#[test]
+fn escape_close_09_chained_url_escaped_paren_with_real_nesting() {
+    let src = br"[text](a(b\)c) d)";
+    let st = run_chained_balanced!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), r"a(b\)c) d");
+}
+
+// 10. Span bounds stay within source length across every path touched by
+//     this fix — a basic sanity invariant, not specific to escaping itself.
+#[test]
+fn escape_close_10_span_bounds_sane_across_fixed_paths() {
+    let len_check = |src: &[u8], spans: &[meon::span::Span]| {
+        let len = src.len() as u32;
+        for s in spans {
+            assert!(s.start <= s.end && s.end <= len);
+        }
+    };
+
+    let src1 = br"`a\`b`";
+    let (st1, _) = run_inline!(src1);
+    len_check(src1, &st1.codes);
+
+    let src2: &[u8] = br"<http://example.com\>more>";
+    let (st2, _) = run_inline!(src2);
+    len_check(src2, &st2.autolinks);
+
+    let src3: &[u8] = br"[a [b\]c] d](url)";
+    let st3 = run_chained_balanced!(src3, true, false);
+    let link_spans: Vec<meon::span::Span> =
+        st3.links.iter().flat_map(|l| [l.text, l.url]).collect();
+    len_check(src3, &link_spans);
 }

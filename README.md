@@ -14,6 +14,7 @@ EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/README_RU.md)
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
@@ -51,7 +52,7 @@ MarkdownContent {
     headings:       Vec<(Heading, Span)>
     fenced_codes:   Vec<Span>
     bullet_items:   Vec<(BulletItem, Span)>
-    …
+    ...
 }
 ```
 
@@ -71,12 +72,18 @@ is copied. Nothing is decoded unless you ask for it.
 let src = b"**bold** and *italic*\n";
 let c = MarkdownParser::parse(src);
 
-// Resolve a span to a string slice — zero copy, borrow from source
+// Resolve a span to a string slice — zero copy, borrow from source.
+// Returns `None` on invalid UTF-8 instead of panicking.
 let text: &str = c.str(c.bolds[0]).unwrap();
 assert_eq!(text, "bold");
 
-// Or work with raw bytes
+// Or work with raw bytes, no UTF-8 check
 let bytes: &[u8] = c.bytes(c.italics[0]);
+
+// Every field also gets a generated `_clean` (delimiters stripped) and
+// `_raw` (delimiters included) accessor — zero-copy byte-slice iterators.
+let raw: &[u8] = c.bolds_raw().next().unwrap();
+assert_eq!(raw, b"**bold**");
 ```
 
 The content struct borrows the source for its entire lifetime. When the struct
@@ -129,7 +136,7 @@ format as a grammar and the engine compiles it into a parser at build time:
 use meon::define_parser;
 
 define_parser!(MyFormat {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
 
     inline {
         on_trigger(b'*') {
@@ -161,7 +168,7 @@ define_parser!(MyFormat {
 // MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>
-// … and more
+// ... and more
 ```
 
 Everything — the content struct, the parse method, all find_* iterators, all

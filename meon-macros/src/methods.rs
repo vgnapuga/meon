@@ -9,7 +9,7 @@ use quote::quote;
 
 use crate::model::{CF, StandaloneRule, append_ident, crate_path, standalone_field};
 
-/// Emit `impl<'a> Name<'a> { … }` with all accessor methods.
+/// Emit `impl<'a> Name<'a> { ... }` with all accessor methods.
 pub(crate) fn build_content_methods(
     name: &Ident,
     cf: &CF,

@@ -11,6 +11,11 @@
 //!   element per paragraph). Representative of typical real documents.
 //! - `heavy` — dense markup: headings, rules, quotes, fences, lists and nested
 //!   inline together. Exercises every rule family at once; the "stress" case.
+//!   This corpus specifically includes nested constructs (a doubly-nested
+//!   blockquote line, and a bold span containing a nested italic) so the
+//!   measurement also reflects the engine's bounded-nesting stack machinery
+//!   (`max_nest = 4` in this grammar), not only flat element density — a
+//!   purely flat heavy corpus would never touch that code path at all.
 //!
 //! `REPEAT_COUNT` tiles each base document so the working set is large enough
 //! for a stable measurement and clearly larger than L2/L3.
@@ -72,6 +77,14 @@ pub fn doc_heavy() -> String {
             "> Second [text](url) blockquote <link> line with `code {}` here.\n",
             i
         ));
+        // Nested blockquote: continues the still-open `>` continuation from
+        // the two lines above and opens a *second* level on top of it,
+        // exercising the block-level bounded stack (`cont` nesting) rather
+        // than just a flat single-level continuation.
+        doc.push_str(&format!(
+            "> > Nested quote note {} stays under the same outer quote with *italic* style.\n",
+            i
+        ));
         doc.push_str("```rust\n");
         doc.push_str(&format!("fn function_{}() {{ let x = 42; }}\n", i));
         doc.push_str("```\n");
@@ -88,6 +101,13 @@ pub fn doc_heavy() -> String {
         doc.push_str(&format!("{}. Second ordered `code` item here\n", i % 9 + 2));
         doc.push_str(&format!(
             "Mixed line **bold** then *italic* then `code` then ***bi*** end {}.\n",
+            i
+        ));
+        // Nested emphasis: a different-count inner delimiter (`*`) inside an
+        // outer `**` pair, exercising the inline-level bounded symmetric
+        // stack rather than two independently-opened-and-closed spans.
+        doc.push_str(&format!(
+            "Nested emphasis check {}: **outer bold *inner italic* still outer bold** done.\n",
             i
         ));
         doc.push_str("~~~python\n");

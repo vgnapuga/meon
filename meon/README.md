@@ -10,7 +10,7 @@ iterators for lazily extracting one element kind at a time.
 
 ```toml
 [dependencies]
-meon = "0.1"
+meon = "0.2"
 ```
 
 * **meon**    <--
@@ -23,6 +23,7 @@ meon = "0.1"
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
@@ -50,7 +51,7 @@ assert_eq!(content.texts.len(), 1);
 
 ## How it works
 
-`define_parser!(Name { … })` expands into:
+`define_parser!(Name { ... })` expands into:
 
 - `NameContent<'a>` — the output struct. Every grammar rule produces one `pub`
   field. All fields borrow from the original source slice.
@@ -58,8 +59,8 @@ assert_eq!(content.texts.len(), 1);
   - `parse(source: &[u8]) -> NameContent<'_>` — full single-pass parse, O(n).
   - `find_*(source: &[u8]) -> impl Iterator` — one per rule, context-free,
     faster when you only need one element kind.
-- `_clean` / `_raw` accessor methods on `NameContent` for ergonomic
-  span-to-slice conversion.
+- `str(span) -> Option<&str>` / `bytes(span) -> &[u8]` and `_clean` / `_raw`
+  accessor methods on `NameContent` for ergonomic span-to-slice conversion.
 
 Spans are `u32` byte offsets. Input must not exceed 4 GiB (`span::MAX_INPUT_LEN`).
 
@@ -69,20 +70,27 @@ Spans are `u32` byte offsets. Input must not exceed 4 GiB (`span::MAX_INPUT_LEN`
 define_parser!(Name {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
-    inline  { … }
-    lines   { … }
-    blocks  { … }
+    inline  { ... }
+    lines   { ... }
+    blocks  { ... }
 });
 ```
 
-The four context bytes are required and apply to every rule:
+Four context bytes are required and apply to every rule. A fifth,
+`max_nest`, is optional and grammar-wide:
 
-| Key      | Meaning                                     |
-|----------|---------------------------------------------|
-| `sep`    | Word separator (typically space)            |
-| `eol`    | Line terminator (typically `\n`)            |
-| `tab`    | Tab character                               |
-| `escape` | Escape prefix that suppresses the next byte |
+| Key        | Meaning                                                        |
+|------------|----------------------------------------------------------------|
+| `sep`      | Word separator (typically space)                               |
+| `eol`      | Line terminator (typically `\n`)                               |
+| `tab`      | Tab character                                                  |
+| `escape`   | Escape prefix that suppresses the next byte                    |
+| `max_nest` | Optional. Bounded self-nesting depth cap, shared by            |
+|            | `balanced` symmetric/asymmetric rules (below) and by           |
+|            | block-level `cont`/`fence` nesting. Default `1`,               |
+|            | which reproduces the original, non-nesting behaviour           |
+|            | exactly: no self-nesting, at most one block active.            |
+|            | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
 
 ---
 
@@ -106,20 +114,20 @@ Field type: `Vec<T>`.
 
 ---
 
-#### `on_trigger(b1, b2, …) { … }`
+#### `on_trigger(b1, b2, ...) { ... }`
 
 Declares a set of trigger bytes. When any of them is found on a line the
 block is entered and rules are tried in declaration order.
 
 ---
 
-##### `symmetric byte { … }` — same open and close delimiter
+##### `symmetric byte { ... }` — same open and close delimiter
 
 ```
 on_trigger(b'*') {
     symmetric b'*' {
         parse_inside = true;   // pending match: first run opens, next closes
-        balanced     = false;  // balanced: nested pairs skip the outer close
+        balanced     = true;   // self-nest different-count occurrences up to max_nest
         1 => italics  [40],    // count => field [capacity_divisor]
         2 => bolds    [40],
         3 => bold_italics [80],
@@ -128,36 +136,73 @@ on_trigger(b'*') {
 ```
 
 - `parse_inside = true` — the scanner remembers the opening run and closes on
-  the next matching count (`pending` mode).
+  the next matching count (`pending` mode). Content between open and close is
+  itself scanned for inline elements, which is what lets a construct like
+  `**bold *italic* text**` recognise the nested italic at all.
 - `parse_inside = false` — the scanner immediately searches forward for the
-  closing run (`greedy` mode, used for code spans).
-- `balanced = true` — nested pairs of the same delimiter are skipped over
-  before closing.
+  closing run (`greedy` mode, used for code spans). Content inside is opaque
+  to every other rule.
+- `balanced`'s meaning depends on `parse_inside`:
+  - With `parse_inside = true`: `balanced = false` means a different-count
+    occurrence of the same byte, while one is already pending, overwrites
+    the pending slot — no nesting, matching the original single-slot
+    behaviour exactly. `balanced = true` instead opens a *bounded stack* of
+    pending frames (sized by the grammar's `max_nest`), so a different-count
+    occurrence opens its own frame instead of overwriting the outer one —
+    both levels resolve and are emitted to their own fields, separately. An
+    *identical* `(byte, count)` pair still cannot self-nest, since open and
+    close look the same for a symmetric delimiter (`**a **b** c**` resolves
+    as two adjacent runs, not as nesting).
+  - With `parse_inside = false` (greedy mode): `balanced = true` instead
+    means a *doubled* run of the same delimiter found while searching forward
+    is treated as escaped/literal content rather than the close, and the
+    search continues past it — unrelated to the stack above.
 - Each `N => field [div]` arm captures runs of exactly N bytes → `Vec<Span>`.
 - `_ => field [div]` captures any count not matched by the explicit arms.
 
 ---
 
-##### `asymmetric open, close { … }` — different open and close bytes
+##### `asymmetric open, close { ... }` — different open and close bytes
 
 ```
-on_trigger(b'<') {
-    asymmetric b'<', b'>' {
-        balanced     = false;
+on_trigger(b'{', b'}') {
+    asymmetric b'{', b'}' {
+        balanced     = true;
         parse_inside = false;
-        1 => autolinks [100],
+        1 => objects [100],
     }
 }
 ```
 
-- `balanced = true` — nested open/close pairs are tracked before closing.
-- `parse_inside` is accepted for compatibility but has no effect on asymmetric
-  matching.
-- Count arms work the same as in `symmetric`.
+- `balanced` and `parse_inside` are independent settings — either one alone
+  is enough to put a rule on the bounded stack, sized by the grammar's
+  `max_nest`:
+  - `balanced` sets this *type's* own effective depth cap: `max_nest` if
+    `true` (so `{ { } }` self-nests), or a hard `1` if `false` — a second
+    open of the same type while one is already pending is then simply
+    literal, matching the original behaviour for that type exactly.
+  - `parse_inside` controls *opacity*: `false` keeps the content between
+    open and close invisible to every other rule (used for autolinks, so a
+    URL's own `(`/`)` aren't mistaken for something else); `true` makes it
+    transparent, so other rules — including different bracket types on this
+    same stack — can fire on the bytes in between.
+- The close byte is matched against the *frame's own* recorded open byte, not
+  against whichever rule happens to be checked first — so two different
+  `asymmetric` rules declared in the same `on_trigger` block may safely share
+  a close byte (e.g. `(`/`)` and `[`/`)`), as long as their open bytes
+  differ.
+- Once `balanced` or `parse_inside` is `true`, the close byte **must** be
+  listed in the same `on_trigger(...)` set as the open byte —
+  `on_trigger(b'{', b'}')`, not just `on_trigger(b'{')` — since closing is
+  found by the same scan that finds the opening, not by an internal forward
+  search.
+- Count arms work the same as in `symmetric`, except each byte of a
+  multi-byte run is its own event — `{{` is two opens, not one "count = 2"
+  event.
 
 ---
 
-##### `chained: Type { … }` — two-part delimiter (e.g. links)
+##### `chained: Type { ... }` — two-part delimiter (e.g. links)
 
 ```
 on_trigger(b'[') {
@@ -169,18 +214,24 @@ on_trigger(b'[') {
 }
 ```
 
-Matches the pattern `[prefix]open1…close1 open2…close2`.
+Matches the pattern `[prefix]open1...close1 open2...close2`.
 
 - Two `| open, close |` pairs define the two components.
 - `prefix | byte |` declares an optional single byte immediately before `open1`
   that sets a boolean field (`is_image` in the example).
+- `parse_inside = true` on either component makes that component
+  transparent — other rules can fire on the bytes scanned over for it —
+  instead of the original, fully-opaque self-contained forward search. This
+  is scoped to a single active `chained` rule per grammar; a grammar
+  declaring two such rules with overlapping in-progress matches is not
+  supported.
 - The output type `T` must be defined by the grammar author with fields named
   after the `=> field` identifiers.
 - Field type: `Vec<T>`.
 
 ---
 
-##### `key_value: Type { … }` — `key = value` pairs
+##### `key_value: Type { ... }` — `key = value` pairs
 
 ```
 on_trigger(b'=') {
@@ -230,7 +281,7 @@ content portion after the marker.
 
 ---
 
-##### `line(byte, max = N) |var|: Type { … } => field [div]`
+##### `line(byte, max = N) |var|: Type { ... } => field [div]`
 
 Matches lines that start with 1–N consecutive occurrences of `byte` followed
 by `sep` or end of line. `var` receives the count.
@@ -243,7 +294,7 @@ line(b'#', max = 6) |n|:
 
 ---
 
-##### `line_simple(b1 | b2 | …, min = N) |var|: Type { … } => field [div]`
+##### `line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field [div]`
 
 Matches lines composed entirely of one repeated delimiter byte (interleaved
 with `sep`), appearing at least `min` times. `var` receives the delimiter byte.
@@ -262,7 +313,7 @@ Block elements begin on one line and end on a later line.
 
 ---
 
-#### `block_simple { … }` — multi-line spans, no per-line metadata
+#### `block_simple { ... }` — multi-line spans, no per-line metadata
 
 Field type: `Vec<Span>`.
 
@@ -281,7 +332,10 @@ fence(b'`', min = 3) => fenced_codes [400];
 ##### `cont(byte) => field [div]`
 
 Groups consecutive lines that start with `byte` into a single `Span`. Closes
-when a line does not start with `byte`.
+when a line does not start with `byte`. With `max_nest > 1`, a `cont` may
+self-nest — `> > text` opens two distinct, correctly-bounded spans, since the
+marker is checked positionally on each peel and another `cont` rule may open
+right after it on the same line.
 
 ```
 cont(b'>') => blockquotes [200];
@@ -289,11 +343,11 @@ cont(b'>') => blockquotes [200];
 
 ---
 
-#### `block { … }` — per-line items with metadata
+#### `block { ... }` — per-line items with metadata
 
 Field type: `Vec<(Type, Span)>` — one entry per matching line.
 
-##### `(pattern) |var|: Type { … } => field [div]`
+##### `(pattern) |var|: Type { ... } => field [div]`
 
 Matches lines where, after optional leading whitespace, a single byte
 satisfying `pattern` is followed by `sep` or `tab`. `var` receives the marker
@@ -305,7 +359,7 @@ byte.
     => bullet_items [80];
 ```
 
-##### `num(digit_pat, end = end_pat) |n, k|: Type { … } => field [div]`
+##### `num(digit_pat, end = end_pat) |n, k|: Type { ... } => field [div]`
 
 Matches lines where a digit run (up to 9 digits) is followed by a byte
 satisfying `end_pat` and then `sep` or `tab`. `n` receives the parsed number,
@@ -352,6 +406,9 @@ for span in MyParser::find_italics(source) {
 Standalone iterators scan the raw source without any cross-element context.
 They may yield spans that the full parser would suppress (e.g. delimiters
 inside a fence). Counts can differ from the full parse — this is by design.
+Standalone `symmetric`/`asymmetric` rules match only the exact declared
+count and never participate in the bounded-nesting stack, regardless of the
+grammar's `max_nest` or that rule's own `balanced`/`parse_inside` settings.
 
 ---
 
@@ -369,10 +426,18 @@ Without either flag the crate compiles on stable Rust using a SWAR
 
 ## Known limitations
 
-- Only one block can be active at a time. Nested block constructs (e.g. a
-  continuation block containing a fenced block) are not representable.
-- Inline scanning is context-free within a line. Precedence between
-  overlapping inline rules is resolved by declaration order.
+- Self-nesting (blockquotes/fences at the block level, `balanced`
+  symmetric/asymmetric rules at the inline level) is bounded by the
+  grammar's `max_nest` setting — default `1`, meaning no self-nesting at
+  all. Constructs nested deeper than `max_nest` are not specially tracked;
+  see the context-bytes table above.
+- A `chained` rule with a transparent component (`parse_inside = true`)
+  tracks only one in-progress match per grammar; two such rules with
+  overlapping matches are not supported.
+- Inline scanning is context-free within a line — there is no cross-line
+  inline state, regardless of `max_nest`, which only bounds nesting *within*
+  one line. Precedence between overlapping inline rules is resolved by
+  declaration order, not a precedence table.
 
 ---
 

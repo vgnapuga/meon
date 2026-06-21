@@ -17,8 +17,9 @@ reference grammar, using [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz)
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
 
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
-* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/meon/benches/README.md)
+* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
 * ***FUZZING.md***    <--
 
 ---
@@ -129,11 +130,12 @@ cargo fuzz run parse_text fuzz/corpus/parse_text -- -runs=0
 
 ## Campaign log
 
-| date       | duration | toolchain          | exec/s | total exec | cov | crashes | notes                        |
-|------------|----------|--------------------|--------|------------|-----|---------|------------------------------|
-| 2026-06-15 | ~50 min  | nightly-2026-05-22 | ~35k   | ~104M      | 841 | 0       | default flags, ASan enabled, coverage saturated early, only REDUCE after ~7M |
+ realese version | date       | toolchain          | total exec | cov  | ft   | corp       | exec/s | rss   |
+-----------------|------------|--------------------|------------|------|------|------------|--------|-------|
+ v0.1.0          | 2026-06-15 | nightly-2026-05-22 | ~104M      | 841  | 4766 | 1758/252Kb | ~35k   | 629Mb |
+ v0.2.0          | 2026-06-21 | nightly-2026-05-22 | ~111M      | 1114 | 6853 | 2346/440Kb | ~32k   | 641Mb |
 
-**Coverage saturation** at `cov: 841 ft: 4762 corp: 1679/298Kb` means
+**Coverage saturation** at `cov: 1114 ft: 6853 corp: 1758/252Kb` means
 libFuzzer exhausted reachable branches on random inputs without seeds. Adding
 seed documents from real Markdown files or from the benchmark corpora will
 push coverage higher by guiding the fuzzer into structured code paths.
