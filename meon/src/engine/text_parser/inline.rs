@@ -11,7 +11,7 @@
 //!
 //! # Grammar integration
 //!
-//! The macro consumes the `inline { … }` section of a `define_parser!`
+//! The macro consumes the `inline { ... }` section of a `define_parser!`
 //! grammar after `strip` has removed the `=> field [N]` annotations.  The
 //! entry point is:
 //!
@@ -25,206 +25,180 @@
 //! - `merge_simple = true | false;`  — whether adjacent text spans are merged.
 //! - `fallback => field;`            — field that receives plain-text spans.
 //! - `hard_break(esc, sp, min) => field;` — trailing hard-break detection.
-//! - `on_trigger(b1, …) { <inline rules> }` — byte-triggered inline block
-//!   (replaces the old `memchr(…) { … }` syntax).
+//! - `on_trigger(b1, ...) { <inline rules> }` — byte-triggered inline block.
 //!
 //! # `on_trigger` dispatch
 //!
-//! `on_trigger(b1, b2, …)` declares a set of *trigger bytes*. When the
+//! `on_trigger(b1, b2, ...)` declares a set of *trigger bytes*. When the
 //! scanner finds any of those bytes in the current line it enters the block
 //! and tries each rule in order:
 //!
-//! - `symmetric byte { … }` — paired delimiters with the same open/close byte.
-//! - `asymmetric open, close { … }` — paired delimiters with different bytes.
-//! - `chained: Type { … }` — two-part delimiters (e.g. `[text](url)`).
-//! - `key_value: Type { … }` — `key = value` pairs.
+//! - `symmetric byte { ... }` — paired delimiters with the same open/close byte.
+//! - `asymmetric open, close { ... }` — paired delimiters with different bytes.
+//! - `chained: Type { ... }` — two-part delimiters (e.g. `[text](url)`).
+//! - `key_value: Type { ... }` — `key = value` pairs.
 //!
 //! The trigger set is searched with [`crate::swar::find_any`], which
 //! dispatches to `memchr` / `memchr2` / `memchr3` for 1–3 bytes and to the
 //! SWAR/SIMD engine for 4 or more bytes.
 //!
-//! # Bounded nesting (`max_nest`)
+//! # Bounded nesting (`max_nest`) — one unified stack
 //!
-//! Three rule kinds opt into multi-level / transparent tracking, sharing
-//! the grammar's `max_nest` depth cap (forwarded from `parse_text!`;
-//! defaults to `1`): `asymmetric`, `symmetric`, and `chained`. The first
-//! two use a bounded *stack*; `chained` uses a two-phase transparent state
-//! machine (its components are sequential, never simultaneous, so it needs
-//! no stack). Across all three, the same rule governs the *fallback* field:
-//! plain text is flushed to it only while nothing is open — symmetric and
-//! asymmetric stacks both empty, no chained phase in progress. Text sitting
-//! inside any open construct is that construct's content, not separate
-//! top-level prose, even when no more specific rule claims it (e.g. the gap
-//! between an open `**` and a `*` opening right after it belongs to the
-//! bold). Suppressing the flush there loses nothing: those bytes stay
+//! Every construct that needs to track *how deeply it is nested* lives on a
+//! **single shared stack** (`frames`), bounded by the grammar's `max_nest`
+//! depth cap (forwarded from `parse_text!`; defaults to `1`). A stack entry
+//! is a `_Frame` tagged by `kind`:
+//!
+//! - `kind = 0` — an **asymmetric** open (`{` `[` `<`...): records its open and
+//!   close byte, opacity, and the back-patch index of its placeholder span.
+//! - `kind = 1` — a **symmetric** balanced delimiter (`*` `**` ...): records the
+//!   byte, the run length (which picks the construct), and the back-patch
+//!   index.
+//! - `kind = 2` — a **key_value** value-phase: records the (already finalised)
+//!   key span and the value start, and waits for its terminator.
+//!
+//! `chained` is *not* on the stack — its two components are strictly
+//! sequential (phase 2 only begins once phase 1 has closed), so it is a
+//! two-phase transparent state machine needing no stack. The single-pending
+//! symmetric mode (`parse_inside = true, balanced = false`) and all the
+//! self-contained forward-search paths (greedy symmetric, the legacy
+//! `balanced = false, parse_inside = false` asymmetric memchr, the legacy
+//! both-opaque chained search) are likewise *not* stack users — they are the
+//! original pre-nesting code, left intact.
+//!
+//! Because the stack is shared, `fdepth` is the single nesting budget for all
+//! kinds combined. For a grammar whose stack-eligible rules are all the same
+//! kind (e.g. a pure-asymmetric grammar, or a pure-symmetric one), `fdepth`
+//! behaves exactly like the old per-kind depth counter did — the merge is
+//! behaviour-preserving for single-kind grammars. Mixed-kind nesting (the
+//! JSON case: a `key_value` whose value is an object whose members are more
+//! `key_value`s) is what the unified stack newly makes expressible.
+//!
+//! ## The fallback-flush invariant
+//!
+//! Plain text is flushed to the fallback field `$tx` only while the stack is
+//! empty and no chained phase is in progress (`fdepth == 0 && !ch_in_text &&
+//! !ch_in_url`). Text sitting inside any open construct is that construct's
+//! content, not separate top-level prose, even when no more specific rule
+//! claims it. Suppressing the flush there loses nothing: those bytes stay
 //! covered by whichever enclosing span eventually closes around them.
 //!
-//! ## `asymmetric { balanced = …; parse_inside = …; … }`
+//! ## `asymmetric { balanced = ...; parse_inside = ...; ... }` (`kind = 0`)
 //!
-//! `balanced` and `parse_inside` are independent and both gate the bounded
-//! stack — a rule needs only *one* of them `true` to be on it at all:
+//! `balanced` and `parse_inside` are independent and both gate stack
+//! eligibility — a rule needs only *one* of them `true` to be on the stack:
 //!
-//! - `balanced` controls *this type's* effective depth cap: the grammar's
-//!   `max_nest` when `true` (so it can self-nest, `{ { } }`), or a hard `1`
-//!   when `false` — a second open of the same type while one is already
-//!   pending is then simply literal, exactly as the pre-nesting,
-//!   `balanced = false` memchr path always treated it.
+//! - `balanced` controls this type's effective depth cap: `max_nest` when
+//!   `true` (so it can self-nest, `{ { } }`), or a hard `1` when `false`.
 //! - `parse_inside` controls *opacity*, recorded per frame at push time
-//!   (`!$api`), not as one engine-wide flag — different types nested inside
-//!   each other can have different settings, and only the *innermost*
-//!   currently-open frame's flag governs whether other rules fire: a
-//!   transparent `{` containing an opaque `[` is transparent right up until
-//!   execution actually enters the `[`, then opaque for its content, then
-//!   transparent again once back outside it.
+//!   (`!$api`), so only the innermost open frame's flag governs whether other
+//!   rules fire on its content.
 //!
-//! Only a rule with **both** flags `false` ever reaches the historical
-//! `if delim == $ao { … memchr/depth-search for $ac … }` block — for any
-//! other rule that block is unreachable dead code, since the new check
-//! (tried first, for every trigger byte) already intercepted and
-//! `continue`d past it. This block's own *closing* search now also skips an
-//! escaped candidate close byte (see `@is_escaped` below) — independent of,
-//! and unrelated to, the opacity question of whether content fires other
-//! rules; a `balanced = false, parse_inside = false` rule stays fully opaque
-//! to other rules while still correctly refusing to close on `\$ac`.
+//! A rule with **both** flags `false` never reaches the stack at all; it runs
+//! the historical self-contained `memchr` block further down (whose own
+//! closing search now also skips escaped candidate close bytes — see
+//! `@is_escaped`).
 //!
-//! **Cost for `balanced = false, parse_inside = false` rules (the default,
-//! pre-nesting shape):** the `($abal || $api)` guard is a `bool` expression
-//! over two *compile-time* literals supplied per-rule by the grammar (`$abal`
-//! and `$api` come from that rule's own `balanced = …` / `parse_inside = …`
-//! settings, substituted at macro-expansion time, not runtime state), so for
-//! such a rule the whole condition is `false || false` at every call site
-//! touching that rule's `$ao`/`$ac`. This is not a separate path *chosen by
-//! the macro itself* at expansion time — the macro still emits the guarded
-//! block as ordinary, always-`if`-wrapped code. `rustc`/LLVM is relied on to
-//! fold the constant and dead-code-eliminate the guarded block at codegen
-//! time, the same way it already elides `if false { … }`. In `--release`
-//! this reliably costs nothing measurable; in unoptimised builds (`debug`, or
-//! `opt-level = 0`) the branch is still emitted *and evaluated*, just always
-//! `false`. A grammar relying on guaranteed low overhead in debug builds too
-//! should not assume this folding happens and should benchmark with
-//! `--release`.
+//! Each byte of an open run is its own open event — `{{` is two opens, not
+//! one "count = 2" event — because asymmetric field routing matches the
+//! literal `1` per character, not the run length. An open pushes a
+//! placeholder span (`start == end`), back-patched on the matching close.
+//! Beyond a `balanced = true` type's cap an extra same-type open bumps a
+//! one-shot overflow counter instead of pushing.
 //!
-//! The new check recognises both `$ao` and `$ac` for every stack-eligible
-//! rule in the grammar (so different bracket types nest validly with each
-//! other) using ordinary bracket matching, **one byte of the run at a
-//! time** — `{{` is two separate open events, not one "count = 2" event,
-//! because field routing for asymmetric is matched against the literal `1`
-//! per character, not against the run's length (unlike `symmetric`, where
-//! the run length itself picks the construct, e.g. `*` vs `**`). An open
-//! byte pushes a placeholder span (`start == end`) into the rule's field,
-//! back-patched on the matching close; this keeps the field sorted by
-//! `start` even though an outer frame closes after its inner ones. Beyond a
-//! type's effective cap, an extra same-type open increments a one-shot
-//! overflow counter instead of pushing a frame — but only when
-//! `balanced = true` for that type; `balanced = false` never accumulates
-//! overflow, since its cap is 1 and a second same-type open is just
-//! literal, full stop. A close byte that doesn't match the current top of
-//! stack is left as a literal byte. A frame still open at line end is
-//! discarded (`Vec::remove` at its index, not `truncate` — a same-type
-//! self-nesting frame can close while an ancestor never does, leaving a
-//! properly-closed inner entry at a *higher* index than the still-open
-//! outer one, which must survive), exactly as an unclosed bracket used to
-//! simply produce no span.
+//! **Close cascade + key_value drain.** A close byte runs a single unified
+//! pass (never one block per rule — sharing a close byte across rules would
+//! otherwise double-pop). Per close character, *before* touching the
+//! asymmetric frame, the pass first drains any `key_value` frame sitting on
+//! top: that value's container is closing, so the value ends here. Then, if
+//! the new top is an asymmetric frame whose recorded close byte matches, that
+//! one frame is popped and its placeholder back-patched. Because the stack is
+//! strict LIFO and a kv frame is always pushed *after* the container it lives
+//! in, a `}}` run finalises the inner pair on the first `}` (then pops its
+//! object) and the outer pair on the second — correct nesting falls out of
+//! the per-character loop, and the "value committed before the container
+//! pops" ordering is automatic.
 //!
-//! **Required grammar change**: the close byte must be listed in the same
-//! `on_trigger(...)` set as the open byte — `on_trigger(b'{', b'}')`, not
-//! just `on_trigger(b'{')` — since the close is now found by the same scan
-//! that finds the open, not by an internal forward search.
+//! **Required grammar change**: the close byte (and, for `key_value`, the
+//! `end` separator) must be listed in the same `on_trigger(...)` set, since
+//! they are now found by the same scan that finds the opens.
 //!
-//! **Close-byte sharing across rules**: two different `asymmetric` rules in
-//! the same `on_trigger` block may share a close byte (e.g. `(`, `)` and
-//! `[`, `)`) as long as their open bytes differ. This is handled by a
-//! *single, unified* close pass — not one independent block per rule. An
-//! earlier shape of this mechanism gave each rule its own top-level
-//! `if delim == $ac { … }` arm (mirroring the per-rule open-side arms); that
-//! is unsound the moment two rules share a close byte, because each rule's
-//! arm is an independent `if`, not a mutually-exclusive branch of the
-//! *other* rules' arms. When `delim` matched more than one rule's `$ac`,
-//! every matching rule's arm ran in sequence within the same scan-loop
-//! iteration — including one that ran *after* an earlier rule's arm had
-//! already popped the stack. The later arm would then see the *new* top of
-//! stack left behind by the earlier close and, if that new top's open byte
-//! happened to belong to it, close it too — collapsing two distinct frames
-//! on a single input byte instead of closing only the one actually intended.
+//! ## `symmetric { parse_inside = true; balanced = true; ... }` (`kind = 1`)
 //!
-//! The close side instead first computes, once, a single `bool` — whether
-//! `delim` is recognised as a close byte by *any* `$abal || $api` rule at
-//! all (a plain `||`-reduction across the rule set, not a per-rule branch).
-//! If so, exactly one `for _k in 0..count` pass runs, closing **at most one
-//! frame per character** — the current top of stack, if its own recorded
-//! close byte matches `delim` — and dispatches the field write by that
-//! frame's own recorded *open* byte (`_ob`), not by which rule happened to
-//! be checked first. This mirrors the shape the end-of-line discard loop
-//! (further below) has always used, and for the same reason: it is a single
-//! pass over the stack, never one parallel block per rule reacting
-//! independently to the same byte.
+//! `parse_inside = true, balanced = false` (single pending slot) is
+//! **unchanged** — it keeps its original `pending` slot, off the stack.
 //!
-//! ## `symmetric { parse_inside = true; balanced = true; … }`
+//! `parse_inside = false` (greedy mode) keeps its opacity unchanged; only its
+//! internal forward search gained escape-awareness (see `@is_escaped`). It is
+//! off the stack.
 //!
-//! `parse_inside = true, balanced = false` (the original single
-//! pending-slot mechanism) is **entirely unchanged** — it keeps its
-//! original code path verbatim, since it already runs through the outer
-//! per-character dispatch loop, which has always checked escaping for every
-//! trigger byte it lands on.
+//! `parse_inside = true, balanced = true` pushes onto the unified stack. An
+//! occurrence whose `(byte, count)` matches the current top closes it;
+//! otherwise, with room, it opens a new frame. An identical `(byte, count)`
+//! pair cannot self-nest (open and close look the same), so `**a **b** c**`
+//! resolves as two adjacent runs. The run length picks the construct, so it
+//! is matched as-is, never split byte-by-byte (unlike asymmetric).
 //!
-//! `parse_inside = false` (greedy mode) keeps its *opacity* unchanged — the
-//! content between open and close is still never scanned for other rules —
-//! but its internal forward search now also skips an escaped candidate
-//! closing run (see `@is_escaped`) instead of accepting the first byte-match
-//! `memchr` finds regardless of a preceding `\`. These are independent
-//! properties: opacity is about whether *other rules* fire on the content;
-//! escape-awareness is about whether *this rule's own* closing delimiter is
-//! correctly distinguished from a literal, escaped occurrence of the same
-//! byte. Coupling them was an accident of the original implementation (the
-//! fast path happened to be a raw `memchr` loop that never went through the
-//! outer loop's escape check), not a deliberate design choice — a `parse_inside
-//! = false` rule with `balanced = false` or `balanced = true` both gain this
-//! fix identically.
+//! ## `chained: T { ... }` (no stack)
 //!
-//! `parse_inside = true, balanced = true` replaces the single pending-slot
-//! with a bounded stack of pending frames, shared across every such rule.
-//! An occurrence whose `(byte, count)` matches the current top closes it;
-//! otherwise, if there is room, it opens a new frame. This is what fixes a
-//! real bug in the single-slot version: a *different*-count occurrence of
-//! the same byte used to silently overwrite the one pending slot, losing
-//! the outer delimiter — `**bold *italic* still-bold**` would never close
-//! the bold. With the stack, the inner `*` (count 1) opens its own frame
-//! instead of clobbering the outer `**` (count 2). Because open and close
-//! look identical for a symmetric delimiter, an *identical* `(byte, count)`
-//! pair still cannot self-nest — `**a **b** c**` resolves as two adjacent
-//! runs, the same as a flat toggle. A frame still open at line end is
-//! discarded, same as the asymmetric stack. Unlike asymmetric, the run
-//! length here genuinely picks the construct (`*` vs `**` are different
-//! fields), so it is matched as-is, never split byte-by-byte.
+//! Unchanged from the pre-unification design: both-opaque components run the
+//! self-contained two-phase search; a transparent component runs the
+//! two-phase transparent state machine. Sequential phases, single slot each.
 //!
-//! ## `chained: T { … }` with a transparent component
+//! ## `key_value: T { ... }` (`kind = 2`) — always nested
 //!
-//! When *both* components have `parse_inside = false` the original
-//! self-contained two-phase forward search runs with its opacity
-//! **unchanged** — it still finds the text close and the url close by
-//! scanning ahead internally, emitting nothing for any rule encountered in
-//! between. Its own forward search now also skips an escaped candidate
-//! close byte for each component (see `@is_escaped`), exactly like the
-//! legacy `asymmetric` block above — the same independence between opacity
-//! and escape-awareness applies here.
+//! A `key_value` rule splits, around its `eq` trigger byte, into a key (to
+//! the left) and a value (to the right). Both sides are bounded by *foreign*
+//! bytes, which is why the rule triggers on the separator, not on an opening
+//! byte. The **key has no nesting**: it is computed once, ascending, at `eq`
+//! time and carried in the frame. The **value is nested**: it lives on the
+//! unified stack and is finalised by structure, not by a forward search.
 //!
-//! When *either* component has `parse_inside = true`, the rule instead runs
-//! through a two-phase transparent state machine, so that other rules can
-//! fire on the bytes scanned over. The two phases (text bracket, then url
-//! paren) are strictly sequential — phase 2 only starts once phase 1 has
-//! fully closed — so a single slot per phase suffices, no stack. Each
-//! phase's own opacity is resolved once when it opens (`!$tpi` / `!$upi`),
-//! tracked independently. Closing the text phase commits nothing by itself;
-//! it only attempts to open the url phase against the byte immediately
-//! after the `]`. Only the url phase closing pushes the combined `T`. If
-//! the byte after `]` is not the url open, the whole match is abandoned and
-//! the opening bracket plus everything scanned over is preserved as literal
-//! text — the same orphan-on-failure trade-off `asymmetric`'s transparent
-//! mode already accepts (anything more specific that fired inside while the
-//! match was still speculative stays committed). An opaque chained phase,
-//! unlike an opaque asymmetric frame, suppresses asymmetric's own
-//! cross-type recognition too, because a chained phase is not part of
-//! asymmetric's shared stack/family.
+//! **Pushing.** On `eq`, a value frame is pushed *only if the current top of
+//! stack is not already a key_value frame*. This single condition makes a
+//! flat, separator-less line like `a = 1 b = 2` resolve to one pair whose
+//! value runs to the line end (the second `eq` lands on top of the first
+//! pending value and is therefore value content, not a new key), while in
+//! structured input a fresh key only ever appears after the previous pair has
+//! been popped (by its `end` separator or by its container closing), so the
+//! top is a container, not a kv frame, and the new pair pushes normally.
+//!
+//! **Key anchor (`_kv_seg_start`).** A quoted key like `"a"` is consumed by
+//! the symmetric string rule *before* `eq` is reached, moving `text_start`
+//! past it; a `text_start`-bounded back-scan would yield an empty key.
+//! `_kv_seg_start` tracks the position just after the most recent
+//! key-introducing structural byte (a container open, or a top-level `end`
+//! separator) and survives that opaque consumption. The key is back-scanned
+//! from `eq` to the previous separator/tab, clamped to never cross
+//! `_kv_seg_start`. This handles both a flat space-separated key (the
+//! separator stops the scan) and a quoted JSON key (the anchor clamps it, so
+//! the key span is `"a"` — quotes included; the unquoted content lives in the
+//! string field, recoverable by interval containment).
+//!
+//! **Finalising the value.** Two points, both with the kv frame on top:
+//!
+//! - the `end` byte (`$kv_end`, e.g. `,`) arrives while the kv frame is on
+//!   top — handled by a pre-check near the loop head, since `end` is claimed
+//!   by no other rule;
+//! - the container the value lives directly inside closes — handled by the
+//!   drain at the head of the asymmetric close cascade, before the container
+//!   pops.
+//!
+//! **End of line.** A kv frame still open at line end finalises its value to
+//! the line end (so a flat `key = value` with no terminator still emits), and
+//! advances `text_start` past it so the unconditional end-of-line flush does
+//! not re-emit the value as plain text. Asymmetric and symmetric frames still
+//! open at line end are discarded (no span), as before.
+//!
+//! **Containment, not equality.** When a value *is* a container, its `value`
+//! span covers the whole `[1,2]` / `{...}` including the brackets, whereas the
+//! asymmetric field stores only the bracket *content* — so the container span
+//! is strictly *inside* the value span, not byte-equal. The projection
+//! ("which field's interval contains this one") still holds; it is
+//! containment, not equality.
+//!
+//! **Limitation.** Like `chained`, the kv value state is correct for a single
+//! key_value rule per grammar; the key anchor `_kv_seg_start` is shared.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_inline {
@@ -270,8 +244,7 @@ macro_rules! parse_inline {
         )
     };
 
-    // on_trigger(...) { ... } — new canonical name for the byte-trigger block.
-    // Replaces the old `memchr(…) { … }` syntax; semantics are identical.
+    // on_trigger(...) { ... }
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
                $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
      (hard_break: $($hb:tt)*)
@@ -317,7 +290,7 @@ macro_rules! parse_inline {
         $crate::parse_inline!(
             @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
             (hard_break: $($hb)*)
-            finders  = [$($fi)* { $($fn_b),+ }]
+            finders  = [$($fi)* { $($fn_b),+ $(, $kv_end)* }]
             sy_rules = [$($sr)* $( ($sb, $pi, $bal, { $( $sn => $sf ),* }) )*]
             as_rules = [$($ar)* $( ($ao, $ac, $abal, $api, { $( $an => $af ),* }) )*]
             ch_rules = [$($cr)* $( ($co, $cc, $tpi, $tbal, $uo, $uc, $upi, $ubal, $cp, $cpi => $ct, $cu, $ch_ty, $cf) )*]
@@ -379,30 +352,41 @@ macro_rules! parse_inline {
             };
         }
 
-        // Top-level flush invariant.
+        // ---- The unified inline stack ---------------------------------- //
         //
-        // Plain text is flushed to the fallback field `$tx` only while
-        // nothing is open — both stacks empty, no chained phase active:
-        //
-        //     if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
-        //         push_il!($tx, …);
-        //     }
-        //
-        // That guard is written out inline at each of the "flush before
-        // doing X" sites below rather than wrapped in a local
-        // `macro_rules!`: a nested `macro_rules!` does not capture the
-        // surrounding `let` bindings hygienically, so a `flush_tx!` helper
-        // referring to `sym_depth` / `asym_depth` / `ch_in_text` /
-        // `ch_in_url` fails to resolve them. The bindings only exist after
-        // they are declared a few lines down; the inline form sees them by
-        // ordinary lexical scope. The single exception is the final
-        // end-of-line flush, which is unconditional: an abandoned chained
-        // match never clears `ch_in_text` / `ch_in_url`, and gating the
-        // last flush on them would drop the trailing text instead of
-        // emitting it.
+        // One tagged frame, one array, one depth. `kind`:
+        //   0 = asymmetric : b0 = open byte, b1 = close byte, opaque,
+        //                    vidx = back-patch index, count = 1.
+        //   1 = symmetric  : b0 = b1 = the byte, count = run length,
+        //                    vidx = back-patch index, opaque = false.
+        //   2 = key_value  : ks/ke = finalised key span, vs = value start;
+        //                    b0/b1/count/vidx/opaque unused.
+        #[derive(Clone, Copy)]
+        struct _Frame {
+            kind: u8,
+            b0: u8,
+            b1: u8,
+            opaque: bool,
+            count: u32,
+            vidx: u32,
+            ks: u32,
+            ke: u32,
+            vs: u32,
+        }
+        let _frame0 = _Frame {
+            kind: 0, b0: 0, b1: 0, opaque: false,
+            count: 0, vidx: 0, ks: 0, ke: 0, vs: 0,
+        };
+        let mut frames: [_Frame; $maxn] = [_frame0; $maxn];
+        let mut fdepth: usize = 0;
+        // One-shot overflow counter for `balanced = true` asymmetric opens
+        // beyond the cap, so the real tracked frame's close isn't mistaken
+        // early.
+        let mut asym_overflow: u32 = 0u32;
+        // Anchor for the start of the current key segment (see kv docs).
+        let mut _kv_seg_start: usize = $start;
 
-        // Hard-break detection: trim trailing spaces / backslash before
-        // processing the rest of the line.
+        // Hard-break detection.
         let _hb = 'hb: {
             $(
                 if parse_end > $start {
@@ -419,70 +403,11 @@ macro_rules! parse_inline {
 
         let mut pos: usize = $start;
         let mut text_start: usize = $start;
-        // Pending symmetric match for the original, untouched
-        // parse_inside=true, balanced=false path: (byte, open_pos, open_count, depth).
+        // Single pending symmetric slot for parse_inside=true, balanced=false
+        // (the original mechanism, off the unified stack).
         let mut pending: Option<(u8, u32, u32, u32)> = None;
 
-        // Bounded stack for symmetric { parse_inside = true; balanced = true; … }.
-        // Frame = (byte, count, vec_idx_in_field).
-        let mut sym_frames: [(u8, u32, u32); $maxn] = [(0u8, 0u32, 0u32); $maxn];
-        let mut sym_depth: u8 = 0u8;
-
-        // Bounded stack for asymmetric rules with `balanced = true` and/or
-        // `parse_inside = true` — either flag alone is enough to put a rule
-        // on this stack; the two are independent:
-        //
-        // - `balanced` controls this *type's* effective depth cap: `$maxn`
-        //   (the grammar-wide cap) when true, or a hard `1` when false — a
-        //   second open of the same type while one is still pending is then
-        //   simply literal, exactly as the original `balanced = false`
-        //   memchr-based path always treated it.
-        // - `parse_inside` controls *opacity*, stored per-frame (`!$api` at
-        //   push time) rather than as one engine-wide flag, because
-        //   different types can be nested inside each other with different
-        //   settings — e.g. a transparent `{` containing an opaque `[`
-        //   must still go opaque only once execution is actually inside the
-        //   `[`, not for the `{`-only portion around it.
-        //
-        // Frame = (open_byte, close_byte, per_char_count, vec_idx_in_field,
-        // is_opaque). `per_char_count` is always `1` — see the run-splitting
-        // note below — stored anyway so the close / discard sides can
-        // re-derive which `$af` field to touch via the same
-        // `match … { $an => … }` arms the open side used: `$af` is bound
-        // inside that inner repetition, so every access to it must stay
-        // inside a matching `match`, never used bare.
-        let mut asym_frames: [(u8, u8, u32, u32, bool); $maxn] =
-            [(0u8, 0u8, 0u32, 0u32, false); $maxn];
-        let mut asym_depth: u8 = 0u8;
-        // One-shot overflow counter: extra same-type opens beyond the
-        // *effective* cap for that type, so the real tracked frame's close
-        // isn't mistaken early. Only ever increments when `balanced = true`
-        // for the type at the top of stack — `balanced = false` types cap
-        // at 1 and never accumulate overflow at all (a second same-type
-        // open is just literal, full stop, matching pre-nesting behaviour).
-        let mut asym_overflow: u32 = 0u32;
-
-        // Two-phase transparent state for `chained` rules where either
-        // component has `parse_inside = true`. The two components (text
-        // bracket, url paren) are *sequential*, never simultaneous — phase
-        // 2 only ever starts once phase 1 has fully closed — so a single
-        // slot per phase is enough, no bounded array. Closing phase 1 never
-        // commits anything by itself; it only enables attempting to open
-        // phase 2. Only phase 2 actually closing pushes the combined
-        // `$ch_ty` struct. This mirrors the original self-contained
-        // two-phase search's opacity exactly for components with
-        // `parse_inside = false` — the only behavioural change introduced
-        // by `parse_inside = true` is that other rules can now fire on the
-        // bytes being scanned over, with the same orphan-on-failure
-        // trade-off already accepted for `asymmetric`'s transparent mode.
-        // Independently of opacity, every component's own forward search
-        // (transparent or opaque) now skips an escaped candidate close.
-        //
-        // Scoped to a single active `chained` rule: if a grammar ever
-        // declared more than one and two were mid-scan at once, they would
-        // alias this same state. Every grammar seen so far declares exactly
-        // one, so this is accepted as a documented limitation rather than
-        // built out to a per-rule array.
+        // Two-phase transparent state for `chained` (off the stack).
         let mut ch_in_text: bool = false;
         let mut ch_text_opaque: bool = false;
         let mut ch_text_depth: i32 = 0;
@@ -497,8 +422,6 @@ macro_rules! parse_inline {
         let mut ch_saved_text_end: u32 = 0;
 
         loop {
-            // Find the next trigger byte using find_any, which dispatches to
-            // memchr/memchr2/memchr3 for 1-3 bytes and to SWAR/SIMD for ≥ 4.
             let found: Option<usize> = 'find: {
                 let mut best: Option<usize> = None;
                 $(
@@ -523,74 +446,70 @@ macro_rules! parse_inline {
             let mut count: u32 = 0;
             while pos < parse_end && src[pos] == delim { count += 1; pos += 1; }
 
-            // -------------------------------------------------------------- //
-            // asymmetric, balanced and/or transparent: tried first, for      //
-            // every trigger byte, before chained/symmetric/the legacy        //
-            // memchr-only asymmetric block below. A rule with both           //
-            // `balanced = false` and `parse_inside = false` never matches    //
-            // `$abal || $api` here, so this block does nothing for it and    //
-            // the legacy block further down is the only thing that ever      //
-            // runs for it (its own closing search now skips escaped          //
-            // candidates too — see `@is_escaped` — independent of opacity).  //
-            //                                                                //
-            // Gated by `!_chained_opaque_active`: an opaque chained phase    //
-            // (text or url component with `parse_inside = false`) isn't      //
-            // part of asymmetric's shared stack/family, so its opacity must  //
-            // suppress asymmetric's own cross-type recognition too — unlike  //
-            // asymmetric's own opaque frames, which deliberately do *not*    //
-            // suppress *other* asymmetric types (see the stack's own doc     //
-            // comment for why that exception is scoped to same-family        //
-            // nesting only).                                                 //
-            // -------------------------------------------------------------- //
+            // ---------------------------------------------------------- //
+            // key_value value terminator (`$kv_end`) at the value's own  //
+            // level: only fires when a kv frame is currently on top of    //
+            // the stack (we are back at the value's depth, nothing deeper  //
+            // open). `$kv_end` is claimed by no other rule, so this is a   //
+            // standalone pre-check. The value ends *before* the separator. //
+            // ---------------------------------------------------------- //
+            $(
+                if delim == $kv_end
+                    && fdepth > 0
+                    && frames[fdepth - 1].kind == 2
+                {
+                    let _f = frames[fdepth - 1];
+                    $state.$kv_f.push($kv_ty {
+                        $kv_kf: $crate::span::Span::new(_f.ks, _f.ke),
+                        $kv_vf: $crate::span::Span::new(_f.vs, delim_start),
+                    });
+                    fdepth -= 1;
+                    _kv_seg_start = pos;
+                    text_start = pos;
+                    continue;
+                }
+            )*
+
+            // ---------------------------------------------------------- //
+            // asymmetric (kind 0): unified open + unified close cascade.  //
+            // ---------------------------------------------------------- //
             let _chained_opaque_active =
                 (ch_in_text && ch_text_opaque) || (ch_in_url && ch_url_opaque);
 
             let mut _asym_bal_handled = false;
             if !_chained_opaque_active {
-                // --- open side: per-rule, structurally unchanged. ---
+                // --- open side ---
                 $(
                     if ($abal || $api) && delim == $ao {
                         if text_start < delim_start as usize {
-                            if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                            if fdepth == 0 && !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
                             };
                         }
-                        // Effective depth cap for *this* type: the grammar-wide
-                        // max_nest when it may self-nest, otherwise a hard 1.
                         let _cap: usize = if $abal { $maxn } else { 1usize };
-                        // Each byte of the run is its own open event — `{{`
-                        // is two opens, not one "count = 2" event. Field
-                        // routing is matched against the literal `1`, never
-                        // against the run's `count`, so an arm declared for
-                        // any other count is unreachable for asymmetric.
-                        // `text_start` advances *inside* the loop, one byte
-                        // at a time, and only past a byte that actually did
-                        // something (pushed a frame or counted as
-                        // overflow) — a byte that did neither (cap reached
-                        // for a different type, or no declared arm at all)
-                        // leaves `text_start` exactly where it was, so it is
-                        // picked up by a later flush instead of silently
-                        // vanishing between two consumed neighbours.
                         for _k in 0..count {
                             let _char_pos = delim_start + _k;
                             let mut _consumed = false;
-                            if (asym_depth as usize) < _cap {
+                            if fdepth < $maxn && fdepth < _cap {
                                 match 1u32 {
                                     $( $an => {
                                         let _content_start = _char_pos + 1;
                                         let _vidx = $state.$af.len() as u32;
                                         push_il!($af, $crate::span::Span::new(
                                             _content_start, _content_start));
-                                        asym_frames[asym_depth as usize] =
-                                            ($ao, $ac, 1u32, _vidx, !$api);
-                                        asym_depth += 1;
+                                        frames[fdepth] = _Frame {
+                                            kind: 0, b0: $ao, b1: $ac, opaque: !$api,
+                                            count: 1, vidx: _vidx, ks: 0, ke: 0, vs: 0,
+                                        };
+                                        fdepth += 1;
                                         asym_overflow = 0;
                                         _consumed = true;
                                     } )*
                                     _ => {}
                                 }
-                            } else if $abal && asym_depth > 0
-                                && asym_frames[asym_depth as usize - 1].0 == $ao
+                            } else if $abal && fdepth > 0
+                                && frames[fdepth - 1].kind == 0
+                                && frames[fdepth - 1].b0 == $ao
                             {
                                 asym_overflow += 1;
                                 _consumed = true;
@@ -598,41 +517,15 @@ macro_rules! parse_inline {
                             if _consumed {
                                 text_start = (_char_pos + 1) as usize;
                             }
-                            // Else literal: text_start stays put.
                         }
+                        // A container just opened: a key may begin right
+                        // after it. Anchor the next key segment past the run.
+                        _kv_seg_start = pos;
                         _asym_bal_handled = true;
                     }
                 )*
 
-                // --- close side: a single, unified pass — not one block
-                // per rule. ---
-                //
-                // Earlier versions of this dispatch lived *inside* the
-                // per-rule `$(...)*` above, as a parallel `else if delim ==
-                // $ac { … }` arm for each rule. That shape is unsound the
-                // moment two different `asymmetric` rules share a close
-                // byte: each rule's block is an *independent* top-level
-                // `if`, so when `delim` matches more than one rule's `$ac`,
-                // every matching rule's block runs in sequence — including
-                // any that ran *after* an earlier rule's block already
-                // popped the stack. The later block then sees the *new*
-                // top of stack (left behind by the earlier close) and, if
-                // that new top's open byte happens to belong to it, closes
-                // it too — collapsing two distinct frames on a single
-                // input byte instead of closing only the intended one.
-                //
-                // The fix: determine *once*, via a plain OR across every
-                // `$abal || $api` rule's `$ac`, whether `delim` is
-                // recognised as a close byte by anything at all — not
-                // which specific rule it belongs to. Then run exactly one
-                // `for _k in 0..count` pass that closes at most one frame
-                // per character, dispatching the field write by the
-                // *frame's own recorded open byte* (`_ob`), not by which
-                // rule's per-rule block happened to be checked first. This
-                // mirrors the already-correct end-of-line discard loop
-                // further below, which has always dispatched this way
-                // because it is a single standalone loop, never nested
-                // inside a per-rule iteration of itself.
+                // --- close side: single unified pass, with kv drain. ---
                 if !_asym_bal_handled {
                     let mut _asym_is_close_byte = false;
                     $( if ($abal || $api) && delim == $ac { _asym_is_close_byte = true; } )*
@@ -640,17 +533,42 @@ macro_rules! parse_inline {
                     if _asym_is_close_byte {
                         for _k in 0..count {
                             let _close_char_pos = delim_start + _k;
-                            if asym_depth > 0
-                                && asym_frames[asym_depth as usize - 1].1 == delim
+
+                            // If the frame directly below a top-of-stack
+                            // key_value frame is the container about to close,
+                            // the value ends here — commit it BEFORE the
+                            // container frame is popped, so LIFO order holds.
+                            // kv frames never stack directly (a container
+                            // always sits between two of them), so at most one
+                            // kv frame can be on top of its closing container.
+                            if fdepth >= 2
+                                && frames[fdepth - 1].kind == 2
+                                && frames[fdepth - 2].kind == 0
+                                && frames[fdepth - 2].b1 == delim
+                            {
+                                let _f = frames[fdepth - 1];
+                                $(
+                                    $state.$kv_f.push($kv_ty {
+                                        $kv_kf: $crate::span::Span::new(_f.ks, _f.ke),
+                                        $kv_vf: $crate::span::Span::new(_f.vs, _close_char_pos),
+                                    });
+                                )*
+                                fdepth -= 1;
+                            }
+
+                            if fdepth > 0
+                                && frames[fdepth - 1].kind == 0
+                                && frames[fdepth - 1].b1 == delim
                             {
                                 if asym_overflow > 0 {
                                     asym_overflow -= 1;
                                 } else {
-                                    let (_ob, _cb, _rc, _vidx, _op) =
-                                        asym_frames[asym_depth as usize - 1];
+                                    let _f = frames[fdepth - 1];
+                                    let _ob = _f.b0;
+                                    let _vidx = _f.vidx;
                                     $(
                                         if ($abal || $api) && _ob == $ao {
-                                            match _rc {
+                                            match 1u32 {
                                                 $( $an => {
                                                     $state.$af[_vidx as usize].end = _close_char_pos;
                                                 } )*
@@ -658,14 +576,11 @@ macro_rules! parse_inline {
                                             }
                                         }
                                     )*
-                                    asym_depth -= 1;
+                                    fdepth -= 1;
                                     asym_overflow = 0;
                                 }
                                 text_start = (_close_char_pos + 1) as usize;
                             }
-                            // A close character that doesn't match the
-                            // open top — empty stack, or a different type
-                            // on top — is literal; text_start stays put.
                         }
                         _asym_bal_handled = true;
                     }
@@ -675,33 +590,16 @@ macro_rules! parse_inline {
                 continue;
             }
 
-            let _asym_opaque_active =
-                asym_depth > 0 && asym_frames[asym_depth as usize - 1].4;
+            let _top_opaque_active =
+                fdepth > 0 && frames[fdepth - 1].kind == 0 && frames[fdepth - 1].opaque;
 
-            // -------------------------------------------------------------- //
-            // chained, transparent phases: a rule with *either* component's  //
-            // `parse_inside = true` uses this state-machine for *both*       //
-            // phases (so phase 1 → phase 2 hand-off never needs to switch     //
-            // mechanisms mid-match); each phase's own opacity is still        //
-            // tracked independently in `ch_text_opaque` / `ch_url_opaque`,    //
-            // resolved once at the moment that phase opens. A rule where      //
-            // *both* components are `parse_inside = false` never matches      //
-            // `$tpi || $upi` here, so this block does nothing for it and the  //
-            // legacy two-phase self-contained search further below is the    //
-            // only thing that ever runs for it (each component's own         //
-            // closing search now skips escaped candidates too).              //
-            //                                                                //
-            // Closing the text phase never commits anything by itself — it    //
-            // only attempts to open the url phase immediately. Only closing   //
-            // the url phase actually pushes the combined `$ch_ty` struct.     //
-            // If the byte right after the text close isn't `$uo`, the whole   //
-            // match is abandoned and the opening bracket plus everything      //
-            // scanned over is preserved as literal text — nothing committed.  //
-            // -------------------------------------------------------------- //
+            // ---------------------------------------------------------- //
+            // chained, transparent phases (off the stack).               //
+            // ---------------------------------------------------------- //
             let mut _chained_handled = false;
             $(
                 if ($tpi || $upi) && !ch_in_text && !ch_in_url
-                    && !_asym_opaque_active && delim == $co
+                    && !_top_opaque_active && delim == $co
                 {
                     let _is_prefix = delim_start > 0
                         && src[delim_start as usize - 1] == $cp
@@ -717,7 +615,7 @@ macro_rules! parse_inline {
                         delim_start as usize
                     };
                     if text_start < _real_start {
-                        if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                        if fdepth == 0 && !ch_in_text && !ch_in_url {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, _real_start as u32));
                         };
                     }
@@ -751,12 +649,8 @@ macro_rules! parse_inline {
                             text_start = pos;
                             _chained_handled = true;
                         } else {
-                            // No `(` right after `]` — abandon the match.
-                            // Preserve the opening bracket and everything
-                            // scanned over as literal text; nothing for
-                            // this chained rule is committed.
                             if (ch_real_start as usize) < pos {
-                                if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                if fdepth == 0 && !ch_in_text && !ch_in_url {
                                     push_il!($tx, $crate::span::Span::new(ch_real_start, pos as u32));
                                 };
                             }
@@ -773,16 +667,9 @@ macro_rules! parse_inline {
                         ch_url_depth -= 1;
                     } else {
                         let _cu_end = delim_start;
-                        // Cleared *before* the flush below: this flush is
-                        // for text before the whole chained match (mirrors
-                        // any other construct's own opening flush), not
-                        // content inside it — gating it on this match's
-                        // own `ch_in_url` would be self-referential and
-                        // wrongly suppress it. Only outer nesting
-                        // (sym_depth / asym_depth) is the right signal here.
                         ch_in_url = false;
                         if text_start < ch_real_start as usize {
-                            if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                            if fdepth == 0 && !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, ch_real_start));
                             };
                         }
@@ -800,16 +687,11 @@ macro_rules! parse_inline {
                 continue;
             }
 
-            if _asym_opaque_active || _chained_opaque_active {
-                // The innermost active context (an asymmetric frame, or a
-                // chained phase) is opaque — suppress everything else, same
-                // as the pre-existing behaviour. A *transparent* innermost
-                // context falls through instead, letting
-                // chained/symmetric/key_value fire normally on its content.
+            if _top_opaque_active || _chained_opaque_active {
                 continue;
             }
 
-            // --- chained (e.g. [text](url), ![img](url)) ---
+            // --- legacy chained (both components opaque) ---
             $(
                 if delim == $co {
                     let is_prefix = delim_start > 0
@@ -886,7 +768,7 @@ macro_rules! parse_inline {
                                     delim_start as usize
                                 };
                                 if text_start < real_start {
-                                    if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                    if fdepth == 0 && !ch_in_text && !ch_in_url {
                                         push_il!($tx, $crate::span::Span::new(
                                         text_start as u32, real_start as u32));
                                     };
@@ -906,19 +788,19 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- symmetric (e.g. *italic*, **bold**, `code`) ---
+            // --- symmetric (kind 1 stack, or legacy pending / greedy) ---
             $(
                 if delim == $sb {
                     if $pi {
                         if $bal {
-                            // Bounded stack — replaces the single pending
-                            // slot for this rule's occurrences only.
-                            let _matches_top = sym_depth > 0
-                                && sym_frames[sym_depth as usize - 1].0 == $sb
-                                && sym_frames[sym_depth as usize - 1].1 == count;
+                            let _matches_top = fdepth > 0
+                                && frames[fdepth - 1].kind == 1
+                                && frames[fdepth - 1].b0 == $sb
+                                && frames[fdepth - 1].count == count;
 
                             if _matches_top {
-                                let (_b, _c, _vidx) = sym_frames[sym_depth as usize - 1];
+                                let _vidx = frames[fdepth - 1].vidx;
+                                let _c = frames[fdepth - 1].count;
                                 let mut _closed = false;
                                 match _c {
                                     $( $sn => {
@@ -928,37 +810,40 @@ macro_rules! parse_inline {
                                     _ => {}
                                 }
                                 if _closed {
-                                    sym_depth -= 1;
+                                    fdepth -= 1;
                                     text_start = pos;
                                     continue;
                                 } else {
                                     text_start = delim_start as usize;
                                     continue;
                                 }
-                            } else if (sym_depth as usize) < $maxn {
+                            } else if fdepth < $maxn {
                                 let mut _pushed = false;
                                 match count {
                                     $( $sn => {
                                         if text_start < delim_start as usize {
-                                            if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                            if fdepth == 0 && !ch_in_text && !ch_in_url {
                                                 push_il!($tx, $crate::span::Span::new(
                                                 text_start as u32, delim_start));
                                             };
                                         }
                                         let _vidx = $state.$sf.len() as u32;
                                         push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
-                                        sym_frames[sym_depth as usize] = ($sb, count, _vidx);
+                                        frames[fdepth] = _Frame {
+                                            kind: 1, b0: $sb, b1: $sb, opaque: false,
+                                            count, vidx: _vidx, ks: 0, ke: 0, vs: 0,
+                                        };
                                         _pushed = true;
                                     } )*
                                     _ => {}
                                 }
                                 if _pushed {
-                                    sym_depth += 1;
+                                    fdepth += 1;
                                     text_start = pos;
                                     continue;
                                 } else {
                                     if text_start < delim_start as usize {
-                                        if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                        if fdepth == 0 && !ch_in_text && !ch_in_url {
                                             push_il!($tx, $crate::span::Span::new(
                                             text_start as u32, delim_start));
                                         };
@@ -967,9 +852,8 @@ macro_rules! parse_inline {
                                     continue;
                                 }
                             } else {
-                                // Beyond cap
                                 if text_start < delim_start as usize {
-                                    if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                    if fdepth == 0 && !ch_in_text && !ch_in_url {
                                         push_il!($tx, $crate::span::Span::new(
                                         text_start as u32, delim_start));
                                     };
@@ -986,7 +870,7 @@ macro_rules! parse_inline {
                                         continue;
                                     }
                                     if (text_start as u32) < op {
-                                        if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                        if fdepth == 0 && !ch_in_text && !ch_in_url {
                                             push_il!($tx, $crate::span::Span::new(text_start as u32, op));
                                         };
                                     }
@@ -1055,7 +939,7 @@ macro_rules! parse_inline {
                         };
                         if let Some((p, end)) = close {
                             if text_start < delim_start as usize {
-                                if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                                if fdepth == 0 && !ch_in_text && !ch_in_url {
                                     push_il!($tx, $crate::span::Span::new(
                                     text_start as u32, delim_start));
                                 };
@@ -1070,6 +954,7 @@ macro_rules! parse_inline {
                 }
             )*
 
+            // --- legacy asymmetric (balanced=false, parse_inside=false) ---
             $(
                 if delim == $ao {
                     let cs = pos;
@@ -1109,7 +994,7 @@ macro_rules! parse_inline {
                     };
                     if let Some(cp) = close_pos {
                         if text_start < delim_start as usize {
-                            if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
+                            if fdepth == 0 && !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(
                                 text_start as u32, delim_start));
                             };
@@ -1123,92 +1008,107 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- key_value (e.g. key = value) ---
+            // --- key_value (kind 2): key recorded ascending, value pushed ---
             $(
                 if delim == $kv_eq {
-                    let mut key_end = delim_start as usize;
-                    if $kv_allow {
-                        while key_end > text_start && src[key_end - 1] == $sep {
-                            key_end -= 1;
+                    // Only open a new value frame if the top of stack is not
+                    // already a kv frame. If it is, this `eq` is content of
+                    // the still-open value (flat, separator-less multi-eq).
+                    if !(fdepth > 0 && frames[fdepth - 1].kind == 2) {
+                        // Key: back-scan from `eq`, clamped to _kv_seg_start.
+                        let mut key_end = delim_start as usize;
+                        if $kv_allow {
+                            while key_end > _kv_seg_start && src[key_end - 1] == $sep {
+                                key_end -= 1;
+                            }
                         }
-                    }
-                    let mut ks = key_end;
-                    while ks > text_start
-                        && src[ks - 1] != $sep
-                        && src[ks - 1] != $tab
-                    {
-                        ks -= 1;
-                    }
-                    let mut val_start = pos;
-                    if $kv_allow {
-                        while val_start < parse_end && src[val_start] == $sep {
-                            val_start += 1;
+                        let mut ks = key_end;
+                        while ks > _kv_seg_start
+                            && src[ks - 1] != $sep
+                            && src[ks - 1] != $tab
+                        {
+                            ks -= 1;
                         }
+                        let mut val_start = pos;
+                        if $kv_allow {
+                            while val_start < parse_end && src[val_start] == $sep {
+                                val_start += 1;
+                            }
+                        }
+                        if text_start < ks {
+                            if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                push_il!($tx, $crate::span::Span::new(text_start as u32, ks as u32));
+                            };
+                        }
+                        if fdepth < $maxn {
+                            frames[fdepth] = _Frame {
+                                kind: 2, b0: 0, b1: $kv_end, opaque: false,
+                                count: 0, vidx: 0,
+                                ks: ks as u32, ke: key_end as u32, vs: val_start as u32,
+                            };
+                            fdepth += 1;
+                        }
+                        // else: depth cap reached — pair untracked, `eq`
+                        // absorbed.
+                        text_start = pos;
                     }
-                    let val_end = $crate::memchr::memchr($kv_end, &src[val_start..parse_end])
-                        .map(|i| val_start + i)
-                        .unwrap_or(parse_end);
-                    let _adv = if val_end < parse_end { 1usize } else { 0usize };
-                    if text_start < ks {
-                        if sym_depth == 0 && asym_depth == 0 && !ch_in_text && !ch_in_url {
-                            push_il!($tx, $crate::span::Span::new(text_start as u32, ks as u32));
-                        };
-                    }
-                    $state.$kv_f.push($kv_ty {
-                        $kv_kf: $crate::span::Span::new(ks as u32,        key_end as u32),
-                        $kv_vf: $crate::span::Span::new(val_start as u32, val_end  as u32),
-                    });
-                    pos        = val_end + _adv;
-                    text_start = pos;
                     continue;
                 }
             )*
         }
 
         // ------------------------------------------------------------------ //
-        // Discard any frame still open at line end on either stack — remove  //
-        // its placeholder rather than leave a dangling, unpatched span.      //
+        // End of line: drain the unified stack, top → down.                  //
         //                                                                    //
-        // Asymmetric uses `remove`, not `truncate`: the same type can        //
-        // self-nest (`{ { } }`), so a properly-closed inner frame can sit at //
-        // a *higher* vec index than a still-open outer one — e.g. `{a {b} c` //
-        // closes "b" (pushed second) before line end while the outer `{`     //
-        // never finds its `}`. `truncate(outer_vidx)` would also delete the  //
-        // already-finalised "b" entry sitting after it. `remove(vidx)`       //
-        // deletes only that one placeholder; processing innermost-first      //
-        // (this loop's order) means we always remove the highest still-open  //
-        // index first, so no not-yet-processed vidx is invalidated by an     //
-        // earlier removal shifting things underneath it.                     //
-        //                                                                    //
-        // Symmetric keeps `truncate`: an identical (byte, count) cannot      //
-        // self-nest (occurrences of the same key always toggle, never open a //
-        // second frame while one is pending — see the symmetric dispatch     //
-        // above), so each field holds at most one pending placeholder at any //
-        // time, and it is always the last entry in that field's Vec.         //
+        //  - key_value frame  : finalise its value to the line end (so a flat //
+        //    `key = value` with no terminator still emits) and push the text  //
+        //    cursor past it, so the unconditional flush below does not        //
+        //    re-emit the value as plain text.                                 //
+        //  - asymmetric frame : discard via `Vec::remove(vidx)` — the same    //
+        //    type can self-nest, so a closed inner entry can sit at a higher  //
+        //    index than a still-open outer one; processing innermost-first    //
+        //    removes the highest index first.                                 //
+        //  - symmetric frame  : discard via `truncate(vidx)` — an identical   //
+        //    (byte, count) never self-nests, so each field has at most one    //
+        //    pending placeholder, always last.                                //
         // ------------------------------------------------------------------ //
-        while asym_depth > 0 {
-            asym_depth -= 1;
-            let (_ob, _ocb, _orc, _ovidx, _oop) = asym_frames[asym_depth as usize];
-            $(
-                if ($abal || $api) && $ao == _ob {
-                    match _orc {
-                        $( $an => { $state.$af.remove(_ovidx as usize); } )*
-                        _ => {}
-                    }
+        while fdepth > 0 {
+            fdepth -= 1;
+            let _f = frames[fdepth];
+            if _f.kind == 2 {
+                $(
+                    $state.$kv_f.push($kv_ty {
+                        $kv_kf: $crate::span::Span::new(_f.ks, _f.ke),
+                        $kv_vf: $crate::span::Span::new(_f.vs, parse_end as u32),
+                    });
+                )*
+                if parse_end > text_start {
+                    text_start = parse_end;
                 }
-            )*
-        }
-        while sym_depth > 0 {
-            sym_depth -= 1;
-            let (_sob, _soc, _svidx) = sym_frames[sym_depth as usize];
-            $(
-                if $bal && $pi && $sb == _sob {
-                    match _soc {
-                        $( $sn => { $state.$sf.truncate(_svidx as usize); } )*
-                        _ => {}
+            } else if _f.kind == 0 {
+                let _ob = _f.b0;
+                let _vidx = _f.vidx;
+                $(
+                    if ($abal || $api) && $ao == _ob {
+                        match 1u32 {
+                            $( $an => { $state.$af.remove(_vidx as usize); } )*
+                            _ => {}
+                        }
                     }
-                }
-            )*
+                )*
+            } else {
+                let _sob = _f.b0;
+                let _soc = _f.count;
+                let _svidx = _f.vidx;
+                $(
+                    if $bal && $pi && $sb == _sob {
+                        match _soc {
+                            $( $sn => { $state.$sf.truncate(_svidx as usize); } )*
+                            _ => {}
+                        }
+                    }
+                )*
+            }
         }
 
         // Flush any remaining plain text before the line end.
@@ -1225,10 +1125,6 @@ macro_rules! parse_inline {
 
     // ------------------------------------------------------------------ //
     // @do_find: single trigger-set search via find_any.                  //
-    //                                                                    //
-    // Calls find_any with an array literal of the trigger bytes.         //
-    // find_any dispatches internally:                                    //
-    //   N=1 → memchr, N=2 → memchr2, N=3 → memchr3, N≥4 → SWAR/SIMD.     //
     // ------------------------------------------------------------------ //
     (@do_find $($b:literal),+ ; $src:ident, $pos:ident, $pe:ident, $best:ident) => {
         if let Some(r) = $crate::swar::find_any([$($b),+], &$src[$pos..$pe]) {
@@ -1238,24 +1134,6 @@ macro_rules! parse_inline {
 
     // ------------------------------------------------------------------ //
     // @is_escaped: shared escape-check for a single candidate position.  //
-    //                                                                    //
-    // Counts consecutive `$esc` bytes immediately preceding `$pos`; an   //
-    // odd count means `$pos` is escaped. This is the exact check the     //
-    // outer per-character dispatch loop already applies to every trigger //
-    // byte it finds — factored out here so every *internal* forward      //
-    // search (symmetric greedy mode, the legacy asymmetric memchr/depth   //
-    // search, and chained's legacy two-phase search) can apply the same   //
-    // check to a *candidate closing byte* found mid-search, not just to   //
-    // the first trigger byte the outer loop happens to land on.           //
-    //                                                                    //
-    // Escape-awareness and opacity (`parse_inside`) are independent axes: //
-    // a rule can fully ignore its content for other rules' purposes       //
-    // while still correctly skipping an escaped occurrence of its own     //
-    // closing delimiter. Before this arm existed, only paths reached       //
-    // through the outer loop (e.g. `parse_inside = true` pending mode)     //
-    // ever saw this check; every internal raw forward search bypassed it   //
-    // entirely, since it never goes through the outer loop's own escape    //
-    // check at all.                                                        //
     // ------------------------------------------------------------------ //
     (@is_escaped $src:ident, $pos:expr, $start:expr, $esc:literal) => {{
         let _p = $pos;

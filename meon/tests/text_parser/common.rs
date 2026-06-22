@@ -293,3 +293,24 @@ macro_rules! run_chained_balanced {
         st
     }};
 }
+
+macro_rules! run_inline_kv_json {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let consumed = meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            on_trigger(b'{', b'}', b'[', b']', b'"', b':') {
+                symmetric b'"' { parse_inside = false; balanced = false; _ => codes }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+                asymmetric b'[', b']' { balanced = true; parse_inside = true; 1 => autolinks }
+                key_value: KeyValue {
+                    eq = b':'; allow_sep = true; end = b','; // ',' auto-added to triggers
+                    key => key, value => value,
+                } => key_values
+            }
+        );
+        (st, consumed)
+    }};
+}

@@ -2374,3 +2374,126 @@ fn escape_close_10_span_bounds_sane_across_fixed_paths() {
         st3.links.iter().flat_map(|l| [l.text, l.url]).collect();
     len_check(src3, &link_spans);
 }
+
+// 01. quoted key + scalar value; key span includes quotes, object content excludes braces
+#[test]
+fn kvn_01_simple_pair() {
+    let src = br#"{"a":1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+    assert_eq!(txt(src, st.objects[0]), r#""a":1"#);
+}
+
+// 02. two pairs at one level, separated by the auto-trigger comma
+#[test]
+fn kvn_02_two_pairs() {
+    let src = br#"{"a":1,"b":2}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+    assert_eq!(txt(src, st.key_values[1].key), r#""b""#);
+    assert_eq!(txt(src, st.key_values[1].value), "2");
+}
+
+// 03. value is an array: value span includes brackets, array span is its content (containment)
+#[test]
+fn kvn_03_array_value_containment() {
+    let src = br#"{"a":[1,2]}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].value), "[1,2]");
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), "1,2");
+    let v = st.key_values[0].value;
+    let a = st.autolinks[0];
+    assert!(v.start <= a.start && a.end <= v.end); // array interval inside value interval
+}
+
+// 04. comma inside the array does NOT terminate the outer value (depth-aware)
+#[test]
+fn kvn_04_inner_comma_not_terminator() {
+    let src = br#"{"a":[1,2],"b":3}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(txt(src, st.key_values[0].value), "[1,2]");
+    assert_eq!(txt(src, st.key_values[1].value), "3");
+}
+
+// 05. nested object value; LIFO cascade on `}}` finalises inner then outer
+#[test]
+fn kvn_05_nested_object_value() {
+    let src = br#"{"a":{"b":1}}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    // inner pushed later, popped first on the first '}'
+    assert_eq!(txt(src, st.key_values[0].key), r#""b""#);
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+    assert_eq!(txt(src, st.key_values[1].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[1].value), r#"{"b":1}"#);
+}
+
+// 06. string value with a `:` and `,` inside is opaque — not seen as eq/end
+#[test]
+fn kvn_06_string_value_opaque() {
+    let src = br#"{"a":"x:y,z"}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].value), r#""x:y,z""#);
+}
+
+// 07. key anchor after a comma resolves the next quoted key correctly
+#[test]
+fn kvn_07_key_anchor_after_comma() {
+    let src = br#"{"aa":1,"bb":2}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(txt(src, st.key_values[1].key), r#""bb""#);
+}
+
+// 08. spaces around ':' trimmed from key and value
+#[test]
+fn kvn_08_spaces_trimmed() {
+    let src = br#"{ "a" : 1 ,"b":2}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[0].value), "1 "); // trailing space before ',' kept (legacy semantics)
+}
+
+// 09. unclosed object: kv finalises its value to line end, object emits no span
+#[test]
+fn kvn_09_unclosed_object_lenient() {
+    let src = br#"{"a":1"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+    assert!(st.objects.is_empty());
+}
+
+// 10. depth budget: a pair nested one object deep needs room for obj+kv+obj+kv
+#[test]
+fn kvn_10_depth_budget() {
+    let src = br#"{"a":{"b":1}}"#;
+    let (st_lo, _) = run_inline_kv_json!(src, 3); // too shallow: inner pair untracked
+    let (st_hi, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st_hi.key_values.len(), 2);
+    assert!(st_lo.key_values.len() < 2); // documents the shared-budget consequence
+}
+
+// 11. empty value before a comma
+#[test]
+fn kvn_11_empty_value() {
+    let src = br#"{"a":,"b":2}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(txt(src, st.key_values[0].value), "");
+}
+
+// 12. multiple independent objects on one line
+#[test]
+fn kvn_12_two_objects() {
+    let src = br#"{"a":1} {"b":2}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(st.objects.len(), 2);
+}
