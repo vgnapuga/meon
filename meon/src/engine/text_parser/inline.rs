@@ -2,41 +2,47 @@
 //!
 //! # Overview
 //!
-//! `parse_inline!` drives a single-pass scan over one logical line of source
-//! text and emits spans for every inline element it recognises: emphasis,
-//! code spans, links, images, autolinks, key-value pairs and hard breaks.
+//! `parse_inline!` drives a single-pass scan over one *run* of source text —
+//! either a single line (mid-line continuations after a Line/Block match) or
+//! a whole multi-line fallthrough span handed to it as one call by
+//! `parse_text!` (see its docs for the run-accumulation mechanism) — and
+//! emits spans for every inline element it recognises: emphasis, code spans,
+//! links, images, autolinks, key-value pairs and hard breaks.
 //!
 //! It is invoked by `parse_text!` whenever a non-block byte is found on the
 //! current line, and is not meant to be called by users directly.
 //!
 //! # Grammar integration
 //!
-//! The macro consumes the `inline { ... }` section of a `define_parser!`
+//! The macro consumes the `inline { … }` section of a `define_parser!`
 //! grammar after `strip` has removed the `=> field [N]` annotations.  The
 //! entry point is:
 //!
 //! ```text
 //! parse_inline!(state, src, start, line_end, fallback_field,
-//!               merge_flag, escape_byte, sep_byte, tab_byte, max_nest ; <rules>)
+//!               merge_flag, escape_byte, sep_byte, tab_byte, eol_byte,
+//!               max_nest ; <rules>)
 //! ```
 //!
 //! Rules inside the `inline` section are:
 //!
 //! - `merge_simple = true | false;`  — whether adjacent text spans are merged.
 //! - `fallback => field;`            — field that receives plain-text spans.
-//! - `hard_break(esc, sp, min) => field;` — trailing hard-break detection.
-//! - `on_trigger(b1, ...) { <inline rules> }` — byte-triggered inline block.
+//! - `hard_break(esc, sp, min) => field;` — hard-break detection, checked at
+//!   the scanned run's end and, when the run spans multiple lines, at every
+//!   internal `\n` inside it too (see the multi-line section below).
+//! - `on_trigger(b1, …) { <inline rules> }` — byte-triggered inline block.
 //!
 //! # `on_trigger` dispatch
 //!
-//! `on_trigger(b1, b2, ...)` declares a set of *trigger bytes*. When the
+//! `on_trigger(b1, b2, …)` declares a set of *trigger bytes*. When the
 //! scanner finds any of those bytes in the current line it enters the block
 //! and tries each rule in order:
 //!
-//! - `symmetric byte { ... }` — paired delimiters with the same open/close byte.
-//! - `asymmetric open, close { ... }` — paired delimiters with different bytes.
-//! - `chained: Type { ... }` — two-part delimiters (e.g. `[text](url)`).
-//! - `key_value: Type { ... }` — `key = value` pairs.
+//! - `symmetric byte { … }` — paired delimiters with the same open/close byte.
+//! - `asymmetric open, close { … }` — paired delimiters with different bytes.
+//! - `chained: Type { … }` — two-part delimiters (e.g. `[text](url)`).
+//! - `key_value: Type { … }` — `key = value` pairs.
 //!
 //! The trigger set is searched with [`crate::swar::find_any`], which
 //! dispatches to `memchr` / `memchr2` / `memchr3` for 1–3 bytes and to the
@@ -49,9 +55,9 @@
 //! depth cap (forwarded from `parse_text!`; defaults to `1`). A stack entry
 //! is a `_Frame` tagged by `kind`:
 //!
-//! - `kind = 0` — an **asymmetric** open (`{` `[` `<`...): records its open and
+//! - `kind = 0` — an **asymmetric** open (`{` `[` `<`…): records its open and
 //!   close byte, opacity, and the back-patch index of its placeholder span.
-//! - `kind = 1` — a **symmetric** balanced delimiter (`*` `**` ...): records the
+//! - `kind = 1` — a **symmetric** balanced delimiter (`*` `**` …): records the
 //!   byte, the run length (which picks the construct), and the back-patch
 //!   index.
 //! - `kind = 2` — a **key_value** value-phase: records the (already finalised)
@@ -83,7 +89,7 @@
 //! claims it. Suppressing the flush there loses nothing: those bytes stay
 //! covered by whichever enclosing span eventually closes around them.
 //!
-//! ## `asymmetric { balanced = ...; parse_inside = ...; ... }` (`kind = 0`)
+//! ## `asymmetric { balanced = …; parse_inside = …; … }` (`kind = 0`)
 //!
 //! `balanced` and `parse_inside` are independent and both gate stack
 //! eligibility — a rule needs only *one* of them `true` to be on the stack:
@@ -123,7 +129,7 @@
 //! `end` separator) must be listed in the same `on_trigger(...)` set, since
 //! they are now found by the same scan that finds the opens.
 //!
-//! ## `symmetric { parse_inside = true; balanced = true; ... }` (`kind = 1`)
+//! ## `symmetric { parse_inside = true; balanced = true; … }` (`kind = 1`)
 //!
 //! `parse_inside = true, balanced = false` (single pending slot) is
 //! **unchanged** — it keeps its original `pending` slot, off the stack.
@@ -139,13 +145,52 @@
 //! resolves as two adjacent runs. The run length picks the construct, so it
 //! is matched as-is, never split byte-by-byte (unlike asymmetric).
 //!
-//! ## `chained: T { ... }` (no stack)
+//! ## `chained: T { … }` (no stack)
 //!
 //! Unchanged from the pre-unification design: both-opaque components run the
 //! self-contained two-phase search; a transparent component runs the
 //! two-phase transparent state machine. Sequential phases, single slot each.
 //!
-//! ## `key_value: T { ... }` (`kind = 2`) — always nested
+//! ## Internal `\n` within a multi-line run (no stack, no frame)
+//!
+//! `parse_text!` may hand `parse_inline!` a span covering several source
+//! lines at once (a multi-line fallthrough run — see `parse_text!`'s own
+//! docs for when and why). Inside such a span, every `\n` is just another
+//! byte; by default it is never specially recognised at all and is scanned
+//! over exactly like a space or a letter, at near-zero extra cost (it is one
+//! more byte in the unified `find_any` target set, nothing more), which is
+//! the entire reason a grammar like JSON's stack survives the line break
+//! without any change to its own rules.
+//!
+//! `$eol` is always part of the single unified trigger search (see the
+//! execution-phase find loop), regardless of whether `hard_break` is
+//! declared — there it serves only to bound each iteration to the next
+//! significant byte, so a long trigger-free run does not scan to the run's
+//! end every iteration. Whether landing on a `\n` *does* anything is what
+//! `hard_break` gates. When a grammar declares it, an internal `\n` is
+//! checked the same way the run's own end is: look backward for the escape
+//! byte or `>= min` separator bytes, trim them out of the flushed plain-text
+//! span, and emit a zero-length hard-break span at the trim point if matched.
+//! This check runs *before* the generic escape-skip logic further below — a
+//! backslash immediately before `\n` is the hard-break-via-backslash signal
+//! here, consumed by this check itself, not an "escaped eol" in the generic
+//! delimiter sense that escape-skip exists for. Either way the scan simply
+//! `continue`s afterwards: the unified stack is never drained by an internal
+//! `\n`, only by the run's true end. When `hard_break` is *not* declared,
+//! landing on a `\n` falls through every rule arm untouched (no arm triggers
+//! on it) and it is scanned over like any other byte.
+//!
+//! This makes the pre-loop, once-only end-of-run hard-break check further
+//! down partially redundant for a multi-line run's *last* internal `\n`
+//! (it gets caught here first, on its way past) — harmlessly so, since by
+//! the time the end-of-run check runs, the byte immediately before `parse_end`
+//! is that very `\n`, which never matches `$hb_esc` or `$sp`. The end-of-run
+//! check remains the only mechanism for the genuinely line-break-free cases:
+//! true end of input with no trailing newline, and the single-line-bounded
+//! calls (mid-line continuations), where no internal `\n` is ever in range to
+//! be found by the search above in the first place.
+//!
+//! ## `key_value: T { … }` (`kind = 2`) — always nested
 //!
 //! A `key_value` rule splits, around its `eq` trigger byte, into a key (to
 //! the left) and a value (to the right). Both sides are bounded by *foreign*
@@ -184,14 +229,25 @@
 //!   drain at the head of the asymmetric close cascade, before the container
 //!   pops.
 //!
-//! **End of line.** A kv frame still open at line end finalises its value to
-//! the line end (so a flat `key = value` with no terminator still emits), and
-//! advances `text_start` past it so the unconditional end-of-line flush does
-//! not re-emit the value as plain text. Asymmetric and symmetric frames still
-//! open at line end are discarded (no span), as before.
+//! When the value's container is a *transparent asymmetric* container that is
+//! not itself wrapped in a kv pair (e.g. a bare top-level array), an `$kv_end`
+//! arriving with no kv frame on top is simply unmatched by any rule here and
+//! falls through untouched — it is ordinary content as far as the stack is
+//! concerned. Splitting such a container's elements is a concern for whatever
+//! reads the container's span afterward, not for this scan.
+//!
+//! **End of run.** A kv frame still open when the scanned span ends finalises
+//! its value to `parse_end` (so a flat `key = value` with no terminator still
+//! emits), and advances `text_start` past it so the unconditional final flush
+//! does not re-emit the value as plain text. Asymmetric and symmetric frames
+//! still open at that point are discarded (no span), as before. Since a run
+//! can now span multiple lines (see `parse_text!`'s docs), this is no longer
+//! "end of line" in the literal sense — a key_value pair, like any other
+//! stack-tracked construct, survives every internal `\n` inside the run and
+//! is only ever drained here at the run's true end.
 //!
 //! **Containment, not equality.** When a value *is* a container, its `value`
-//! span covers the whole `[1,2]` / `{...}` including the brackets, whereas the
+//! span covers the whole `[1,2]` / `{…}` including the brackets, whereas the
 //! asymmetric field stores only the bracket *content* — so the container span
 //! is strictly *inside* the value span, not byte-equal. The projection
 //! ("which field's interval contains this one") still holds; it is
@@ -203,10 +259,10 @@
 #[macro_export]
 macro_rules! parse_inline {
     ($state:ident, $src:ident, $start:expr, $le:expr,
-     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal ;
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal ;
      $($tail:tt)*) => {
         $crate::parse_inline!(
-            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -223,7 +279,7 @@ macro_rules! parse_inline {
 
     // hard_break rule
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
      (hard_break: )
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -233,7 +289,7 @@ macro_rules! parse_inline {
      tail = [hard_break($hb_esc:literal, $sp:literal, $sp_min:literal) => $hb:ident ; $($rest:tt)*]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
             (hard_break: $hb_esc, $sp, $sp_min => $hb)
             finders  = [$($fi)*]
             sy_rules = [$($sr)*]
@@ -246,7 +302,7 @@ macro_rules! parse_inline {
 
     // on_trigger(...) { ... }
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
      (hard_break: $($hb:tt)*)
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -288,7 +344,7 @@ macro_rules! parse_inline {
      ]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
             (hard_break: $($hb)*)
             finders  = [$($fi)* { $($fn_b),+ $(, $kv_end)* }]
             sy_rules = [$($sr)* $( ($sb, $pi, $bal, { $( $sn => $sf ),* }) )*]
@@ -302,7 +358,7 @@ macro_rules! parse_inline {
     // Transition: all sections consumed — flatten buckets and enter @body.
     (
         @collect ($st:ident, $src:ident, $s:expr, $le:expr,
-                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
+                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
         (hard_break: $($hb:tt)*)
         finders  = [$($fi:tt)*]
         sy_rules = [$( ($sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* }) )*]
@@ -314,7 +370,7 @@ macro_rules! parse_inline {
                         $kv_kf:ident, $kv_vf:ident, $kv_ty:ident, $kv_f:ident) )*]
         tail = []
     ) => {
-        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $maxn)
+        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
             (hard_break: $($hb)*)
             finders  = [$($fi)*]
             sy_rules = [$( $sb, $pi, $bal, { $( $sn => $sf ),* } )*]
@@ -326,12 +382,12 @@ macro_rules! parse_inline {
     };
 
     // ------------------------------------------------------------------ //
-    // Execution phase: the actual single-pass scan over one line.        //
+    // Execution phase: the actual single-pass scan over one run.         //
     // ------------------------------------------------------------------ //
 
     (
         @body ($state:ident, $src:ident, $start:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $maxn:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
         (hard_break: $($hb_esc:literal, $sp:literal, $sp_min:literal => $hb:ident)*)
         finders  = [$( { $($fn_b:literal),+ } )*]
         sy_rules = [$( $sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* } )*]
@@ -422,16 +478,102 @@ macro_rules! parse_inline {
         let mut ch_saved_text_end: u32 = 0;
 
         loop {
-            let found: Option<usize> = 'find: {
-                let mut best: Option<usize> = None;
-                $(
-                    $crate::parse_inline!(@do_find $($fn_b),+ ; src, pos, parse_end, best);
-                )*
-                break 'find best;
-            };
+            // ---- Single unified trigger search -------------------------- //
+            //
+            // ONE `find_any` over the union of every `on_trigger` group's
+            // bytes *plus* `$eol`, scanning `[pos, parse_end)` directly.
+            //
+            // Flattening `[$( $($fn_b),+ ),*]` concatenates all groups into a
+            // single target array (duplicate bytes are harmless — `find_any`
+            // only asks "is this byte any target"). `$eol` is folded into the
+            // same array, so the one scan also stops at the nearest line
+            // break: this is what bounds each iteration to "until the next
+            // significant byte" — `find_any` short-circuits at the first hit,
+            // so on a long trigger-free run it returns at that line's own
+            // `\n` instead of walking to `parse_end`. No separate eol memchr,
+            // no cached `_next_eol`, no `_scan_end` reconciliation: the bound
+            // and the search are the same single pass. (`find_any`'s N grows
+            // by one for the `\n`; for typical sets this stays within the
+            // same memchr/SWAR tier.)
+            //
+            // When the landed-on byte *is* `\n`, the handling below decides
+            // what it means: a hard-break check (if declared), the kv
+            // deferral guard, or — for a grammar that gives `\n` no special
+            // role at all, like JSON — falling through every rule arm
+            // untouched (no arm triggers on it) so it is simply scanned over,
+            // `pos` having already advanced past its run. Either way `pos`
+            // strictly increases, so the loop still terminates in O(n).
+            let found: Option<usize> =
+                $crate::swar::find_any([$eol $(, $($fn_b),+)*], &src[pos..parse_end])
+                    .map(|r| pos + r);
 
-            let Some(rel) = found else { break };
-            pos += rel;
+            let Some(_hit) = found else { break };
+            pos = _hit;
+
+            // -------------------------------------------------------------- //
+            // Internal eol within a multi-line run. This whole block is a
+            // `$(...)*` repetition over the (0-or-1) hard_break rule, so it
+            // exists at all only when hard_break is declared; without it the
+            // `\n` the unified search just landed on falls straight through
+            // to the generic dispatch below and is scanned over like any
+            // other unmatched byte. Checked BEFORE the generic escape-skip
+            // below: a preceding backslash here is the hard-break-via-
+            // backslash signal itself ($hb_esc), to be consumed by THIS
+            // check, not treated as "this eol is escaped" by the generic
+            // delimiter-escaping rule meant for other bytes. Mirrors the
+            // up-front end-of-run check, just triggered per-occurrence instead
+            // of once: trims trailing spaces/escape, emits the hard-break span
+            // if matched, flushes pending plain text up to the trim point
+            // (subject to the same stack-emptiness guard as every other flush
+            // here), then continues the SAME scan — the unified stack is never
+            // drained by this. The final internal eol of a run (immediately
+            // before `parse_end`) is also found and handled right here; the up-
+            // front check further below then sees an eol byte at `parse_end - 1`,
+            // never matches, and is a no-op for this case — it remains necessary for
+            // the true-EOF-without-trailing-newline case and for the single-line-bounded
+            // calls, where no internal eol is ever in range to be found by the search above.
+            //
+            // Deferral guard: `eol` and a `key_value` rule's `end` byte can be
+            // the *same* byte (e.g. a flat `key=value` pair terminated by its
+            // own line's `\n` — exactly `run_inline!`'s grammar in the test
+            // suite). When the stack's top is an open kv-value frame, that
+            // existing, byte-exact mechanism (the `$kv_end` pre-check just
+            // below) owns this occurrence — it already `continue`s on a
+            // correct match, so deferring here by doing nothing and falling
+            // through changes nothing for it. Firing the hard-break path
+            // *first* would otherwise swallow the terminator before
+            // `$kv_end` ever saw it, silently merging what should have been
+            // two values into one. This is a pure stack-state check — it
+            // does not need to know what `$kv_end`'s literal byte is.
+            $(
+                if src[pos] == $eol && !(fdepth > 0 && frames[fdepth - 1].kind == 2) {
+                    let mut _ep = pos;
+                    let mut _ehb = false;
+                    if _ep > $start {
+                        if src[_ep - 1] == $hb_esc {
+                            _ep -= 1;
+                            _ehb = true;
+                        } else {
+                            let mut _en: u32 = 0;
+                            while _ep > $start && src[_ep - 1] == $sp {
+                                _en += 1; _ep -= 1;
+                            }
+                            if _en >= $sp_min { _ehb = true; }
+                        }
+                    }
+                    if text_start < _ep {
+                        if fdepth == 0 && !ch_in_text && !ch_in_url {
+                            push_il!($tx, $crate::span::Span::new(text_start as u32, _ep as u32));
+                        }
+                    }
+                    if _ehb {
+                        $state.$hb.push($crate::span::Span::new(_ep as u32, _ep as u32));
+                    }
+                    pos += 1;
+                    text_start = pos;
+                    continue;
+                }
+            )*
 
             // Skip escaped delimiters (odd number of preceding backslashes).
             if pos > $start {
@@ -446,13 +588,22 @@ macro_rules! parse_inline {
             let mut count: u32 = 0;
             while pos < parse_end && src[pos] == delim { count += 1; pos += 1; }
 
-            // ---------------------------------------------------------- //
-            // key_value value terminator (`$kv_end`) at the value's own  //
-            // level: only fires when a kv frame is currently on top of    //
-            // the stack (we are back at the value's depth, nothing deeper  //
-            // open). `$kv_end` is claimed by no other rule, so this is a   //
-            // standalone pre-check. The value ends *before* the separator. //
-            // ---------------------------------------------------------- //
+            // ---------------------------------------------------------------- //
+            // key_value value terminator (`$kv_end`) at the value's own        //
+            // level: only fires when a kv frame is currently on top of         //
+            // the stack (we are back at the value's depth, nothing deeper      //
+            // open). `$kv_end` is claimed by no other rule, so this is a       //
+            // standalone pre-check. The value ends *before* the separator.     //
+            //                                                                  //
+            // When `$kv_end` arrives with no kv frame on top (e.g. a bare      //
+            // top-level array's `,` between elements), no rule here claims it: //
+            // it falls through untouched, `pos` having already advanced past   //
+            // the delimiter run. Splitting a transparent container's elements  //
+            // is a concern for whoever reads that container's span afterward,  //
+            // not for this scan — the stack only needs to know when a *value*  //
+            // it is tracking ends.                                             //
+            // ---------------------------------------------------------------- //
+            let mut _kv_hit = false;
             $(
                 if delim == $kv_end
                     && fdepth > 0
@@ -465,13 +616,16 @@ macro_rules! parse_inline {
                     });
                     fdepth -= 1;
                     _kv_seg_start = pos;
-                    text_start = pos;
-                    continue;
+                    _kv_hit = true;
                 }
             )*
+            if _kv_hit {
+                text_start = pos;
+                continue;
+            }
 
             // ---------------------------------------------------------- //
-            // asymmetric (kind 0): unified open + unified close cascade.  //
+            // asymmetric (kind 0): unified open + unified close cascade. //
             // ---------------------------------------------------------- //
             let _chained_opaque_active =
                 (ch_in_text && ch_text_opaque) || (ch_in_url && ch_url_opaque);
@@ -499,7 +653,8 @@ macro_rules! parse_inline {
                                             _content_start, _content_start));
                                         frames[fdepth] = _Frame {
                                             kind: 0, b0: $ao, b1: $ac, opaque: !$api,
-                                            count: 1, vidx: _vidx, ks: 0, ke: 0, vs: 0,
+                                            count: 1, vidx: _vidx, ks: 0, ke: 0,
+                                            vs: _content_start,
                                         };
                                         fdepth += 1;
                                         asym_overflow = 0;
@@ -1057,9 +1212,9 @@ macro_rules! parse_inline {
             )*
         }
 
-        // ------------------------------------------------------------------ //
-        // End of line: drain the unified stack, top → down.                  //
-        //                                                                    //
+        // ------------------------------------------------------------------- //
+        // End of line: drain the unified stack, top → down.                   //
+        //                                                                     //
         //  - key_value frame  : finalise its value to the line end (so a flat //
         //    `key = value` with no terminator still emits) and push the text  //
         //    cursor past it, so the unconditional flush below does not        //
@@ -1071,7 +1226,7 @@ macro_rules! parse_inline {
         //  - symmetric frame  : discard via `truncate(vidx)` — an identical   //
         //    (byte, count) never self-nests, so each field has at most one    //
         //    pending placeholder, always last.                                //
-        // ------------------------------------------------------------------ //
+        // ------------------------------------------------------------------- //
         while fdepth > 0 {
             fdepth -= 1;
             let _f = frames[fdepth];
@@ -1111,7 +1266,7 @@ macro_rules! parse_inline {
             }
         }
 
-        // Flush any remaining plain text before the line end.
+        // Flush any remaining plain text before the scanned span's end.
         if text_start < parse_end {
             push_il!($tx, $crate::span::Span::new(text_start as u32, parse_end as u32));
         }
@@ -1120,17 +1275,18 @@ macro_rules! parse_inline {
             $state.$hb.push($crate::span::Span::new(parse_end as u32, parse_end as u32));
         } )*
 
-        if $le < len { $le + 1 } else { len }
+        // Returns `$le` as-is — the boundary passed in, not `$le + 1`. The two
+        // call sites in `parse_text!` each know their own boundary's meaning
+        // and own the `+1` themselves where it applies: the single-line
+        // category (mid-line continuations) still resumes at `current_line_end
+        // + 1` (its `$le` sits exactly on the eol byte, by construction); the
+        // multi-line category (`flush_para_inline!`) ignores the return value
+        // entirely, since its own boundary is never an eol position to skip
+        // past — it's a blank line's start, a matched construct's start, or
+        // `len`, and the surrounding loop already knows how to proceed from
+        // there.
+        $le
     }};
-
-    // ------------------------------------------------------------------ //
-    // @do_find: single trigger-set search via find_any.                  //
-    // ------------------------------------------------------------------ //
-    (@do_find $($b:literal),+ ; $src:ident, $pos:ident, $pe:ident, $best:ident) => {
-        if let Some(r) = $crate::swar::find_any([$($b),+], &$src[$pos..$pe]) {
-            $best = Some(match $best { Some(cur) if cur <= r => cur, _ => r });
-        }
-    };
 
     // ------------------------------------------------------------------ //
     // @is_escaped: shared escape-check for a single candidate position.  //

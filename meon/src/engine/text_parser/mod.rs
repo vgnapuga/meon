@@ -96,6 +96,46 @@ pub use crate::parse_block;
 /// Steps 2–4 short-circuit: the first match wins and inline scanning is skipped.
 /// When a fence is active (discriminant `0`), step 5 is also suppressed.
 ///
+/// # Inline scanning spans multiple lines (the unified stream model)
+///
+/// Step 5 above is, since the multi-line rework, not a per-line operation.
+/// A line that falls through every line-start dispatch (steps 1–4 all decline,
+/// and no block is currently active) does **not** get its own `parse_inline!`
+/// call. Instead `parse_text!` defers: it records the run's start in
+/// `para_start` (the same offset already used to build the paragraph-fallback
+/// `Vec<Span>`) and advances straight to the next line, re-running the full
+/// line-start dispatch there. The run keeps growing, line after line, for as
+/// long as each subsequent line *also* falls through and is non-blank.
+///
+/// The run closes — and is flushed as a **single** `parse_inline!` call over
+/// its whole multi-line extent — at exactly the points where `close_para!()`
+/// already fires: a blank line, a line where `parse_block!` or `parse_line!`
+/// actually matches (the lazy-continuation-ends case), or end of input. The
+/// `flush_para_inline!` macro performs this flush; it is a pure addition next
+/// to the existing paragraph-span bookkeeping, which is otherwise untouched.
+///
+/// Because the whole run is handed to `parse_inline!` as one span, the
+/// *unified inline stack* (`frames`/`fdepth`, see [`crate::parse_inline!`])
+/// now genuinely persists across the `\n` bytes inside that run — a
+/// `key_value` value, an open container, or a pending symmetric delimiter can
+/// span a line break without being discarded. A grammar with empty `lines {}`
+/// and `blocks { fallback => ... }` sections (e.g. JSON) therefore gets one
+/// run covering the *entire* buffer (blank lines aside): every `\n` inside it
+/// is ordinary content, never specially recognised, at zero extra runtime
+/// cost — see [`crate::parse_inline!`]'s docs for why.
+///
+/// A grammar with real `lines {}` / `blocks {}` rules (Markdown) keeps that
+/// dispatch exactly as before: a run is bounded by whichever line first
+/// triggers a real match, so multi-line inline spanning only ever happens
+/// *within* what would already have been one paragraph.
+///
+/// One case is deliberately **not** touched by this: a line whose line-start
+/// dispatch *did* match but left trailing content on the same line (e.g. a
+/// heading's text after its `#` marker, or a bullet item's text after its
+/// marker) is still inline-scanned by a single-line-bounded `parse_inline!`
+/// call, exactly as before — that content cannot itself continue onto a
+/// further line, so there is nothing to unify there.
+///
 /// # Standalone iterators
 ///
 /// The generated `find_*` methods (via [`define_standalone_fns!`]) operate
@@ -135,10 +175,16 @@ pub use crate::parse_block;
 /// - `active` — single `Option<(u8, u8, u8, u32)>` slot encoding the open
 ///   block (see [`parse_block!`] for the encoding). Only one block can be
 ///   active at a time.
-/// - `para_start` — start offset of the current paragraph; `None` when no
-///   paragraph is open. Flushed on block transitions and blank lines.
-/// - `text_start` — start offset of the pending plain-text run within the
-///   current line. Flushed before any inline element is emitted.
+/// - `para_start` — start offset of the current fallthrough run; `None` when
+///   no run is open. Doubles as the run's inline-scan start (see above).
+///   Flushed (both as the inline run and as the paragraph span) on block
+///   transitions and blank lines.
+/// - `text_start` — start offset of the pending plain-text run for the
+///   *single-line-bounded* inline calls only (line/block trailing content).
+///   Kept in sync with `pos` whenever a fallthrough run is deferred, so the
+///   pre-existing `flush_text!` calls at the run's close points stay
+///   harmless no-ops; the deferred run's own text is flushed entirely by the
+///   `parse_inline!` call inside `flush_para_inline!`, not by `flush_text!`.
 ///
 /// # Context bytes
 ///
@@ -178,7 +224,7 @@ pub use crate::parse_block;
 ///
 /// # Known limitations
 ///
-/// - Inline scanning is context-free within a line; precedence between
+/// - Inline scanning is context-free within a run; precedence between
 ///   overlapping inline rules is grammar-defined and resolved by declaration
 ///   order, not by a precedence table.
 #[macro_export]
@@ -418,11 +464,34 @@ macro_rules! parse_text {
             };
         }
 
+        // Flush an accumulated multi-line fallthrough run (if one is open)
+        // as a single `parse_inline!` call over its whole extent, so the
+        // unified inline stack persists across every `\n` inside it. Reads
+        // `para_start` without clearing it — `close_para!()`, called right
+        // alongside this at every one of its call sites, still owns clearing
+        // it once it has also pushed the paragraph-fallback span. A no-op
+        // when no run is open, or when the run is empty (`s == end`).
+        macro_rules! flush_para_inline {
+            ($end:expr) => {
+                if let Some(s) = para_start {
+                    let _ps = s as usize;
+                    let _pe = $end as usize;
+                    if _ps < _pe {
+                        $crate::parse_inline!(
+                            state, src, _ps, _pe,
+                            $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn ; $($ilt)*
+                        );
+                    }
+                }
+            };
+        }
+
         while pos < len {
             if at_line_start {
                 at_line_start = false;
 
                 if src[pos] == $eol {
+                    flush_para_inline!(pos);
                     flush_text!(pos);
                     close_para!();
                     // A blank line closes all open continuations — unless the
@@ -457,6 +526,7 @@ macro_rules! parse_text {
                     ) {
                         Some((opened, cs)) => {
                             if opened {
+                                flush_para_inline!(pos);
                                 flush_text!(pos);
                                 close_para!();
                             }
@@ -490,6 +560,7 @@ macro_rules! parse_text {
                         state, src, pos, current_line_end, sep = $sep ; $($ln)*
                     ) {
                         Some(cs) => {
+                            flush_para_inline!(pos);
                             flush_text!(pos);
                             close_para!();
                             text_start = cs as u32;
@@ -517,6 +588,20 @@ macro_rules! parse_text {
                     if para_start.is_none() {
                         para_start = Some(pos as u32);
                     }
+                    // Defer: this line joins a (possibly multi-line)
+                    // fallthrough run. Don't inline-scan it now — skip
+                    // straight to the next line start and let the run keep
+                    // growing. `text_start` is kept in sync with the new
+                    // `pos` so the pre-existing `flush_text!` calls at the
+                    // run's eventual close point stay harmless no-ops; the
+                    // whole run's text is flushed by `flush_para_inline!`
+                    // instead, in one `parse_inline!` call, when the run
+                    // closes.
+                    pos = if current_line_end < len { current_line_end + 1 } else { len };
+                    text_start = pos as u32;
+                    at_line_start = true;
+                    line_end_valid = false;
+                    continue;
                 }
             } else {
                 if !line_end_valid {
@@ -536,38 +621,40 @@ macro_rules! parse_text {
                 continue;
             }
 
-            match $crate::swar::find_any([$eol, $($f),*], &src[pos..len])
-                .map(|r| pos + r)
-            {
-                None => {
-                    pos = len;
-                }
-
-                Some(_p) if src[_p] == $eol => {
-                    let (_le, _hb) = $crate::parse_text!(
-                        @hb_check _p, text_start as usize, src ; $hb
-                    );
-                    flush_text!(_le);
-                    $crate::parse_text!(@hb_push state, _le, _hb ; $hb);
-                    text_start = (_p + 1) as u32;
-                    pos = _p + 1;
-                    at_line_start = true;
-                    line_end_valid = false;
-                }
-
-                Some(_p) => {
-                    let new_pos = $crate::parse_inline!(
-                        state, src, pos, current_line_end,
-                        $tx, $merge_il, $esc, $sep, $tab, $maxn ; $($ilt)*
-                    );
-                    text_start = new_pos as u32;
-                    pos = new_pos;
-                    at_line_start = true;
-                    line_end_valid = false;
-                }
+            // Reached only for mid-line continuations after a `parse_block!`
+            // / `parse_line!` match left trailing content on this same line
+            // (heading text, bullet text, ...). Single-line bounded — that
+            // content cannot itself continue onto a further line.
+            //
+            // No outer trigger search here: `parse_inline!` is handed the
+            // whole `[pos, current_line_end)` range directly and does its own
+            // single unified scan over it. The previous outer
+            // `find_any([eol, triggers], &src[pos..len])` was pure
+            // double-work — it scanned (to `len`, even past this line) only to
+            // decide *whether* to call `parse_inline!`, which then re-scanned
+            // the very same bytes itself. On a corpus dense in marker lines
+            // with trailing inline content (nested blockquotes, bullet items —
+            // the `heavy` profile), that doubled the inline byte-scan on every
+            // such line. `parse_inline!` already handles the no-trigger case
+            // correctly (it flushes the whole range as fallback text) and the
+            // trailing-hard-break case (its own up-front end-of-range check),
+            // so the outer search decided nothing the inner one doesn't. The
+            // empty-trailing case (marker consumed the whole line,
+            // `pos == current_line_end`) is skipped cheaply rather than
+            // entering `parse_inline!` to scan nothing.
+            if pos < current_line_end {
+                let _ = $crate::parse_inline!(
+                    state, src, pos, current_line_end,
+                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn ; $($ilt)*
+                );
             }
+            pos = if current_line_end < len { current_line_end + 1 } else { len };
+            text_start = pos as u32;
+            at_line_start = true;
+            line_end_valid = false;
         }
 
+        flush_para_inline!(len);
         flush_text!(len);
         if let Some(s) = para_start {
             state.$para.push($crate::span::Span::new(s, len as u32));

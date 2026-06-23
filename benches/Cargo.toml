@@ -6,7 +6,14 @@ publish = false
 
 [dependencies]
 meon-md.workspace = true
+meon-json.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
+
+[dev-dependencies]
+simd-json = "0.14"
+
+[profile.bench]
+debug = true
 
 [[bench]]
 name = "meon-md_parse"
@@ -14,4 +21,8 @@ harness = false
 
 [[bench]]
 name = "meon-md_standalone"
+harness = false
+
+[[bench]]
+name = "meon-json_parse"
 harness = false

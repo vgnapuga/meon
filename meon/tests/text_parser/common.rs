@@ -77,7 +77,7 @@ macro_rules! run_inline {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
             hard_break(b'\\', b' ', 2) => hard_breaks;
             on_trigger(b'=') {
                 key_value: KeyValue {
@@ -127,7 +127,7 @@ macro_rules! run_inline_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
             on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
@@ -146,7 +146,7 @@ macro_rules! run_inline_balanced_nested {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn;
             on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
@@ -165,7 +165,7 @@ macro_rules! run_inline_sym_nested {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn;
             on_trigger(b'*') {
                 symmetric b'*' {
                     parse_inside = true;
@@ -256,7 +256,7 @@ macro_rules! run_sym_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
             on_trigger(b'"') {
                 symmetric b'"' {
                     parse_inside = false;
@@ -275,7 +275,7 @@ macro_rules! run_chained_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
             on_trigger(b'[') {
                 chained: Link {
                     | b'[', b']' | {
@@ -300,7 +300,7 @@ macro_rules! run_inline_kv_json {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn;
             on_trigger(b'{', b'}', b'[', b']', b'"', b':') {
                 symmetric b'"' { parse_inside = false; balanced = false; _ => codes }
                 asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
