@@ -71,13 +71,22 @@ pub fn txt(src: &[u8], s: Span) -> &str {
     std::str::from_utf8(&src[s.start as usize..s.end as usize]).unwrap()
 }
 
+// Every `meon::parse_inline!` call below passes `true` as the 12th
+// (multiline) argument: these unit tests call the macro directly, outside
+// `parse_text!`'s own dispatch, so none of them can rely on the "single-line
+// range is provably `\n`-free by construction" guarantee that lets
+// `parse_text!`'s own mid-line-continuation call site pass `false`. `true`
+// reproduces the previous (pre-flag) behaviour exactly for every fixture
+// here, including `kv_02_with_newline_and_rest` / `kv_06_split_by_newline`,
+// which depend on an embedded `\n` being found at all.
+
 macro_rules! run_inline {
     ($src:expr) => {{
         let src: &[u8] = $src;
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
             hard_break(b'\\', b' ', 2) => hard_breaks;
             on_trigger(b'=') {
                 key_value: KeyValue {
@@ -127,7 +136,7 @@ macro_rules! run_inline_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
             on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
@@ -146,7 +155,7 @@ macro_rules! run_inline_balanced_nested {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
             on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
@@ -165,7 +174,7 @@ macro_rules! run_inline_sym_nested {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
             on_trigger(b'*') {
                 symmetric b'*' {
                     parse_inside = true;
@@ -256,7 +265,7 @@ macro_rules! run_sym_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
             on_trigger(b'"') {
                 symmetric b'"' {
                     parse_inside = false;
@@ -275,7 +284,7 @@ macro_rules! run_chained_balanced {
         let le = src.len();
         let mut st = ParseState::new(le);
         meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
             on_trigger(b'[') {
                 chained: Link {
                     | b'[', b']' | {
@@ -300,7 +309,7 @@ macro_rules! run_inline_kv_json {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
             on_trigger(b'{', b'}', b'[', b']', b'"', b':') {
                 symmetric b'"' { parse_inside = false; balanced = false; _ => codes }
                 asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }

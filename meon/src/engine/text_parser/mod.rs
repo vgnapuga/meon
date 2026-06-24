@@ -471,6 +471,12 @@ macro_rules! parse_text {
         // alongside this at every one of its call sites, still owns clearing
         // it once it has also pushed the paragraph-fallback span. A no-op
         // when no run is open, or when the run is empty (`s == end`).
+        //
+        // Passes `true` for `parse_inline!`'s multiline flag: this run can
+        // genuinely contain internal `\n` bytes, so `$eol` must stay in the
+        // unified trigger search (hard-break detection, line-break bounding
+        // of long trigger-free stretches). See `parse_inline!`'s own docs
+        // for why the single-line call below passes `false` instead.
         macro_rules! flush_para_inline {
             ($end:expr) => {
                 if let Some(s) = para_start {
@@ -479,7 +485,7 @@ macro_rules! parse_text {
                     if _ps < _pe {
                         $crate::parse_inline!(
                             state, src, _ps, _pe,
-                            $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn ; $($ilt)*
+                            $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true ; $($ilt)*
                         );
                     }
                 }
@@ -642,10 +648,19 @@ macro_rules! parse_text {
             // empty-trailing case (marker consumed the whole line,
             // `pos == current_line_end`) is skipped cheaply rather than
             // entering `parse_inline!` to scan nothing.
+            //
+            // Passes `false` for `parse_inline!`'s multiline flag: `current_line_end`
+            // is itself the offset `memchr` found for the next `$eol`, so
+            // `[pos, current_line_end)` is `\n`-free by construction. `$eol`
+            // can never match in this range — excluding it from the unified
+            // trigger search drops a dead per-chunk comparison from every
+            // byte of every such line (headings, bullet items, ...) with no
+            // change in what gets found, since there was never anything to
+            // find. See `parse_inline!`'s own docs for the cost this removes.
             if pos < current_line_end {
                 let _ = $crate::parse_inline!(
                     state, src, pos, current_line_end,
-                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn ; $($ilt)*
+                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false ; $($ilt)*
                 );
             }
             pos = if current_line_end < len { current_line_end + 1 } else { len };

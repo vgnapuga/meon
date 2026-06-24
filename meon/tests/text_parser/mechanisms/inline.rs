@@ -2152,7 +2152,7 @@ macro_rules! run_inline_shared_close_nested {
         let le = src.len();
         let mut st = ParseState::new(le);
         let consumed = meon::parse_inline!(
-            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'n', $maxn;
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'n', $maxn, true;
             on_trigger(b'(', b')', b'[') {
                 asymmetric b'(', b')' {
                     balanced     = true;

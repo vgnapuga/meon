@@ -21,8 +21,18 @@
 //! ```text
 //! parse_inline!(state, src, start, line_end, fallback_field,
 //!               merge_flag, escape_byte, sep_byte, tab_byte, eol_byte,
-//!               max_nest ; <rules>)
+//!               max_nest, multiline_flag ; <rules>)
 //! ```
+//!
+//! `multiline_flag` (`true`/`false`) gates whether `$eol` participates in the
+//! unified trigger search at all — see the "Single unified trigger search"
+//! section below for why this exists and what it costs to get wrong in
+//! either direction. `parse_text!`'s two call sites pass the correct value
+//! for their own case (`true` for the whole-run multi-line call, `false` for
+//! the single-line-bounded mid-line-continuation call); a caller invoking
+//! `parse_inline!` directly (e.g. the engine's own unit tests) should pass
+//! `true` unless it can prove `[start, line_end)` is `\n`-free by
+//! construction, the same way `parse_text!`'s single-line call site can.
 //!
 //! Rules inside the `inline` section are:
 //!
@@ -48,22 +58,56 @@
 //! dispatches to `memchr` / `memchr2` / `memchr3` for 1–3 bytes and to the
 //! SWAR/SIMD engine for 4 or more bytes.
 //!
-//! # Bounded nesting (`max_nest`) — one unified stack
+//! # Bounded nesting (`max_nest`) — one unified stack, one minimal frame
 //!
-//! Every construct that needs to track *how deeply it is nested* lives on a
-//! **single shared stack** (`frames`), bounded by the grammar's `max_nest`
-//! depth cap (forwarded from `parse_text!`; defaults to `1`). A stack entry
-//! is a `_Frame` tagged by `kind`:
+//! Every construct that needs to track *how deeply it is nested* — asymmetric,
+//! symmetric, **and** key_value alike — lives on a **single shared stack**
+//! (`frames`), bounded by the grammar's `max_nest` depth cap (forwarded from
+//! `parse_text!`; defaults to `1`). A stack entry is a plain
+//! `(u8, u8, u32)` tuple — byte, count-at-open, back-patch index — nothing
+//! more. There is no stored kind tag and no per-kind dead field: every other
+//! fact about a frame (its close byte, its opacity, which output field it
+//! routes to) is already known to the grammar at compile time and is
+//! recovered, at the point of use, by matching the stored byte against each
+//! rule's own literal — the exact idiom the *open* side already used to
+//! route a field via `match 1u32 { $( $an => … ) }`; the close/discard/
+//! opacity sides now use the same idiom instead of reading a separately
+//! stored copy of the same fact.
 //!
-//! - `kind = 0` — an **asymmetric** open (`{` `[` `<`…): records its open and
-//!   close byte, opacity, and the back-patch index of its placeholder span.
-//! - `kind = 1` — a **symmetric** balanced delimiter (`*` `**` …): records the
-//!   byte, the run length (which picks the construct), and the back-patch
-//!   index.
-//! - `kind = 2` — a **key_value** value-phase: records the (already finalised)
-//!   key span and the value start, and waits for its terminator.
+//! - **byte** — asymmetric/symmetric: the rule's own delimiter byte (its
+//!   open byte for asymmetric, since the close byte is recoverable from it
+//!   via the grammar's own `$ao`/`$ac` pairing; the delimiter itself for
+//!   symmetric, open and close being the same byte). key_value: `$kv_end`,
+//!   its terminator byte. A byte value is assumed unique in *meaning* across
+//!   every stack-eligible rule in a grammar's `on_trigger` block — the same
+//!   assumption every trigger-byte dispatch in this engine already makes;
+//!   nothing new is introduced by frames sharing this assumption too.
+//! - **count** — the repetition count recorded at open. Asymmetric: always
+//!   `1` (each byte of an open run is its own event, per the existing
+//!   per-character open loop). Symmetric: the real run length, needed both
+//!   to pick which field this is (`1`/`2`/`3` ⇒ italics/bolds/bold_italics)
+//!   and to require an exact-count match on close. key_value: unused (`0`).
+//! - **vidx** — back-patch index into this frame's own already-pushed
+//!   placeholder. Asymmetric/symmetric: the placeholder span (`start ==
+//!   end`) pushed at open time, exactly as before — `vidx` is where to
+//!   write its `.end` on close, and pushing at open time is what keeps
+//!   their own output vectors in open/start order (an outer pair, opened
+//!   first, sits before an inner one in the vector even though it closes
+//!   last). key_value: **unused** (`0`) — a kv frame's pending key span and
+//!   value start live in a small separate scratch array, `kv_pending`,
+//!   indexed by this frame's own position in `frames` (not by a stored
+//!   index at all). `$kv_f`, the public output vector, is appended to only
+//!   once, complete, at the moment a pair actually *closes* — never at open
+//!   time with a placeholder. This is the opposite convention from
+//!   asymmetric/symmetric, deliberately: it keeps `$kv_f` in *close* order
+//!   (an outer pair, closing after every pair nested inside its value,
+//!   lands after them in the vector too) rather than open order. Both
+//!   orderings are pre-existing, separately tested contracts on their
+//!   respective output vectors, not a free choice made here — key_value
+//!   sharing `frames`/`fdepth` with the other two kinds for *nesting*
+//!   purposes does not mean it shares their *push-timing* convention too.
 //!
-//! `chained` is *not* on the stack — its two components are strictly
+//! `chained` is *not* on this stack — its two components are strictly
 //! sequential (phase 2 only begins once phase 1 has closed), so it is a
 //! two-phase transparent state machine needing no stack. The single-pending
 //! symmetric mode (`parse_inside = true, balanced = false`) and all the
@@ -72,13 +116,13 @@
 //! both-opaque chained search) are likewise *not* stack users — they are the
 //! original pre-nesting code, left intact.
 //!
-//! Because the stack is shared, `fdepth` is the single nesting budget for all
-//! kinds combined. For a grammar whose stack-eligible rules are all the same
-//! kind (e.g. a pure-asymmetric grammar, or a pure-symmetric one), `fdepth`
-//! behaves exactly like the old per-kind depth counter did — the merge is
-//! behaviour-preserving for single-kind grammars. Mixed-kind nesting (the
-//! JSON case: a `key_value` whose value is an object whose members are more
-//! `key_value`s) is what the unified stack newly makes expressible.
+//! Because the stack is shared, `fdepth` is the single nesting budget for
+//! every kind combined, key_value included — every `fdepth == 0` check
+//! throughout this macro ("is anything at all currently open") is correct
+//! as-is regardless of which kind(s) happen to be on the stack right now;
+//! key_value sharing the stack needed no separate depth counter and no
+//! separate ordering mechanism, precisely because it pushes and pops through
+//! the exact same `frames`/`fdepth` everything else does.
 //!
 //! ## The fallback-flush invariant
 //!
@@ -89,16 +133,18 @@
 //! claims it. Suppressing the flush there loses nothing: those bytes stay
 //! covered by whichever enclosing span eventually closes around them.
 //!
-//! ## `asymmetric { balanced = …; parse_inside = …; … }` (`kind = 0`)
+//! ## `asymmetric { balanced = …; parse_inside = …; … }`
 //!
 //! `balanced` and `parse_inside` are independent and both gate stack
 //! eligibility — a rule needs only *one* of them `true` to be on the stack:
 //!
 //! - `balanced` controls this type's effective depth cap: `max_nest` when
 //!   `true` (so it can self-nest, `{ { } }`), or a hard `1` when `false`.
-//! - `parse_inside` controls *opacity*, recorded per frame at push time
-//!   (`!$api`), so only the innermost open frame's flag governs whether other
-//!   rules fire on its content.
+//! - `parse_inside` controls *opacity*. Not stored per frame — derived at
+//!   the point of use by matching the frame's stored open byte against each
+//!   rule's own `$ao`/`$api` — so only the innermost open frame's rule
+//!   governs whether other rules fire on its content, the same outcome the
+//!   pre-unification per-frame flag gave, without carrying the flag itself.
 //!
 //! A rule with **both** flags `false` never reaches the stack at all; it runs
 //! the historical self-contained `memchr` block further down (whose own
@@ -117,19 +163,21 @@
 //! otherwise double-pop). Per close character, *before* touching the
 //! asymmetric frame, the pass first drains any `key_value` frame sitting on
 //! top: that value's container is closing, so the value ends here. Then, if
-//! the new top is an asymmetric frame whose recorded close byte matches, that
-//! one frame is popped and its placeholder back-patched. Because the stack is
-//! strict LIFO and a kv frame is always pushed *after* the container it lives
-//! in, a `}}` run finalises the inner pair on the first `}` (then pops its
-//! object) and the outer pair on the second — correct nesting falls out of
-//! the per-character loop, and the "value committed before the container
-//! pops" ordering is automatic.
+//! the new top is an asymmetric frame whose open byte's grammar-known close
+//! byte matches this character (derived via the same `$ao`/`$ac` pairing the
+//! open side used, never a separately stored close byte), that one frame is
+//! popped and its placeholder back-patched. Because the stack is strict LIFO
+//! and a kv frame is always pushed *after* the container it lives in, a `}}`
+//! run finalises the inner pair on the first `}` (then pops its object) and
+//! the outer pair on the second — correct nesting falls out of the
+//! per-character loop, and the "value committed before the container pops"
+//! ordering is automatic.
 //!
 //! **Required grammar change**: the close byte (and, for `key_value`, the
 //! `end` separator) must be listed in the same `on_trigger(...)` set, since
 //! they are now found by the same scan that finds the opens.
 //!
-//! ## `symmetric { parse_inside = true; balanced = true; … }` (`kind = 1`)
+//! ## `symmetric { parse_inside = true; balanced = true; … }`
 //!
 //! `parse_inside = true, balanced = false` (single pending slot) is
 //! **unchanged** — it keeps its original `pending` slot, off the stack.
@@ -158,27 +206,43 @@
 //! docs for when and why). Inside such a span, every `\n` is just another
 //! byte; by default it is never specially recognised at all and is scanned
 //! over exactly like a space or a letter, at near-zero extra cost (it is one
-//! more byte in the unified `find_any` target set, nothing more), which is
-//! the entire reason a grammar like JSON's stack survives the line break
-//! without any change to its own rules.
+//! more byte in the unified `find_any` target set, nothing more — *when*
+//! `$eol` is in that set at all; see immediately below), which is the entire
+//! reason a grammar like JSON's stack survives the line break without any
+//! change to its own rules.
 //!
-//! `$eol` is always part of the single unified trigger search (see the
-//! execution-phase find loop), regardless of whether `hard_break` is
-//! declared — there it serves only to bound each iteration to the next
-//! significant byte, so a long trigger-free run does not scan to the run's
-//! end every iteration. Whether landing on a `\n` *does* anything is what
-//! `hard_break` gates. When a grammar declares it, an internal `\n` is
-//! checked the same way the run's own end is: look backward for the escape
-//! byte or `>= min` separator bytes, trim them out of the flushed plain-text
-//! span, and emit a zero-length hard-break span at the trim point if matched.
-//! This check runs *before* the generic escape-skip logic further below — a
-//! backslash immediately before `\n` is the hard-break-via-backslash signal
-//! here, consumed by this check itself, not an "escaped eol" in the generic
-//! delimiter sense that escape-skip exists for. Either way the scan simply
-//! `continue`s afterwards: the unified stack is never drained by an internal
-//! `\n`, only by the run's true end. When `hard_break` is *not* declared,
-//! landing on a `\n` falls through every rule arm untouched (no arm triggers
-//! on it) and it is scanned over like any other byte.
+//! `$eol` is part of the unified trigger search **only when the caller's
+//! `multiline` flag (`$ml`) is `true`** (see the execution-phase find loop).
+//! It is not free to include unconditionally: `find_any`'s wide (`N >= 4`)
+//! path costs one comparison per target per 8-byte chunk, so every extra
+//! target byte is paid on every chunk of every byte scanned, whether or not
+//! it ever matches. `parse_text!`'s multi-line call (`flush_para_inline!`)
+//! passes `true`, because its span can genuinely contain internal `\n`
+//! bytes and needs both the hard-break handling below and the line-break
+//! bounding of long trigger-free stretches. Its single-line-bounded call
+//! (mid-line continuations after a Line/Block match) passes `false`,
+//! because that span's own upper bound is itself the offset a `memchr` call
+//! found for the next `\n` — the range is `\n`-free by construction, so
+//! searching for `$eol` there could never match anything; excluding it
+//! removes a dead per-chunk comparison from every such line with no change
+//! in behaviour. A direct caller of `parse_inline!` outside `parse_text!`
+//! (e.g. the engine's own unit tests) should pass `true` unless it can make
+//! the same construction guarantee itself.
+//!
+//! When `$ml` is `true` and the search does land on `\n`, what happens next
+//! is what `hard_break` gates. When a grammar declares it, an internal `\n`
+//! is checked the same way the run's own end is: look backward for the
+//! escape byte or `>= min` separator bytes, trim them out of the flushed
+//! plain-text span, and emit a zero-length hard-break span at the trim point
+//! if matched. This check runs *before* the generic escape-skip logic
+//! further below — a backslash immediately before `\n` is the
+//! hard-break-via-backslash signal here, consumed by this check itself, not
+//! an "escaped eol" in the generic delimiter sense that escape-skip exists
+//! for. Either way the scan simply `continue`s afterwards: the unified stack
+//! is never drained by an internal `\n`, only by the run's true end. When
+//! `hard_break` is *not* declared (regardless of `$ml`), landing on a `\n`
+//! falls through every rule arm untouched (no arm triggers on it) and it is
+//! scanned over like any other byte.
 //!
 //! This makes the pre-loop, once-only end-of-run hard-break check further
 //! down partially redundant for a multi-line run's *last* internal `\n`
@@ -186,27 +250,43 @@
 //! the time the end-of-run check runs, the byte immediately before `parse_end`
 //! is that very `\n`, which never matches `$hb_esc` or `$sp`. The end-of-run
 //! check remains the only mechanism for the genuinely line-break-free cases:
-//! true end of input with no trailing newline, and the single-line-bounded
-//! calls (mid-line continuations), where no internal `\n` is ever in range to
-//! be found by the search above in the first place.
+//! true end of input with no trailing newline, and the `$ml = false`
+//! single-line-bounded calls, where `$eol` is not even in the search target
+//! set, so no internal `\n` is ever landed on in the first place.
 //!
-//! ## `key_value: T { … }` (`kind = 2`) — always nested
+//! ## `key_value: T { … }` — shares the same stack, no nesting of its own
 //!
 //! A `key_value` rule splits, around its `eq` trigger byte, into a key (to
 //! the left) and a value (to the right). Both sides are bounded by *foreign*
 //! bytes, which is why the rule triggers on the separator, not on an opening
 //! byte. The **key has no nesting**: it is computed once, ascending, at `eq`
-//! time and carried in the frame. The **value is nested**: it lives on the
-//! unified stack and is finalised by structure, not by a forward search.
+//! time and never changes again — but it is *not* pushed to the rule's
+//! output vector yet. It is parked in `kv_pending`, alongside the value's
+//! start, and stays there for as long as the pair's value remains open. The
+//! **value is nested**: it is what the stack frame actually tracks, finalised
+//! by structure rather than by a forward search. Only when the value
+//! actually closes — at the `$kv_end` pre-check, the asymmetric close
+//! cascade's kv-drain, or end-of-run — is the *whole* struct (key and value
+//! both) pushed into the output vector in one go, complete. This is
+//! deliberate, not incidental: it is what keeps the output vector in *close*
+//! order (an outer pair, whose value closes after every pair nested inside
+//! it, lands after them in the vector too — see `kv_pending`'s own doc
+//! comment for why this differs from asymmetric/symmetric's open-order
+//! convention on their own output vectors). Sharing the unified `frames` /
+//! `fdepth` stack with those two kinds is what gives key_value its nesting
+//! for free; it does not also mean key_value adopts their push-timing.
 //!
-//! **Pushing.** On `eq`, a value frame is pushed *only if the current top of
-//! stack is not already a key_value frame*. This single condition makes a
-//! flat, separator-less line like `a = 1 b = 2` resolve to one pair whose
-//! value runs to the line end (the second `eq` lands on top of the first
-//! pending value and is therefore value content, not a new key), while in
-//! structured input a fresh key only ever appears after the previous pair has
-//! been popped (by its `end` separator or by its container closing), so the
-//! top is a container, not a kv frame, and the new pair pushes normally.
+//! **Pushing (the stack frame, not the output vector).** On `eq`, a frame is
+//! pushed *only if the current top of stack is not already a key_value
+//! frame* (recognised the same way every other stack query recognises a
+//! frame's kind here — by matching its stored byte, `$kv_end`, against this
+//! rule's own literal). This single condition makes a flat, separator-less
+//! line like `a = 1 b = 2` resolve to one pair whose value runs to the line
+//! end (the second `eq` lands on top of the first pending value and is
+//! therefore value content, not a new key), while in structured input a
+//! fresh key only ever appears after the previous pair has been popped (by
+//! its `end` separator or by its container closing), so the top is a
+//! container, not a kv frame, and the new pair pushes normally.
 //!
 //! **Key anchor (`_kv_seg_start`).** A quoted key like `"a"` is consumed by
 //! the symmetric string rule *before* `eq` is reached, moving `text_start`
@@ -259,10 +339,10 @@
 #[macro_export]
 macro_rules! parse_inline {
     ($state:ident, $src:ident, $start:expr, $le:expr,
-     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal ;
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt ;
      $($tail:tt)*) => {
         $crate::parse_inline!(
-            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -279,7 +359,7 @@ macro_rules! parse_inline {
 
     // hard_break rule
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
      (hard_break: )
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -289,7 +369,7 @@ macro_rules! parse_inline {
      tail = [hard_break($hb_esc:literal, $sp:literal, $sp_min:literal) => $hb:ident ; $($rest:tt)*]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
             (hard_break: $hb_esc, $sp, $sp_min => $hb)
             finders  = [$($fi)*]
             sy_rules = [$($sr)*]
@@ -302,7 +382,7 @@ macro_rules! parse_inline {
 
     // on_trigger(...) { ... }
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
      (hard_break: $($hb:tt)*)
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -344,7 +424,7 @@ macro_rules! parse_inline {
      ]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
             (hard_break: $($hb)*)
             finders  = [$($fi)* { $($fn_b),+ $(, $kv_end)* }]
             sy_rules = [$($sr)* $( ($sb, $pi, $bal, { $( $sn => $sf ),* }) )*]
@@ -358,7 +438,7 @@ macro_rules! parse_inline {
     // Transition: all sections consumed — flatten buckets and enter @body.
     (
         @collect ($st:ident, $src:ident, $s:expr, $le:expr,
-                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
+                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
         (hard_break: $($hb:tt)*)
         finders  = [$($fi:tt)*]
         sy_rules = [$( ($sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* }) )*]
@@ -370,7 +450,7 @@ macro_rules! parse_inline {
                         $kv_kf:ident, $kv_vf:ident, $kv_ty:ident, $kv_f:ident) )*]
         tail = []
     ) => {
-        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn)
+        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
             (hard_break: $($hb)*)
             finders  = [$($fi)*]
             sy_rules = [$( $sb, $pi, $bal, { $( $sn => $sf ),* } )*]
@@ -382,12 +462,12 @@ macro_rules! parse_inline {
     };
 
     // ------------------------------------------------------------------ //
-    // Execution phase: the actual single-pass scan over one run.         //
+    // Execution phase: the actual single-pass scan over one run.          //
     // ------------------------------------------------------------------ //
 
     (
         @body ($state:ident, $src:ident, $start:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
         (hard_break: $($hb_esc:literal, $sp:literal, $sp_min:literal => $hb:ident)*)
         finders  = [$( { $($fn_b:literal),+ } )*]
         sy_rules = [$( $sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* } )*]
@@ -410,30 +490,74 @@ macro_rules! parse_inline {
 
         // ---- The unified inline stack ---------------------------------- //
         //
-        // One tagged frame, one array, one depth. `kind`:
-        //   0 = asymmetric : b0 = open byte, b1 = close byte, opaque,
-        //                    vidx = back-patch index, count = 1.
-        //   1 = symmetric  : b0 = b1 = the byte, count = run length,
-        //                    vidx = back-patch index, opaque = false.
-        //   2 = key_value  : ks/ke = finalised key span, vs = value start;
-        //                    b0/b1/count/vidx/opaque unused.
-        #[derive(Clone, Copy)]
-        struct _Frame {
-            kind: u8,
-            b0: u8,
-            b1: u8,
-            opaque: bool,
-            count: u32,
-            vidx: u32,
-            ks: u32,
-            ke: u32,
-            vs: u32,
-        }
-        let _frame0 = _Frame {
-            kind: 0, b0: 0, b1: 0, opaque: false,
-            count: 0, vidx: 0, ks: 0, ke: 0, vs: 0,
-        };
-        let mut frames: [_Frame; $maxn] = [_frame0; $maxn];
+        // One minimal frame, one array, one depth, shared by asymmetric,
+        // symmetric, AND key_value. `(byte, count, vidx)`:
+        //   asymmetric : byte = open byte, count = 1 (always — each byte of
+        //                an open run is its own event), vidx = back-patch
+        //                index into the placeholder already pushed.
+        //   symmetric  : byte = the delimiter, count = run length (picks
+        //                the construct), vidx = back-patch index.
+        //   key_value  : byte = $kv_end, count = 0 (unused), vidx = 0
+        //                (unused — a kv frame's pending key/value-start data
+        //                lives in `kv_pending` below, at this SAME position
+        //                in `frames`, not behind an index stored here).
+        // Nothing else is stored: close byte, opacity, and field routing are
+        // all recovered from `byte` at the point of use by matching it
+        // against each rule's own compile-time literal (see this file's
+        // module docs for why this is sound and not a new assumption).
+        //
+        // Boundary note: `count` is a single byte, so a symmetric run length
+        // beyond 255 would alias against a different, shorter run that
+        // happens to truncate to the same `u8` (both open-time storage and
+        // close-time comparison truncate the same way via `as u8`, so the
+        // two sides stay internally consistent — but a 257-byte run and a
+        // 1-byte run of the same delimiter would then wrongly compare equal
+        // to each other). No existing grammar's symmetric rules declare run
+        // lengths anywhere near this range (markdown's widest is `3`, for
+        // bold-italic), so this is a real but currently unreachable edge,
+        // stated here rather than left implicit.
+        let mut frames: [(u8, u8, u32); $maxn] = [(0u8, 0u8, 0u32); $maxn];
+
+        // Scratch storage for a still-open key_value frame's already-
+        // resolved key plus pending value start: `(ks, ke, vs)`, indexed by
+        // the SAME position the frame itself occupies in `frames` (not a
+        // separately tracked vidx — the third tuple field of a kv frame is
+        // simply unused, `0`, since position alone already identifies the
+        // slot). This is deliberately kept OUT of `$kv_f`, the public output
+        // vector: `$kv_f` is only ever appended to at the moment a pair
+        // actually *closes*, complete, in one push — never at open time with
+        // a placeholder. That is what makes its order close-order (an outer
+        // pair, closing after every pair nested inside it, lands after them
+        // in the vector too) rather than open-order. This is the opposite
+        // convention from asymmetric/symmetric, whose own output vectors
+        // intentionally ARE pushed at open time (placeholder, back-patched)
+        // to keep THEM in open/start order — both conventions are existing,
+        // separately tested behaviour, not a free choice made here. None of
+        // this is a second *nesting* stack: ordering among kv frames and
+        // asymmetric/symmetric frames is still decided entirely by `frames`
+        // / `fdepth` alone; `kv_pending` only carries data that has nowhere
+        // else to live until its frame closes.
+        let mut kv_pending: [(u32, u32, u32); $maxn] = [(0u32, 0u32, 0u32); $maxn];
+
+        // `fdepth` is `usize`, not a narrower type, despite being
+        // architecturally bounded by `max_nest` (every push site checks
+        // `fdepth < $maxn` first, so it provably never exceeds it). That
+        // bound was, for a while, used as grounds to make it `u8` — measured
+        // and reverted: `fdepth` indexes into `frames`/`kv_pending` many
+        // times per interesting byte in the hot loop (`_top_is_kv`,
+        // `_top_opaque_active`, the close cascade's kv-drain, the ordinary
+        // close path — easily 5-10 accesses), and array indexing needs a
+        // pointer-width operand regardless of what width the index variable
+        // is declared as. A narrower `fdepth` means every one of those
+        // accesses pays a zero-extend (`movzx`) from the narrow type up to
+        // `usize` first; `usize` itself needs none. Unlike the frame fields
+        // above — which DO live inside an array, multiplied by `max_nest`,
+        // where narrowing wins on memory traffic — `fdepth` is a scalar
+        // *index*, not an array element, so there is no compensating memory
+        // win to offset that per-access cost. The same "scalar, not an
+        // array element, no win from narrowing" reasoning that already kept
+        // `asym_overflow` / `ch_text_depth` / `ch_url_depth` wide applies
+        // here too; it just was not applied to `fdepth` the first time.
         let mut fdepth: usize = 0;
         // One-shot overflow counter for `balanced = true` asymmetric opens
         // beyond the cap, so the real tracked frame's close isn't mistaken
@@ -466,14 +590,14 @@ macro_rules! parse_inline {
         // Two-phase transparent state for `chained` (off the stack).
         let mut ch_in_text: bool = false;
         let mut ch_text_opaque: bool = false;
-        let mut ch_text_depth: i32 = 0;
+        let mut ch_text_depth: u32 = 0;
         let mut ch_text_start: u32 = 0;
         let mut ch_is_prefix: bool = false;
         let mut ch_real_start: u32 = 0;
 
         let mut ch_in_url: bool = false;
         let mut ch_url_opaque: bool = false;
-        let mut ch_url_depth: i32 = 0;
+        let mut ch_url_depth: u32 = 0;
         let mut ch_url_start: u32 = 0;
         let mut ch_saved_text_end: u32 = 0;
 
@@ -481,56 +605,87 @@ macro_rules! parse_inline {
             // ---- Single unified trigger search -------------------------- //
             //
             // ONE `find_any` over the union of every `on_trigger` group's
-            // bytes *plus* `$eol`, scanning `[pos, parse_end)` directly.
+            // bytes, *conditionally* plus `$eol` — gated by `$ml`, the
+            // multiline flag passed in by the caller (`true` for
+            // `flush_para_inline!`'s whole-run call, `false` for the
+            // single-line-bounded mid-line-continuation call — see
+            // `parse_text!`'s two call sites).
             //
-            // Flattening `[$( $($fn_b),+ ),*]` concatenates all groups into a
-            // single target array (duplicate bytes are harmless — `find_any`
-            // only asks "is this byte any target"). `$eol` is folded into the
-            // same array, so the one scan also stops at the nearest line
-            // break: this is what bounds each iteration to "until the next
-            // significant byte" — `find_any` short-circuits at the first hit,
-            // so on a long trigger-free run it returns at that line's own
-            // `\n` instead of walking to `parse_end`. No separate eol memchr,
-            // no cached `_next_eol`, no `_scan_end` reconciliation: the bound
-            // and the search are the same single pass. (`find_any`'s N grows
-            // by one for the `\n`; for typical sets this stays within the
-            // same memchr/SWAR tier.)
+            // `find_any`'s cost in the wide (`N >= 4`) path is linear in `N`:
+            // one `has_byte` broadcast-compare per target, per 8-byte chunk
+            // (see `swar::find_any_wide`). `$eol` is one more target than the
+            // grammar's own trigger bytes, i.e. roughly +25% of that cost
+            // for a 4-byte `on_trigger` set such as Markdown's — paid on
+            // *every* chunk of *every* scanned byte, regardless of whether
+            // `\n` ever actually occurs in range.
             //
-            // When the landed-on byte *is* `\n`, the handling below decides
-            // what it means: a hard-break check (if declared), the kv
-            // deferral guard, or — for a grammar that gives `\n` no special
-            // role at all, like JSON — falling through every rule arm
-            // untouched (no arm triggers on it) so it is simply scanned over,
-            // `pos` having already advanced past its run. Either way `pos`
-            // strictly increases, so the loop still terminates in O(n).
-            let found: Option<usize> =
-                $crate::swar::find_any([$eol $(, $($fn_b),+)*], &src[pos..parse_end])
-                    .map(|r| pos + r);
+            // For the single-line-bounded call, it provably never does:
+            // `parse_text!` computes this call's own `$le` as the offset of
+            // the next `\n` via `memchr`, so `[pos, parse_end)` is by
+            // construction `\n`-free. Searching for `$eol` there cannot ever
+            // match — it is pure dead weight, paid on every marker line with
+            // trailing inline content (headings, bullet items: the `heavy`
+            // profile). Dropping it for `$ml = false` removes that cost with
+            // no behavioural change: the byte that could never be found is
+            // simply no longer searched for.
+            //
+            // For the multiline run call (`$ml = true`), `$eol` stays in the
+            // set: a long trigger-free run needs the search to stop at each
+            // line's own `\n` rather than walking to `parse_end`, and an
+            // internal `\n` may itself need hard-break handling (see below).
+            // This is the genuinely necessary cost for that call's job.
+            let found: Option<usize> = if $ml {
+                $crate::swar::find_any(
+                    [$eol $(, $($fn_b),+)*],
+                    &src[pos..parse_end],
+                ).map(|r| pos + r)
+            } else {
+                $crate::swar::find_any(
+                    [$($($fn_b),+),*],
+                    &src[pos..parse_end],
+                ).map(|r| pos + r)
+            };
 
             let Some(_hit) = found else { break };
             pos = _hit;
 
-            // -------------------------------------------------------------- //
-            // Internal eol within a multi-line run. This whole block is a
-            // `$(...)*` repetition over the (0-or-1) hard_break rule, so it
-            // exists at all only when hard_break is declared; without it the
-            // `\n` the unified search just landed on falls straight through
-            // to the generic dispatch below and is scanned over like any
-            // other unmatched byte. Checked BEFORE the generic escape-skip
-            // below: a preceding backslash here is the hard-break-via-
-            // backslash signal itself ($hb_esc), to be consumed by THIS
-            // check, not treated as "this eol is escaped" by the generic
-            // delimiter-escaping rule meant for other bytes. Mirrors the
-            // up-front end-of-run check, just triggered per-occurrence instead
-            // of once: trims trailing spaces/escape, emits the hard-break span
-            // if matched, flushes pending plain text up to the trim point
-            // (subject to the same stack-emptiness guard as every other flush
-            // here), then continues the SAME scan — the unified stack is never
-            // drained by this. The final internal eol of a run (immediately
-            // before `parse_end`) is also found and handled right here; the up-
-            // front check further below then sees an eol byte at `parse_end - 1`,
-            // never matches, and is a no-op for this case — it remains necessary for
-            // the true-EOF-without-trailing-newline case and for the single-line-bounded
+            // Whether the current top of the unified stack is a key_value
+            // frame — derived once here by byte alone (no stored kind): the
+            // frame's stored byte equals some kv_rule's own `$kv_end`
+            // literal. Valid for the rest of this outer-loop iteration only
+            // (it must be recomputed inside any inner loop that itself pops
+            // frames, e.g. the asymmetric close cascade further below, since
+            // `fdepth` can change mid-iteration there). Reused by the eol
+            // deferral guard immediately below and by the `$kv_end`
+            // pre-check further down.
+            let _top_is_kv = fdepth > 0 && {
+                let _tb = frames[fdepth - 1].0;
+                let mut _k = false;
+                $( if _tb == $kv_end { _k = true; } )*
+                _k
+            };
+
+            // ---------------------------------------------------------- //
+            // Internal eol within a multi-line run. This whole block is a   //
+            // `$(...)*` repetition over the (0-or-1) hard_break rule, so it  //
+            // exists at all only when hard_break is declared; without it the //
+            // `\n` the unified search just landed on falls straight through  //
+            // to the generic dispatch below and is scanned over like any      //
+            // other unmatched byte. Checked BEFORE the generic escape-skip     //
+            // below: a preceding backslash here is the hard-break-via-          //
+            // backslash signal itself ($hb_esc), to be consumed by THIS          //
+            // check, not treated as "this eol is escaped" by the generic           //
+            // delimiter-escaping rule meant for other bytes. Mirrors the            //
+            // up-front end-of-run check, just triggered per-occurrence instead       //
+            // of once: trims trailing spaces/escape, emits the hard-break span        //
+            // if matched, flushes pending plain text up to the trim point             //
+            // (subject to the same stack-emptiness guard as every other flush          //
+            // here), then continues the SAME scan — the unified stack is never         //
+            // drained by this. The final internal eol of a run (immediately             //
+            // before `parse_end`) is also found and handled right here; the up-          //
+            // front check further below then sees an eol byte at `parse_end - 1`,        //
+            // never matches, and is a no-op for this case — it remains necessary for      //
+            // the true-EOF-without-trailing-newline case and for the single-line-bounded   //
             // calls, where no internal eol is ever in range to be found by the search above.
             //
             // Deferral guard: `eol` and a `key_value` rule's `end` byte can be
@@ -546,7 +701,7 @@ macro_rules! parse_inline {
             // two values into one. This is a pure stack-state check — it
             // does not need to know what `$kv_end`'s literal byte is.
             $(
-                if src[pos] == $eol && !(fdepth > 0 && frames[fdepth - 1].kind == 2) {
+                if src[pos] == $eol && !_top_is_kv {
                     let mut _ep = pos;
                     let mut _ehb = false;
                     if _ep > $start {
@@ -588,31 +743,31 @@ macro_rules! parse_inline {
             let mut count: u32 = 0;
             while pos < parse_end && src[pos] == delim { count += 1; pos += 1; }
 
-            // ---------------------------------------------------------------- //
-            // key_value value terminator (`$kv_end`) at the value's own        //
-            // level: only fires when a kv frame is currently on top of         //
-            // the stack (we are back at the value's depth, nothing deeper      //
-            // open). `$kv_end` is claimed by no other rule, so this is a       //
-            // standalone pre-check. The value ends *before* the separator.     //
-            //                                                                  //
+            // ---------------------------------------------------------- //
+            // key_value value terminator (`$kv_end`) at the value's own  //
+            // level: only fires when a kv frame is currently on top of    //
+            // the stack (we are back at the value's depth, nothing deeper  //
+            // open). `$kv_end` is claimed by no other rule, so this is a    //
+            // standalone pre-check. The value ends *before* the separator.   //
+            //                                                                 //
             // When `$kv_end` arrives with no kv frame on top (e.g. a bare      //
-            // top-level array's `,` between elements), no rule here claims it: //
-            // it falls through untouched, `pos` having already advanced past   //
-            // the delimiter run. Splitting a transparent container's elements  //
-            // is a concern for whoever reads that container's span afterward,  //
-            // not for this scan — the stack only needs to know when a *value*  //
-            // it is tracking ends.                                             //
-            // ---------------------------------------------------------------- //
+            // top-level array's `,` between elements), no rule here claims it:  //
+            // it falls through untouched, `pos` having already advanced past    //
+            // the delimiter run. Splitting a transparent container's elements    //
+            // is a concern for whoever reads that container's span afterward,     //
+            // not for this scan — the stack only needs to know when a *value*      //
+            // it is tracking ends.                                                  //
+            // ---------------------------------------------------------------------//
             let mut _kv_hit = false;
             $(
                 if delim == $kv_end
                     && fdepth > 0
-                    && frames[fdepth - 1].kind == 2
+                    && frames[fdepth - 1].0 == $kv_end
                 {
-                    let _f = frames[fdepth - 1];
+                    let (_ks, _ke, _vs) = kv_pending[fdepth - 1];
                     $state.$kv_f.push($kv_ty {
-                        $kv_kf: $crate::span::Span::new(_f.ks, _f.ke),
-                        $kv_vf: $crate::span::Span::new(_f.vs, delim_start),
+                        $kv_kf: $crate::span::Span::new(_ks, _ke),
+                        $kv_vf: $crate::span::Span::new(_vs, delim_start),
                     });
                     fdepth -= 1;
                     _kv_seg_start = pos;
@@ -625,7 +780,7 @@ macro_rules! parse_inline {
             }
 
             // ---------------------------------------------------------- //
-            // asymmetric (kind 0): unified open + unified close cascade. //
+            // asymmetric (kind 0): unified open + unified close cascade.  //
             // ---------------------------------------------------------- //
             let _chained_opaque_active =
                 (ch_in_text && ch_text_opaque) || (ch_in_url && ch_url_opaque);
@@ -651,11 +806,7 @@ macro_rules! parse_inline {
                                         let _vidx = $state.$af.len() as u32;
                                         push_il!($af, $crate::span::Span::new(
                                             _content_start, _content_start));
-                                        frames[fdepth] = _Frame {
-                                            kind: 0, b0: $ao, b1: $ac, opaque: !$api,
-                                            count: 1, vidx: _vidx, ks: 0, ke: 0,
-                                            vs: _content_start,
-                                        };
+                                        frames[fdepth] = ($ao, 1u8, _vidx);
                                         fdepth += 1;
                                         asym_overflow = 0;
                                         _consumed = true;
@@ -663,8 +814,7 @@ macro_rules! parse_inline {
                                     _ => {}
                                 }
                             } else if $abal && fdepth > 0
-                                && frames[fdepth - 1].kind == 0
-                                && frames[fdepth - 1].b0 == $ao
+                                && frames[fdepth - 1].0 == $ao
                             {
                                 asym_overflow += 1;
                                 _consumed = true;
@@ -696,45 +846,64 @@ macro_rules! parse_inline {
                             // kv frames never stack directly (a container
                             // always sits between two of them), so at most one
                             // kv frame can be on top of its closing container.
-                            if fdepth >= 2
-                                && frames[fdepth - 1].kind == 2
-                                && frames[fdepth - 2].kind == 0
-                                && frames[fdepth - 2].b1 == delim
-                            {
-                                let _f = frames[fdepth - 1];
-                                $(
-                                    $state.$kv_f.push($kv_ty {
-                                        $kv_kf: $crate::span::Span::new(_f.ks, _f.ke),
-                                        $kv_vf: $crate::span::Span::new(_f.vs, _close_char_pos),
-                                    });
-                                )*
-                                fdepth -= 1;
+                            // Both facts — "top is a kv frame" and "the frame
+                            // below is a container whose grammar-known close
+                            // byte is this delim" — are derived from stored
+                            // bytes alone, freshly each sub-iteration (fdepth
+                            // can change within this very loop, so a value
+                            // computed once before the loop, like `_top_is_kv`
+                            // above, would go stale after the first pop).
+                            if fdepth >= 2 {
+                                let _top_b = frames[fdepth - 1].0;
+                                let mut _top_is_kv_now = false;
+                                $( if _top_b == $kv_end { _top_is_kv_now = true; } )*
+                                if _top_is_kv_now {
+                                    let _below_b = frames[fdepth - 2].0;
+                                    let mut _below_closes_here = false;
+                                    $( if ($abal || $api) && _below_b == $ao && $ac == delim {
+                                        _below_closes_here = true;
+                                    } )*
+                                    if _below_closes_here {
+                                        let (_ks, _ke, _vs) = kv_pending[fdepth - 1];
+                                        $(
+                                            if _top_b == $kv_end {
+                                                $state.$kv_f.push($kv_ty {
+                                                    $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                                    $kv_vf: $crate::span::Span::new(_vs, _close_char_pos),
+                                                });
+                                            }
+                                        )*
+                                        fdepth -= 1;
+                                    }
+                                }
                             }
 
-                            if fdepth > 0
-                                && frames[fdepth - 1].kind == 0
-                                && frames[fdepth - 1].b1 == delim
-                            {
-                                if asym_overflow > 0 {
-                                    asym_overflow -= 1;
-                                } else {
-                                    let _f = frames[fdepth - 1];
-                                    let _ob = _f.b0;
-                                    let _vidx = _f.vidx;
-                                    $(
-                                        if ($abal || $api) && _ob == $ao {
-                                            match 1u32 {
-                                                $( $an => {
-                                                    $state.$af[_vidx as usize].end = _close_char_pos;
-                                                } )*
-                                                _ => {}
+                            if fdepth > 0 {
+                                let _ob = frames[fdepth - 1].0;
+                                let mut _closes_here = false;
+                                $( if ($abal || $api) && _ob == $ao && $ac == delim {
+                                    _closes_here = true;
+                                } )*
+                                if _closes_here {
+                                    if asym_overflow > 0 {
+                                        asym_overflow -= 1;
+                                    } else {
+                                        let _vidx = frames[fdepth - 1].2;
+                                        $(
+                                            if ($abal || $api) && _ob == $ao {
+                                                match 1u32 {
+                                                    $( $an => {
+                                                        $state.$af[_vidx as usize].end = _close_char_pos;
+                                                    } )*
+                                                    _ => {}
+                                                }
                                             }
-                                        }
-                                    )*
-                                    fdepth -= 1;
-                                    asym_overflow = 0;
+                                        )*
+                                        fdepth -= 1;
+                                        asym_overflow = 0;
+                                    }
+                                    text_start = (_close_char_pos + 1) as usize;
                                 }
-                                text_start = (_close_char_pos + 1) as usize;
                             }
                         }
                         _asym_bal_handled = true;
@@ -745,8 +914,12 @@ macro_rules! parse_inline {
                 continue;
             }
 
-            let _top_opaque_active =
-                fdepth > 0 && frames[fdepth - 1].kind == 0 && frames[fdepth - 1].opaque;
+            let _top_opaque_active = fdepth > 0 && {
+                let _tb = frames[fdepth - 1].0;
+                let mut _op = false;
+                $( if ($abal || $api) && _tb == $ao { _op = !$api; } )*
+                _op
+            };
 
             // ---------------------------------------------------------- //
             // chained, transparent phases (off the stack).               //
@@ -943,21 +1116,19 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- symmetric (kind 1 stack, or legacy pending / greedy) ---
+            // --- symmetric (stack mode, or legacy pending / greedy) ---
             $(
                 if delim == $sb {
                     if $pi {
                         if $bal {
                             let _matches_top = fdepth > 0
-                                && frames[fdepth - 1].kind == 1
-                                && frames[fdepth - 1].b0 == $sb
-                                && frames[fdepth - 1].count == count;
+                                && frames[fdepth - 1].0 == $sb
+                                && frames[fdepth - 1].1 == count as u8;
 
                             if _matches_top {
-                                let _vidx = frames[fdepth - 1].vidx;
-                                let _c = frames[fdepth - 1].count;
+                                let _vidx = frames[fdepth - 1].2;
                                 let mut _closed = false;
-                                match _c {
+                                match count {
                                     $( $sn => {
                                         $state.$sf[_vidx as usize].end = delim_start;
                                         _closed = true;
@@ -984,10 +1155,7 @@ macro_rules! parse_inline {
                                         }
                                         let _vidx = $state.$sf.len() as u32;
                                         push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
-                                        frames[fdepth] = _Frame {
-                                            kind: 1, b0: $sb, b1: $sb, opaque: false,
-                                            count, vidx: _vidx, ks: 0, ke: 0, vs: 0,
-                                        };
+                                        frames[fdepth] = ($sb, count as u8, _vidx);
                                         _pushed = true;
                                     } )*
                                     _ => {}
@@ -1163,13 +1331,16 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- key_value (kind 2): key recorded ascending, value pushed ---
+            // --- key_value: key resolved now, but NOT pushed to $kv_f yet —
+            // only `kv_pending` at this frame's own slot. $kv_f is appended
+            // to once, complete, at actual close (see kv_pending's own doc
+            // comment for why this ordering matters).
             $(
                 if delim == $kv_eq {
                     // Only open a new value frame if the top of stack is not
                     // already a kv frame. If it is, this `eq` is content of
                     // the still-open value (flat, separator-less multi-eq).
-                    if !(fdepth > 0 && frames[fdepth - 1].kind == 2) {
+                    if !_top_is_kv {
                         // Key: back-scan from `eq`, clamped to _kv_seg_start.
                         let mut key_end = delim_start as usize;
                         if $kv_allow {
@@ -1196,11 +1367,8 @@ macro_rules! parse_inline {
                             };
                         }
                         if fdepth < $maxn {
-                            frames[fdepth] = _Frame {
-                                kind: 2, b0: 0, b1: $kv_end, opaque: false,
-                                count: 0, vidx: 0,
-                                ks: ks as u32, ke: key_end as u32, vs: val_start as u32,
-                            };
+                            kv_pending[fdepth] = (ks as u32, key_end as u32, val_start as u32);
+                            frames[fdepth] = ($kv_end, 0u8, 0u32);
                             fdepth += 1;
                         }
                         // else: depth cap reached — pair untracked, `eq`
@@ -1212,57 +1380,66 @@ macro_rules! parse_inline {
             )*
         }
 
-        // ------------------------------------------------------------------- //
-        // End of line: drain the unified stack, top → down.                   //
-        //                                                                     //
-        //  - key_value frame  : finalise its value to the line end (so a flat //
-        //    `key = value` with no terminator still emits) and push the text  //
-        //    cursor past it, so the unconditional flush below does not        //
-        //    re-emit the value as plain text.                                 //
-        //  - asymmetric frame : discard via `Vec::remove(vidx)` — the same    //
-        //    type can self-nest, so a closed inner entry can sit at a higher  //
-        //    index than a still-open outer one; processing innermost-first    //
-        //    removes the highest index first.                                 //
-        //  - symmetric frame  : discard via `truncate(vidx)` — an identical   //
-        //    (byte, count) never self-nests, so each field has at most one    //
+        // ------------------------------------------------------------------ //
+        // End of run: drain the unified stack, top → down. Kind is derived   //
+        // from each frame's stored byte (kv's own `$kv_end`, then asymmetric //
+        // rules' `$ao`, else symmetric) — never a stored tag.                //
+        //                                                                    //
+        //  - key_value frame  : its key and value-start, parked in
+        //    `kv_pending` since `eq` time, are pushed as the complete
+        //    struct right here — value finalised to the run's end (so a
+        //    flat `key = value` with no terminator still emits correctly) —
+        //    and the text cursor is pushed past it, so the unconditional
+        //    flush below does not re-emit the value as plain text.
+        //  - asymmetric frame : discard via `Vec::remove(vidx)` — the same   //
+        //    type can self-nest, so a closed inner entry can sit at a higher //
+        //    index than a still-open outer one; processing innermost-first   //
+        //    removes the highest index first.                                //
+        //  - symmetric frame  : discard via `truncate(vidx)` — an identical  //
+        //    (byte, count) never self-nests, so each field has at most one   //
         //    pending placeholder, always last.                                //
-        // ------------------------------------------------------------------- //
+        // ------------------------------------------------------------------ //
         while fdepth > 0 {
             fdepth -= 1;
-            let _f = frames[fdepth];
-            if _f.kind == 2 {
-                $(
+            let (_fb, _fc, _fv) = frames[fdepth];
+
+            let mut _matched_kv = false;
+            $(
+                if _fb == $kv_end {
+                    let (_ks, _ke, _vs) = kv_pending[fdepth];
                     $state.$kv_f.push($kv_ty {
-                        $kv_kf: $crate::span::Span::new(_f.ks, _f.ke),
-                        $kv_vf: $crate::span::Span::new(_f.vs, parse_end as u32),
+                        $kv_kf: $crate::span::Span::new(_ks, _ke),
+                        $kv_vf: $crate::span::Span::new(_vs, parse_end as u32),
                     });
-                )*
+                    _matched_kv = true;
+                }
+            )*
+
+            if _matched_kv {
                 if parse_end > text_start {
                     text_start = parse_end;
                 }
-            } else if _f.kind == 0 {
-                let _ob = _f.b0;
-                let _vidx = _f.vidx;
-                $(
-                    if ($abal || $api) && $ao == _ob {
-                        match 1u32 {
-                            $( $an => { $state.$af.remove(_vidx as usize); } )*
-                            _ => {}
-                        }
-                    }
-                )*
             } else {
-                let _sob = _f.b0;
-                let _soc = _f.count;
-                let _svidx = _f.vidx;
+                let mut _matched_asym = false;
                 $(
-                    if $bal && $pi && $sb == _sob {
-                        match _soc {
-                            $( $sn => { $state.$sf.truncate(_svidx as usize); } )*
+                    if ($abal || $api) && _fb == $ao {
+                        match 1u32 {
+                            $( $an => { $state.$af.remove(_fv as usize); } )*
                             _ => {}
                         }
+                        _matched_asym = true;
                     }
                 )*
+                if !_matched_asym {
+                    $(
+                        if $bal && $pi && _fb == $sb {
+                            match _fc {
+                                $( $sn => { $state.$sf.truncate(_fv as usize); } )*
+                                _ => {}
+                            }
+                        }
+                    )*
+                }
             }
         }
 
