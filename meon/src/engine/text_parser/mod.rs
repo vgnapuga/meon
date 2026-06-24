@@ -420,106 +420,91 @@ macro_rules! parse_text {
 
 
     (@body
-        $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-        $tx:ident, $merge_il:tt,
-        [$($ilt:tt)*], [$($ln:tt)*],
-        [$($sr:tt)*], [$($br:tt)*],
-        $para:ident,
-        hb = $hb:tt,
-        finders = [$($f:literal)*]
-    ) => {{
-        let src: &[u8] = $src;
-        let len: usize = src.len();
-        let mut state = ParseState::new(len);
+            $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
+            $tx:ident, $merge_il:tt,
+            [$($ilt:tt)*], [$($ln:tt)*],
+            [$($sr:tt)*], [$($br:tt)*],
+            $para:ident,
+            hb = $hb:tt,
+            finders = [$($f:literal)*]
+        ) => {{
+            let src: &[u8] = $src;
+            let len: usize = src.len();
+            let mut state = ParseState::new(len);
 
-        // Active block stack, bounded by the grammar-wide `max_nest` (shared
-        // with the inline engine). `max_nest = 1` => a single slot => the
-        // original single-active-block behaviour, byte for byte.
-        let mut _active_stack: [(u8, u8, u8, u32); $maxn] =
-            [(0u8, 0u8, 0u8, 0u32); $maxn];
-        let mut _active_depth: usize = 0;
-        let mut pos: usize = 0;
-        let mut para_start: Option<u32> = None;
-        let mut text_start: u32 = 0;
-        let mut at_line_start: bool = true;
+            let mut _active_stack: [(u8, u8, u8, u32); $maxn] =
+                [(0u8, 0u8, 0u8, 0u32); $maxn];
+            let mut _active_depth: usize = 0;
+            let mut pos: usize = 0;
+            let mut para_start: Option<u32> = None;
+            let mut text_start: u32 = 0;
 
-        let mut current_line_end: usize = 0;
-        let mut line_end_valid: bool = false;
-
-        macro_rules! flush_text {
-            ($end:expr) => {
-                let _end = $end as u32;
-                if text_start < _end {
-                    $crate::parse_text!(@dispatch state, $tx,
-                        $crate::span::Span::new(text_start, _end), $merge_il);
-                }
-            };
-        }
-
-        macro_rules! close_para {
-            () => {
-                if let Some(s) = para_start.take() {
-                    state.$para.push($crate::span::Span::new(s, pos as u32));
-                }
-            };
-        }
-
-        // Flush an accumulated multi-line fallthrough run (if one is open)
-        // as a single `parse_inline!` call over its whole extent, so the
-        // unified inline stack persists across every `\n` inside it. Reads
-        // `para_start` without clearing it — `close_para!()`, called right
-        // alongside this at every one of its call sites, still owns clearing
-        // it once it has also pushed the paragraph-fallback span. A no-op
-        // when no run is open, or when the run is empty (`s == end`).
-        //
-        // Passes `true` for `parse_inline!`'s multiline flag: this run can
-        // genuinely contain internal `\n` bytes, so `$eol` must stay in the
-        // unified trigger search (hard-break detection, line-break bounding
-        // of long trigger-free stretches). See `parse_inline!`'s own docs
-        // for why the single-line call below passes `false` instead.
-        macro_rules! flush_para_inline {
-            ($end:expr) => {
-                if let Some(s) = para_start {
-                    let _ps = s as usize;
-                    let _pe = $end as usize;
-                    if _ps < _pe {
-                        $crate::parse_inline!(
-                            state, src, _ps, _pe,
-                            $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true ; $($ilt)*
-                        );
+            macro_rules! flush_text {
+                ($end:expr) => {
+                    let _end = $end as u32;
+                    if text_start < _end {
+                        $crate::parse_text!(@dispatch state, $tx,
+                            $crate::span::Span::new(text_start, _end), $merge_il);
                     }
-                }
-            };
-        }
+                };
+            }
 
-        while pos < len {
-            if at_line_start {
-                at_line_start = false;
+            macro_rules! close_para {
+                () => {
+                    if let Some(s) = para_start.take() {
+                        state.$para.push($crate::span::Span::new(s, pos as u32));
+                    }
+                };
+            }
 
-                if src[pos] == $eol {
+            macro_rules! flush_para_inline {
+                ($end:expr) => {
+                    if let Some(s) = para_start {
+                        let _ps = s as usize;
+                        let _pe = $end as usize;
+                        if _ps < _pe {
+                            $crate::parse_inline!(
+                                state, src, _ps, _pe,
+                                $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true ; $($ilt)*
+                            );
+                        }
+                    }
+                };
+            }
+
+            while pos < len {
+                let current_byte = match src.get(pos) {
+                    Some(&b) => b,
+                    None => break,
+                };
+
+                if current_byte == $eol {
                     flush_para_inline!(pos);
                     flush_text!(pos);
                     close_para!();
-                    // A blank line closes all open continuations — unless the
-                    // innermost open block is a fence, in which case the blank
-                    // line is fence content and the whole stack persists.
-                    if !(_active_depth > 0 && _active_stack[_active_depth - 1].0 == 0u8) {
+
+                    let is_fence = if $maxn == 1 {
+                        _active_depth > 0 && _active_stack[0].0 == 0u8
+                    } else {
+                        _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
+                    };
+
+                    if !is_fence {
                         $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, pos ;
                             block_simple { $($sr)* } block { $($br)* });
                     }
                     pos += 1;
-                    at_line_start = true;
-                    line_end_valid = false;
                     continue;
                 }
 
-                current_line_end = $crate::memchr::memchr($eol, &src[pos..])
+                let current_line_end = $crate::memchr::memchr($eol, &src[pos..])
                     .map(|i| pos + i)
                     .unwrap_or(len);
-                line_end_valid = true;
+                let next_line_start = if current_line_end < len { current_line_end + 1 } else { len };
 
                 let mut line_consumed = false;
                 let mut line_start_progress = true;
+                let mut loop_continue_signal = false;
 
                 while line_start_progress {
                     line_start_progress = false;
@@ -538,15 +523,10 @@ macro_rules! parse_text {
                             }
                             text_start = cs as u32;
                             pos = cs;
-                            if cs == current_line_end {
-                                if cs < len { pos += 1; }
-                                at_line_start = true;
-                                line_end_valid = false;
-                            } else if cs > current_line_end {
-                                at_line_start = true;
-                                line_end_valid = false;
-                            } else {
-                                at_line_start = false;
+
+                            if cs >= current_line_end {
+                                if cs == current_line_end && cs < len { pos += 1; }
+                                loop_continue_signal = true;
                             }
                             line_consumed = true;
                             break;
@@ -554,9 +534,6 @@ macro_rules! parse_text {
                         None => {}
                     }
 
-                    // `parse_block!` returned `None` but may have closed an
-                    // outer continuation (depth dropped). Re-run from the same
-                    // line start so the remainder is reprocessed fresh.
                     if _active_depth != _old_depth {
                         line_start_progress = true;
                         continue;
@@ -571,15 +548,10 @@ macro_rules! parse_text {
                             close_para!();
                             text_start = cs as u32;
                             pos = cs;
-                            if cs == current_line_end {
-                                if cs < len { pos += 1; }
-                                at_line_start = true;
-                                line_end_valid = false;
-                            } else if cs > current_line_end {
-                                at_line_start = true;
-                                line_end_valid = false;
-                            } else {
-                                at_line_start = false;
+
+                            if cs >= current_line_end {
+                                if cs == current_line_end && cs < len { pos += 1; }
+                                loop_continue_signal = true;
                             }
                             line_consumed = true;
                             break;
@@ -588,97 +560,48 @@ macro_rules! parse_text {
                     }
                 }
 
-                if at_line_start { continue; }
+                if loop_continue_signal { continue; }
 
                 if !line_consumed && _active_depth == 0 {
                     if para_start.is_none() {
                         para_start = Some(pos as u32);
                     }
-                    // Defer: this line joins a (possibly multi-line)
-                    // fallthrough run. Don't inline-scan it now — skip
-                    // straight to the next line start and let the run keep
-                    // growing. `text_start` is kept in sync with the new
-                    // `pos` so the pre-existing `flush_text!` calls at the
-                    // run's eventual close point stay harmless no-ops; the
-                    // whole run's text is flushed by `flush_para_inline!`
-                    // instead, in one `parse_inline!` call, when the run
-                    // closes.
-                    pos = if current_line_end < len { current_line_end + 1 } else { len };
+                    pos = next_line_start;
                     text_start = pos as u32;
-                    at_line_start = true;
-                    line_end_valid = false;
                     continue;
                 }
-            } else {
-                if !line_end_valid {
-                    current_line_end = $crate::memchr::memchr($eol, &src[pos..])
-                        .map(|i| pos + i)
-                        .unwrap_or(len);
-                    line_end_valid = true;
+
+                let skip_inline = if $maxn == 1 {
+                    _active_depth > 0 && _active_stack[0].0 == 0u8
+                } else {
+                    _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
+                };
+
+                if skip_inline {
+                    pos = next_line_start;
+                    continue;
                 }
+
+                if pos < current_line_end {
+                    let _ = $crate::parse_inline!(
+                        state, src, pos, current_line_end,
+                        $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false ; $($ilt)*
+                    );
+                }
+                pos = next_line_start;
+                text_start = pos as u32;
             }
 
-            let skip_inline = _active_depth > 0 && _active_stack[_active_depth - 1].0 == 0u8;
-
-            if skip_inline {
-                pos = if current_line_end < len { current_line_end + 1 } else { len };
-                at_line_start = true;
-                line_end_valid = false;
-                continue;
+            flush_para_inline!(len);
+            flush_text!(len);
+            if let Some(s) = para_start {
+                state.$para.push($crate::span::Span::new(s, len as u32));
             }
+            $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
+                block_simple { $($sr)* } block { $($br)* });
 
-            // Reached only for mid-line continuations after a `parse_block!`
-            // / `parse_line!` match left trailing content on this same line
-            // (heading text, bullet text, ...). Single-line bounded — that
-            // content cannot itself continue onto a further line.
-            //
-            // No outer trigger search here: `parse_inline!` is handed the
-            // whole `[pos, current_line_end)` range directly and does its own
-            // single unified scan over it. The previous outer
-            // `find_any([eol, triggers], &src[pos..len])` was pure
-            // double-work — it scanned (to `len`, even past this line) only to
-            // decide *whether* to call `parse_inline!`, which then re-scanned
-            // the very same bytes itself. On a corpus dense in marker lines
-            // with trailing inline content (nested blockquotes, bullet items —
-            // the `heavy` profile), that doubled the inline byte-scan on every
-            // such line. `parse_inline!` already handles the no-trigger case
-            // correctly (it flushes the whole range as fallback text) and the
-            // trailing-hard-break case (its own up-front end-of-range check),
-            // so the outer search decided nothing the inner one doesn't. The
-            // empty-trailing case (marker consumed the whole line,
-            // `pos == current_line_end`) is skipped cheaply rather than
-            // entering `parse_inline!` to scan nothing.
-            //
-            // Passes `false` for `parse_inline!`'s multiline flag: `current_line_end`
-            // is itself the offset `memchr` found for the next `$eol`, so
-            // `[pos, current_line_end)` is `\n`-free by construction. `$eol`
-            // can never match in this range — excluding it from the unified
-            // trigger search drops a dead per-chunk comparison from every
-            // byte of every such line (headings, bullet items, ...) with no
-            // change in what gets found, since there was never anything to
-            // find. See `parse_inline!`'s own docs for the cost this removes.
-            if pos < current_line_end {
-                let _ = $crate::parse_inline!(
-                    state, src, pos, current_line_end,
-                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false ; $($ilt)*
-                );
-            }
-            pos = if current_line_end < len { current_line_end + 1 } else { len };
-            text_start = pos as u32;
-            at_line_start = true;
-            line_end_valid = false;
-        }
-
-        flush_para_inline!(len);
-        flush_text!(len);
-        if let Some(s) = para_start {
-            state.$para.push($crate::span::Span::new(s, len as u32));
-        }
-        $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
-            block_simple { $($sr)* } block { $($br)* });
-
-        state.into_content(src)
-    }};
+            state.into_content(src)
+        }};
 
 
     (@hb_check $p:ident, $ts:expr, $src:ident ;

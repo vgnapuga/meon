@@ -417,3 +417,168 @@ fn test_30_typed_span_byte_equal_to_trimmed_source_slice() {
     let span = t.nums[0];
     assert_eq!(&src[span.start as usize..span.end as usize], b"99");
 }
+
+// ==========================================================================
+// Escape-awareness inside array-element strings (for_each_array_element's
+// own string-skip, independent of the engine's own escape handling).
+// ==========================================================================
+
+// 31. An escaped quote inside a string that is itself an array element: the
+//     string-skip must not treat `\"` as the real close, so the comma after
+//     the string is still found at the right place and the sibling number
+//     types correctly. The string itself still classifies to `None` (first
+//     byte `"`), as always.
+#[test]
+fn test_31_escaped_quote_inside_array_element_string() {
+    let src = br#"["a\"b", 1]"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert_eq!(texts(src, &t.nums), vec!["1"]);
+    assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// 32. An escaped backslash immediately followed by the real closing quote
+//     (`\\"` — content `a\`, i.e. one literal backslash, then close). The
+//     jump-by-two-on-backslash trick must consume the escaped backslash and
+//     its pair together so the *next* byte (the real `"`) is seen fresh,
+//     not mistaken for itself being escaped. Getting this wrong would run
+//     the string-skip past the end of the array looking for a close that
+//     was already there, swallowing the sibling element.
+#[test]
+fn test_32_escaped_backslash_then_real_close_inside_array_element() {
+    let src = br#"["a\\", 1]"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(texts(src, &c.type_scalars().nums), vec!["1"]);
+}
+
+// 33. Brace and bracket characters *inside* a string element must never
+//     reach the depth counter at all — the string-skip's own inner loop
+//     only ever looks for `\` and `"`, so a `{`/`}` here is just an
+//     ordinary byte to it, never seen by `for_each_array_element`'s outer
+//     `depth` tracking. Two such strings, with a real number sandwiched
+//     between them, locks down that depth is never perturbed by them.
+#[test]
+fn test_33_brackets_inside_array_element_string_do_not_affect_depth() {
+    let src = br#"["{not real}", 1, "}another{"]"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert_eq!(texts(src, &t.nums), vec!["1"]);
+    assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// ==========================================================================
+// Multi-level depth within a single array's own top-level comma-split
+// (distinct from test_11, where nesting never made the *outer* array's own
+// depth exceed 1 — both its elements were containers from the very first
+// byte, contributing nothing to type via the outer pass at all).
+// ==========================================================================
+
+// 34. A middle element that is a *doubly*-nested array (`[2,[3,4]]`) drives
+//     this array's own `depth` from 0 up to 2 and back down to 0 before the
+//     next top-level comma is recognised, with a real scalar sibling on
+//     each side. Deliberately nested ARRAYS here, not objects: a nested
+//     object's own `key_value` pairs are found by the engine independently
+//     of array/object wrapping (the same reason test_07's inner `"b":1`
+//     types via its own member entry, separate from the outer member it
+//     sits inside) — they would type via `self.members` regardless of
+//     whether this array's own depth-tracking were even correct, which
+//     would defeat the point of this test. Nested arrays carry no such
+//     independent path: every number here can *only* be found correctly if
+//     each array's own comma-split — including this outer one's depth
+//     bookkeeping around its doubly-nested middle element — is right.
+#[test]
+fn test_34_depth_reaches_two_and_returns_to_zero_within_one_array() {
+    let src = br#"[1,[2,[3,4]],5]"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(
+        sorted_texts(src, &c.type_scalars().nums),
+        vec!["1", "2", "3", "4", "5"]
+    );
+}
+
+// 35. An array nested inside a member's value, itself containing another
+//     nested array as one of its own elements: exercises the member-value
+//     skip (`[` classifies to `None` so `"a"`'s value itself never types),
+//     the outer array's own depth-tracking around its nested sibling array,
+//     and that nested array's own, entirely separate `self.arrays` entry —
+//     three mechanisms most other tests only exercise one or two of at a
+//     time.
+#[test]
+fn test_35_array_nested_two_levels_inside_member_value() {
+    let src = br#"{"a":[1,[2,3],4]}"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(
+        sorted_texts(src, &c.type_scalars().nums),
+        vec!["1", "2", "3", "4"]
+    );
+}
+
+// ==========================================================================
+// Empty / degenerate array shapes.
+// ==========================================================================
+
+// 36. An empty array's content span has `start == end`; `for_each_array_element`
+//     must take its `inner_start >= inner_end` early return and produce
+//     nothing, not panic or emit a phantom empty-segment scalar.
+#[test]
+fn test_36_empty_array_types_nothing_no_panic() {
+    let src = br#"{"a":[]}"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// 37. An empty array as a bare top-level document, with no member or other
+//     wrapping at all.
+#[test]
+fn test_37_bare_top_level_empty_array_types_nothing() {
+    let src = br#"[]"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// ==========================================================================
+// `type_field` — the two kinds not yet covered by a dedicated test
+// (Num and True already have one each; False and Null did not).
+// ==========================================================================
+
+// 38. `type_field(False)` matches `type_scalars().falses` exactly.
+#[test]
+fn test_38_type_field_false_matches_type_scalars_falses() {
+    let src = br#"[true, false, false, true]"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(
+        bounds(&c.type_scalars().falses),
+        bounds(&c.type_field(ScalarKind::False))
+    );
+}
+
+// 39. `type_field(Null)` matches `type_scalars().nulls` exactly.
+#[test]
+fn test_39_type_field_null_matches_type_scalars_nulls() {
+    let src = br#"{"a":null,"b":1,"c":null}"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(
+        bounds(&c.type_scalars().nulls),
+        bounds(&c.type_field(ScalarKind::Null))
+    );
+}
+
+// ==========================================================================
+// `\r` — the fourth whitespace byte every trim loop in this file matches,
+// exercised directly (test_24 covers `\t`, test_25/26 cover `\n`; none of
+// the existing tests use a bare `\r`).
+// ==========================================================================
+
+// 40. A bare `\r` right after `:` is, like the tab in test_24, not skipped
+//     by the engine's own `allow_sep` (which only skips a literal space) —
+//     the raw member value carries it — but the typing layer's own
+//     whitespace-skip strips it before classification regardless.
+#[test]
+fn test_40_carriage_return_after_colon_trimmed_for_typing() {
+    let src = b"{\"a\":\r5}";
+    let c = JsonParser::parse(src);
+    assert_eq!(c.str(c.members[0].value).unwrap(), "\r5");
+    assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
+}
