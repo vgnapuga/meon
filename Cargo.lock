@@ -269,7 +269,6 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "meon",
- "meon-md",
 ]
 
 [[package]]
