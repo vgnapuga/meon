@@ -176,4 +176,87 @@ fuzz_target!(|data: &[u8]| {
     for (_, s) in &kv.ordered_items {
         kv_check(s.start, s.end);
     }
+
+    // ------------------------------------------------------------------ //
+    // (1) Generated `_raw()` / `_clean()` accessors.                     //
+    //                                                                    //
+    // These are a SEPARATE concern from the bare span fields above: each //
+    // does its own delimiter arithmetic (`_raw` widens the stored span   //
+    // outward by the delimiter run length, `_clean` is the bare inner    //
+    // content). The widening side is the panic-prone one — a `start -    //
+    // count` that ever underflowed, or an `end + count` past the buffer, //
+    // would panic right here during iteration. Driving every such        //
+    // iterator to completion is the whole check; the items are already   //
+    // bounded `&[u8]` slices by construction, so just consuming them is  //
+    // enough to force the arithmetic. Only the delimiter-bearing inline  //
+    // fields are exercised (their `_raw` actually moves the bounds); a   //
+    // fallback like `texts` has `_raw == _clean == identity`.            //
+    // ------------------------------------------------------------------ //
+    macro_rules! drain {
+        ($it:expr) => {{ for _x in $it {} }};
+    }
+    drain!(kv.codes_raw());
+    drain!(kv.codes_clean());
+    drain!(kv.italics_raw());
+    drain!(kv.italics_clean());
+    drain!(kv.bolds_raw());
+    drain!(kv.bolds_clean());
+    drain!(kv.bold_italics_raw());
+    drain!(kv.bold_italics_clean());
+    drain!(kv.autolinks_raw());
+    drain!(kv.autolinks_clean());
+
+    // ------------------------------------------------------------------ //
+    // (2) Standalone `find_*` iterators — a DIFFERENT codegen path.      //
+    //                                                                    //
+    // `parse` (above) and `find_*` are emitted by different arms of the  //
+    // macro; passing the full parse says nothing about the standalone    //
+    // scanners. They are documented to DIVERGE from the full parse on    //
+    // content (a delimiter inside a fence, an escaped close), so this    //
+    // deliberately makes NO cross-comparison — it only asserts each      //
+    // standalone scanner survives arbitrary input and stays in bounds,   //
+    // exactly the same floor the full parse is held to. Run over `data`  //
+    // (raw source), independent of `kv`.                                 //
+    // ------------------------------------------------------------------ //
+    for s in MdKvFuzzParser::find_codes(data) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_italics(data) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_bolds(data) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_bold_italics(data) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_autolinks(data) {
+        kv_check(s.start, s.end);
+    }
+    for l in MdKvFuzzParser::find_links(data) {
+        kv_check(l.text.start, l.text.end);
+        kv_check(l.url.start, l.url.end);
+    }
+    for p in MdKvFuzzParser::find_pairs(data) {
+        kv_check(p.key.start, p.key.end);
+        kv_check(p.value.start, p.value.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_headings(data) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_thematic_breaks(data) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_bullet_items(data) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_ordered_items(data) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_blockquotes(data) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_fenced_codes(data) {
+        kv_check(s.start, s.end);
+    }
 });

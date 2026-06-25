@@ -1385,19 +1385,19 @@ macro_rules! parse_inline {
         // from each frame's stored byte (kv's own `$kv_end`, then asymmetric //
         // rules' `$ao`, else symmetric) — never a stored tag.                //
         //                                                                    //
-        //  - key_value frame  : its key and value-start, parked in
-        //    `kv_pending` since `eq` time, are pushed as the complete
-        //    struct right here — value finalised to the run's end (so a
-        //    flat `key = value` with no terminator still emits correctly) —
-        //    and the text cursor is pushed past it, so the unconditional
-        //    flush below does not re-emit the value as plain text.
+        //  - key_value frame  : its key and value-start, parked in           //
+        //    `kv_pending` since `eq` time, are pushed as the complete        //
+        //    struct right here — value finalised to the run's end (so a      //
+        //    flat `key = value` with no terminator still emits correctly) —  //
+        //    and the text cursor is pushed past it, so the unconditional     //
+        //    flush below does not re-emit the value as plain text.           //
         //  - asymmetric frame : discard via `Vec::remove(vidx)` — the same   //
         //    type can self-nest, so a closed inner entry can sit at a higher //
         //    index than a still-open outer one; processing innermost-first   //
         //    removes the highest index first.                                //
         //  - symmetric frame  : discard via `truncate(vidx)` — an identical  //
         //    (byte, count) never self-nests, so each field has at most one   //
-        //    pending placeholder, always last.                                //
+        //    pending placeholder, always last.                               //
         // ------------------------------------------------------------------ //
         while fdepth > 0 {
             fdepth -= 1;
