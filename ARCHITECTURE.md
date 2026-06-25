@@ -18,16 +18,11 @@ deeper than the public API.
 * **meon-md**
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
-* **meon-json**
-  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
-  * [***crates.io***](https://crates.io/crates/meon-json)
 
 
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * ***ARCHITECTURE.md***    <--
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
-* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
-* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
 
 ---
@@ -102,7 +97,6 @@ meon/                          ← workspace root
 │       └── strip.rs           ← token surgery (remove [N] annotations)
 │
 ├── meon-md/                   ← Markdown grammar built on meon
-├── meon-json/                 ← JSON reader grammar built on meon
 ├── benches/                   ← criterion benchmarks
 └── fuzz/                      ← cargo-fuzz harness
 ```
@@ -112,13 +106,11 @@ meon/                          ← workspace root
 ## 2. Design goals and constraints
 
 **Single forward pass.** The full parser (`parse_text!`) scans the source
-exactly once, left-to-right. There is no backtracking and no heap allocation
-for parser state — the active-block state and the inline engine's unified
-bounded-nesting stack (one stack shared by symmetric, asymmetric and
-`key_value` rules) are all fixed-size, stack-allocated arrays sized by the
-grammar's `max_nest` setting (see §9, §11, §17). Inline scanning may run over a
-multi-line fallthrough run rather than a single line (§7, §9), but it still
-streams strictly forward — a run is accumulated, never re-scanned.
+exactly once, left-to-right. There is no backtracking, no look-ahead beyond
+the current line, and no heap allocation for parser state — the active-block
+state and the inline engine's bounded symmetric/asymmetric stacks are all
+fixed-size, stack-allocated arrays sized by the grammar's `max_nest` setting
+(see §9, §11, §17 for the mechanism and its bounds).
 
 **Flat SoA output.** The content struct stores one `Vec` per element kind.
 All spans are `u32` byte offsets into the original source slice, which is
@@ -375,22 +367,17 @@ while pos < len:
 
     if innermost active frame is a fence → skip to next line (no inline scan)
 
-    if the line matched no line/block rule and no block is active:
-        defer — record/extend the current fallthrough run (para_start) and
-        advance to the next line WITHOUT inline-scanning it yet
-    else (trailing content after a matched line/block marker):
-        inline-scan that content with a single-line-bounded parse_inline! call
+    find next trigger byte or eol using find_any([$eol, $($f),*], ...)
 
-    a deferred fallthrough run is flushed as ONE multi-line parse_inline! call —
-    and its paragraph span recorded — when it closes: at a blank line, at a line
-    where a line/block rule matches, or at end of input (see §9, "Multi-line runs")
+    if eol hit:
+        check hard-break, flush text, advance
+    else (trigger byte hit):
+        call parse_inline! for this line
+        advance to next line
 ```
 
-The loop invariant is that `pos` always advances. A fallthrough run is scanned
-once over its whole multi-line extent, not per line, so the unified inline
-stack persists across the `\n` bytes inside it. The hard-break check and text
-flushing happen at run boundaries, not inside the per-character `parse_inline!`
-loop.
+The loop invariant is that `pos` always advances. The hard-break check and
+all text flushing happen at eol boundaries, not inside `parse_inline!`.
 
 ---
 
@@ -420,17 +407,16 @@ copying of span data.
 
 ## 9. Inline parsing
 
-`parse_inline!` drives a single-pass scan over one **run** of source — either a
-single line (mid-line content after a `line`/`block` match) or a whole
-multi-line fallthrough span handed to it by `parse_text!` as one call (see §7
-and "Multi-line runs" below). It is not meant to be called directly.
+`parse_inline!` drives a single-pass scan over one logical line. It is called
+by `parse_text!` when a trigger byte is found before the eol.
 
 ### Accumulation phases (compile time)
 
-The macro collects the `inline { ... }` section into typed buckets:
+The macro first collects all rules from the `inline { ... }` section into typed
+buckets:
 
 ```
-finders  — on_trigger byte sets (each key_value's `end` byte auto-added)
+finders  — list of on_trigger byte sets (one per on_trigger block)
 sy_rules — symmetric rules
 as_rules — asymmetric rules
 ch_rules — chained rules
@@ -440,117 +426,82 @@ hb       — hard_break rule (at most one)
 
 Then it transitions to `@body` with all buckets flattened into tt fragments.
 
-### The unified nesting stack
+### Execution (runtime)
 
-Before nesting existed, symmetric used one pending slot and asymmetric one
-forward search. The engine now hosts **every stack-eligible construct —
-symmetric, asymmetric, AND key_value — on one shared stack**, bounded by the
-grammar-wide `max_nest` (forwarded from `parse_text!`; default `1`):
+At the start of each line, hard-break detection trims the line end: if the
+last byte is the escape byte, or if there are ≥ min trailing sep bytes, the
+effective line end is shortened and a hard-break flag is set.
 
-```
-frames:        [(u8, u8, u32); max_nest]   // (byte, count, vidx)
-fdepth:        usize                        // single budget for ALL kinds
-kv_pending:    [(u32, u32, u32); max_nest]  // (key_start, key_end, value_start)
-asym_overflow: u32                          // one-shot counter for balanced opens past the cap
-```
+Three rule kinds opt into bounded multi-level nesting, sharing the grammar's
+`max_nest` depth cap (forwarded from `parse_text!`; defaults to `1`, which
+reproduces the original single-pending-slot behaviour exactly — see §17 for
+what the cap does and does not buy):
 
-A frame stores only `(byte, count, vidx)` — **there is no kind tag**. Each
-frame's kind, close byte, opacity, and field routing are recovered at the point
-of use by matching the stored `byte` against each rule's own compile-time
-literal — the same idiom the open side already used to route a field. This
-rests on the engine-wide assumption that a byte has one meaning across the
-stack-eligible rules of an `on_trigger` block.
+**Symmetric, `parse_inside = true, balanced = true`.** A bounded stack of
+pending frames (`sym_frames: [(byte, count, vec_idx); max_nest]`, with a
+`sym_depth` counter) replaces the single pending slot the engine used before
+nesting existed. An occurrence whose `(byte, count)` matches the current top
+of stack closes it; otherwise, if there is room, it opens a new frame. This
+also fixes a real bug the single-slot design had: a *different*-count
+occurrence of the same byte used to silently overwrite the one pending slot,
+losing the outer delimiter — `**bold *italic* still-bold**` would never close
+the bold. An *identical* `(byte, count)` pair still cannot self-nest, since
+open and close look identical for a symmetric delimiter — `**a **b** c**`
+resolves as two adjacent runs, not as nesting. A frame still open at line end
+is discarded via `truncate` (an identical key never opens a second frame
+while one is pending, so at most one placeholder per field is ever live).
 
-- **asymmetric** — `byte` = the rule's open byte; `count` = 1 always (each byte
-  of an open run is its own event); `vidx` = index of the placeholder span
-  pushed at open and back-patched on close. Opacity is derived from the stored
-  open byte, not stored per frame.
-- **symmetric** (`parse_inside = true, balanced = true`) — `byte` = the
-  delimiter; `count` = run length (picks the field 1/2/3 → italics/bolds/
-  bold_italics, and is matched exactly on close); `vidx` = placeholder index.
-- **key_value** — `byte` = the rule's `end` byte; `count` = 0 (unused);
-  `vidx` = 0 (unused). Pending data lives in `kv_pending` at the frame's own
-  stack position. Unlike the other two, a kv pair is **not** pushed at open;
-  it is appended complete only when its value closes — keeping `Vec<T>` in
-  value-close order (an outer pair lands after every pair nested in its value),
-  the opposite of the open-order convention asymmetric/symmetric use for their
-  placeholder-at-open vectors.
+`parse_inside = false` (greedy mode, used for code spans) keeps its original,
+untouched forward-search code path — nesting is not wanted there.
 
-`fdepth` is the single budget for all three kinds combined; every "is anything
-open" check is `fdepth == 0` regardless of which kinds are on the stack.
+**Asymmetric, `balanced = true` and/or `parse_inside = true`.** A bounded
+stack (`asym_frames: [(open_byte, close_byte, count, vec_idx, opaque);
+max_nest]`, with an `asym_depth` counter) tracks open frames across *every*
+asymmetric rule declared in the same `on_trigger` block, not just one —
+different bracket types (e.g. `{`/`}` and `[`/`]`) nest validly with each
+other. `balanced` sets a type's own effective depth cap (the grammar-wide
+`max_nest` if it may self-nest, else a hard `1`, matching the pre-nesting
+behaviour for that type exactly); `parse_inside` controls opacity, recorded
+per frame at push time, so a transparent type containing an opaque type stays
+transparent right up until execution actually enters the opaque one.
 
-### Off-stack constructs (original pre-nesting paths, intact)
+Closing is a single unified pass — not one independent block per rule. The
+engine first determines, once, whether the current byte is recognised as a
+close byte by *any* eligible rule (a plain OR across every rule's close
+byte), then runs exactly one loop that closes at most one frame per
+character — the current top of stack, if its own recorded close byte matches
+— dispatching the field write by *that frame's own recorded open byte*, not
+by which rule happened to be checked first. This matters whenever two rules
+share a close byte (e.g. `(`/`)` and `[`/`)`): giving each rule its own
+independent close-check block instead would let two distinct frames be
+cascade-closed by a single input byte, since the second rule's block would
+see the *already-popped* stack left behind by the first. A frame still open
+at line end is discarded via `Vec::remove` at its index, not `truncate` — a
+same-type self-nesting frame can close while an ancestor of the same type
+never does, leaving a correctly-closed inner entry at a *higher* vec index
+than the still-open outer one, which must survive the discard pass.
 
-These never touch the unified stack and run their original code:
+`balanced = false, parse_inside = false` (used for autolinks) keeps the
+original `if delim == $ao { … memchr/depth-search for $ac … }` block, fully
+unreachable for any rule that opts into the stack.
 
-- **symmetric `parse_inside = true, balanced = false`** — the single `pending`
-  slot.
-- **symmetric `parse_inside = false`** (greedy, code spans) — forward search;
-  gained escape-awareness only.
-- **asymmetric `balanced = false, parse_inside = false`** (autolinks) — the
-  `memchr`/depth forward search; its close byte is NOT required in `on_trigger`.
-- **chained** — a two-phase transparent state machine (or the original opaque
-  two-phase forward search). Its phases are strictly sequential — phase 2 only
-  starts once phase 1 has fully closed — so one slot per phase suffices: no
-  stack, no `max_nest` consumed.
-
-### Closing — one unified pass with a key_value drain
-
-A close byte runs a **single** pass, never one block per rule (which would
-double-pop a shared close byte). Per close character: first drain any
-`key_value` frame on top (its container is closing, so the value ends here,
-committed before the container pops); then, if the new top is an asymmetric
-frame whose grammar-known close byte matches this character, pop it and
-back-patch its placeholder. Dispatch is by the frame's **own recorded open
-byte**, so two rules sharing a close byte (`(`/`)` and `[`/`)`) close the
-correct frame. Because the stack is strict LIFO and a kv frame always sits
-above the container it lives in, a `}}` run finalises the inner pair then its
-object, then the outer pair — correct nesting falls out of the per-character
-loop.
-
-Grammar consequence: once a rule is on the stack, its close byte (and a
-`key_value`'s `end`) must be in the same `on_trigger` set, since closes are
-found by the same `find_any` scan as opens. `key_value`'s `end` is auto-added;
-an asymmetric close must currently be listed manually (see §17).
-
-### End-of-run drain
-
-A frame still open when the run ends is drained top→down, kind recovered by
-stored byte:
-
-- **key_value** — pushed complete, value finalised to the run end (so a
-  terminator-less `key = value` still emits); the text cursor is advanced past
-  it so the final plain-text flush does not re-emit the value.
-- **asymmetric** — discarded via `Vec::remove(vidx)` (a closed inner
-  self-nesting entry can sit at a *higher* index than a still-open outer one).
-- **symmetric** — discarded via `truncate(vidx)` (an identical `(byte, count)`
-  never self-nests, so each field has at most one live placeholder, always
-  last).
-
-### Bounded-cap overflow
-
-Beyond `max_nest`, an extra same-type **asymmetric** open with `balanced = true`
-bumps `asym_overflow` instead of pushing; the next same-type close consumes one
-overflow unit instead of popping, so the real tracked frame's close isn't
-mistaken early. A **symmetric** open past the cap, and a **key_value** `eq` past
-the cap, are simply absorbed (no frame, the pair/run untracked).
-
-### Multi-line runs
-
-`parse_text!` may hand `parse_inline!` a span covering several source lines as
-one call (§7). Inside such a run an `eol` is ordinary content: the unified
-stack persists across it, so an open container or a pending `key_value` value
-survives the line break and only drains at the run's true end. `eol` joins the
-unified `find_any` trigger set **only** when the multiline call passes
-`multiline = true`; the single-line-bounded call passes `false` (its span is
-`\n`-free by construction, so searching for `eol` there would be a dead
-per-chunk comparison). When `hard_break` is declared, an internal `\n` in a
-multi-line run is checked for a hard break the same way the run's end is.
+**Chained, with a transparent component.** When both components (text
+bracket, url paren) have `parse_inside = false`, the original self-contained
+two-phase forward search runs unchanged, opaque to everything in between. When
+either has `parse_inside = true`, a two-phase transparent state machine takes
+over instead, so other rules can fire on the bytes scanned over. The two
+phases are strictly sequential — phase 2 only starts once phase 1 has fully
+closed — so a single slot per phase suffices, no stack. This mechanism is
+scoped to a single active `chained` rule per grammar: two rules declared with
+overlapping in-progress matches would alias the same scratch state. Every
+grammar seen so far declares exactly one `chained` rule, so this is accepted
+as a documented limitation (see §17) rather than built out to a per-rule
+array.
 
 ### `find_any` dispatch
 
-The trigger search is a single `swar::find_any` call with a const-size array,
-monomorphised at compile time:
+The trigger byte search uses a single call to `swar::find_any` with a
+const-size array. The compiler monomorphises this at compile time:
 
 ```
 N=1 → memchr::memchr
@@ -559,9 +510,9 @@ N=3 → memchr::memchr3
 N≥4 → SWAR / SIMD loop (see §13)
 ```
 
-Multiple `on_trigger` blocks each contribute their bytes; the inner loop takes
-the minimum offset across finder results to locate the earliest trigger byte.
-`eol` is included as one extra target only on multi-line calls (see above).
+Multiple `on_trigger` blocks each contribute their bytes to the finders list.
+The inner loop finds the minimum offset across all finder results to locate
+the earliest trigger byte.
 
 ---
 
@@ -896,14 +847,14 @@ inside the macros. Grammar crates only need to depend on `meon`; `paste` and
 
 ### Bounded nesting depth (`max_nest`)
 
-Both the block-level active-block stack (§11) and the inline-level unified
-nesting stack — shared by symmetric, asymmetric AND key_value rules (§9) —
-share one grammar-wide `max_nest` setting. Its default, `1`, reproduces the
-original single-slot/single-pending behaviour exactly: at most one block active
-at a time, no self-nesting for `balanced` rules. Setting it higher resolves
-what used to be hard limitations — a blockquote containing a fenced code block,
-or a blockquote nested inside another, used to leak content into the wrong
-span; a different-count inner emphasis delimiter used to silently overwrite the
+Both the block-level active-block stack (§11) and the inline-level
+symmetric/asymmetric bounded stacks (§9) share one grammar-wide `max_nest`
+setting. Its default, `1`, reproduces the original single-slot/
+single-pending behaviour exactly: at most one block active at a time, no
+self-nesting for `balanced` rules. Setting it higher resolves what used to be
+hard limitations — a blockquote containing a fenced code block, or a
+blockquote nested inside another, used to leak content into the wrong span;
+a different-count inner emphasis delimiter used to silently overwrite the
 single pending slot and lose the outer pair entirely.
 
 `max_nest` is a hard cap, not an unbounded stack — constructs nested deeper
@@ -917,8 +868,7 @@ than `max_nest` are not specially tracked:
   same-type open beyond the cap increments a one-shot overflow counter and is
   treated as literal content instead of opening a frame; the overflow is
   consumed by the next same-type close, so the real tracked frame's close
-  isn't mistaken early. A `key_value` `eq` past the cap is absorbed (the pair
-  untracked).
+  isn't mistaken early.
 
 The trade-off is the same in spirit as the original single-slot design: a
 small, fixed-size, stack-allocated array — sized by the grammar's own
@@ -937,30 +887,16 @@ matches would alias this shared state. Every grammar seen so far declares
 exactly one `chained` rule, so this is accepted as a documented limitation
 rather than built out further.
 
-### `key_value` is scoped to one rule per grammar
+### Context-free inline scanning
 
-A `key_value` frame is distinguished on the unified stack only by its stored
-`end` byte, and the key-segment anchor plus the "top-is-kv" test are shared
-across every `key_value` rule. Two such rules — especially sharing an `end`
-byte — cannot be told apart at close/drain, and the shared anchor/top-test
-conflate them. One `key_value` rule per grammar is supported. This is a
-consequence of the minimal frame carrying no kind tag (§9), not a fundamental
-limit: a per-rule discriminator (e.g. stored in the kv frame's otherwise-unused
-`count` slot) would lift it.
+`parse_inline!` receives the cleaned line content (after block detection) and
+scans it independently of surrounding lines. There is no cross-line inline
+state — this is unaffected by `max_nest`, which bounds nesting *within* one
+line, not across lines. This means:
 
-### Inline runs span multiple lines, bounded by blank lines
-
-`parse_inline!` is handed a fallthrough run that may span several physical
-lines (§9), not a single line. The unified stack persists across internal `eol`
-bytes, so emphasis, a container, or a `key_value` value may span a line break
-within one run. The run — and the stack — is bounded by a blank line, by a line
-where a `line`/`block` rule matches, or by end of input. Consequences:
-
-- A blank line *inside* an open construct closes the run and discards that
-  construct: a JSON-shaped grammar (empty `lines`/`blocks`) must not contain
-  blank lines mid-value.
-- Precedence between overlapping inline rules still follows declaration order,
-  not a precedence table.
+- Emphasis spanning multiple lines is not detected.
+- Precedence between overlapping inline rules follows declaration order, not
+  any precedence table.
 
 ### Standalone vs full-parse divergence
 
@@ -1015,7 +951,7 @@ Adding a new rule kind requires changes in both crates:
 If the new rule kind should support nesting, follow the existing `balanced`/
 `parse_inside` pattern already used by `symmetric`/`asymmetric` (§9) rather
 than inventing a new mechanism — reuse the grammar-wide `max_nest` cap and the
-unified `frames` stack with its single close pass, so it composes correctly
+same bounded-stack/single-unified-close-pass shape, so it composes correctly
 with rules that already nest.
 
 ### SIMD backends

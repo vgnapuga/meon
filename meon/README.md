@@ -10,7 +10,7 @@ iterators for lazily extracting one element kind at a time.
 
 ```toml
 [dependencies]
-meon = "0.3"
+meon = "0.2"
 ```
 
 * **meon**    <--
@@ -22,15 +22,10 @@ meon = "0.3"
 * **meon-md**
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
-* **meon-json**
-  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
-  * [***crates.io***](https://crates.io/crates/meon-json)
 
-* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md) - *GitHub*
+* [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
-* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md) - *GitHub*
-* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md) - *GitHub*
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
 
 ## Quick start
@@ -91,10 +86,10 @@ Four context bytes are required and apply to every rule. A fifth,
 | `tab`      | Tab character                                                  |
 | `escape`   | Escape prefix that suppresses the next byte                    |
 | `max_nest` | Optional. Bounded self-nesting depth cap, shared by            |
-|            | `balanced` symmetric/asymmetric rules and `key_value`          |
-|            | values (below) and by block-level `cont`/`fence` nesting.      |
-|            | Default `1`, which reproduces the original, non-nesting        |
-|            | behaviour exactly: no self-nesting, at most one block active.  |
+|            | `balanced` symmetric/asymmetric rules (below) and by           |
+|            | block-level `cont`/`fence` nesting. Default `1`,               |
+|            | which reproduces the original, non-nesting behaviour           |
+|            | exactly: no self-nesting, at most one block active.            |
 |            | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
 
 ---
@@ -250,17 +245,7 @@ on_trigger(b'=') {
 }
 ```
 
-- The `eq` byte **must** be listed in the `on_trigger(...)` set; the `end`
-  byte is added to that set automatically — do not list it yourself.
-- The value participates in the unified bounded-nesting stack: it survives
-  nested `symmetric`/`asymmetric` containers opened inside it (up to the
-  grammar's `max_nest`) and survives internal `eol` bytes within a run. The
-  pair is emitted only when its value actually closes — at `end`, at the
-  close of the container the value lives in, or at the run's end — so `Vec<T>`
-  stays in value-close order.
-- The output type `T` must be defined with fields named after the `=> key` /
-  `=> value` identifiers. Field type: `Vec<T>`.
-- Only one `key_value` rule per grammar is supported (see Known limitations).
+- Field type: `Vec<T>`.
 
 ---
 
@@ -396,25 +381,6 @@ fallback => paragraphs [80];
 
 ---
 
-## Inline runs span multiple lines
-
-Inline scanning does not operate per physical line. A run of lines that
-match no `line`/`block`/`fence`/`cont` rule is handed to the inline scanner
-as **one** multi-line span. Inside that run an `eol` is ordinary content: an
-open `symmetric`/`asymmetric` frame or a pending `key_value` value survives
-the line break and only closes at the run's real end.
-
-A run is bounded — and the inline stack is drained — at a blank line, at a
-line where a `line`/`block` rule matches, or at end of input. A grammar with
-empty `lines {}` / `blocks {}` sections (e.g. a JSON-shaped grammar)
-therefore gets one run covering the whole input, blank lines aside, so its
-nesting survives every internal `\n` at no extra cost. A grammar with real
-`lines`/`blocks` rules keeps its old per-paragraph bounding: multi-line
-inline spanning only happens within what would already have been one
-paragraph.
-
----
-
 ## Capacity divisors
 
 Every field carries `[div]`. The initial `Vec` capacity is
@@ -468,15 +434,10 @@ Without either flag the crate compiles on stable Rust using a SWAR
 - A `chained` rule with a transparent component (`parse_inside = true`)
   tracks only one in-progress match per grammar; two such rules with
   overlapping matches are not supported.
-- Inline scanning runs over a multi-line run (see "Inline runs span multiple
-  lines"), not a single line: the unified stack persists across internal
-  `eol` bytes. A run is still bounded by a blank line, so a blank line
-  *inside* an open construct closes the run and discards that construct — a
-  JSON-shaped grammar must not contain blank lines mid-value. Precedence
-  between overlapping inline rules is resolved by declaration order, not a
-  precedence table.
-- Only one `key_value` rule per grammar is supported; its key-segment anchor
-  is shared, so a second `key_value` rule is not tracked independently.
+- Inline scanning is context-free within a line — there is no cross-line
+  inline state, regardless of `max_nest`, which only bounds nesting *within*
+  one line. Precedence between overlapping inline rules is resolved by
+  declaration order, not a precedence table.
 
 ---
 

@@ -96,46 +96,6 @@ pub use crate::parse_block;
 /// Steps 2–4 short-circuit: the first match wins and inline scanning is skipped.
 /// When a fence is active (discriminant `0`), step 5 is also suppressed.
 ///
-/// # Inline scanning spans multiple lines (the unified stream model)
-///
-/// Step 5 above is, since the multi-line rework, not a per-line operation.
-/// A line that falls through every line-start dispatch (steps 1–4 all decline,
-/// and no block is currently active) does **not** get its own `parse_inline!`
-/// call. Instead `parse_text!` defers: it records the run's start in
-/// `para_start` (the same offset already used to build the paragraph-fallback
-/// `Vec<Span>`) and advances straight to the next line, re-running the full
-/// line-start dispatch there. The run keeps growing, line after line, for as
-/// long as each subsequent line *also* falls through and is non-blank.
-///
-/// The run closes — and is flushed as a **single** `parse_inline!` call over
-/// its whole multi-line extent — at exactly the points where `close_para!()`
-/// already fires: a blank line, a line where `parse_block!` or `parse_line!`
-/// actually matches (the lazy-continuation-ends case), or end of input. The
-/// `flush_para_inline!` macro performs this flush; it is a pure addition next
-/// to the existing paragraph-span bookkeeping, which is otherwise untouched.
-///
-/// Because the whole run is handed to `parse_inline!` as one span, the
-/// *unified inline stack* (`frames`/`fdepth`, see [`crate::parse_inline!`])
-/// now genuinely persists across the `\n` bytes inside that run — a
-/// `key_value` value, an open container, or a pending symmetric delimiter can
-/// span a line break without being discarded. A grammar with empty `lines {}`
-/// and `blocks { fallback => ... }` sections (e.g. JSON) therefore gets one
-/// run covering the *entire* buffer (blank lines aside): every `\n` inside it
-/// is ordinary content, never specially recognised, at zero extra runtime
-/// cost — see [`crate::parse_inline!`]'s docs for why.
-///
-/// A grammar with real `lines {}` / `blocks {}` rules (Markdown) keeps that
-/// dispatch exactly as before: a run is bounded by whichever line first
-/// triggers a real match, so multi-line inline spanning only ever happens
-/// *within* what would already have been one paragraph.
-///
-/// One case is deliberately **not** touched by this: a line whose line-start
-/// dispatch *did* match but left trailing content on the same line (e.g. a
-/// heading's text after its `#` marker, or a bullet item's text after its
-/// marker) is still inline-scanned by a single-line-bounded `parse_inline!`
-/// call, exactly as before — that content cannot itself continue onto a
-/// further line, so there is nothing to unify there.
-///
 /// # Standalone iterators
 ///
 /// The generated `find_*` methods (via [`define_standalone_fns!`]) operate
@@ -175,16 +135,10 @@ pub use crate::parse_block;
 /// - `active` — single `Option<(u8, u8, u8, u32)>` slot encoding the open
 ///   block (see [`parse_block!`] for the encoding). Only one block can be
 ///   active at a time.
-/// - `para_start` — start offset of the current fallthrough run; `None` when
-///   no run is open. Doubles as the run's inline-scan start (see above).
-///   Flushed (both as the inline run and as the paragraph span) on block
-///   transitions and blank lines.
-/// - `text_start` — start offset of the pending plain-text run for the
-///   *single-line-bounded* inline calls only (line/block trailing content).
-///   Kept in sync with `pos` whenever a fallthrough run is deferred, so the
-///   pre-existing `flush_text!` calls at the run's close points stay
-///   harmless no-ops; the deferred run's own text is flushed entirely by the
-///   `parse_inline!` call inside `flush_para_inline!`, not by `flush_text!`.
+/// - `para_start` — start offset of the current paragraph; `None` when no
+///   paragraph is open. Flushed on block transitions and blank lines.
+/// - `text_start` — start offset of the pending plain-text run within the
+///   current line. Flushed before any inline element is emitted.
 ///
 /// # Context bytes
 ///
@@ -224,7 +178,7 @@ pub use crate::parse_block;
 ///
 /// # Known limitations
 ///
-/// - Inline scanning is context-free within a run; precedence between
+/// - Inline scanning is context-free within a line; precedence between
 ///   overlapping inline rules is grammar-defined and resolved by declaration
 ///   order, not by a precedence table.
 #[macro_export]
@@ -420,91 +374,77 @@ macro_rules! parse_text {
 
 
     (@body
-            $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-            $tx:ident, $merge_il:tt,
-            [$($ilt:tt)*], [$($ln:tt)*],
-            [$($sr:tt)*], [$($br:tt)*],
-            $para:ident,
-            hb = $hb:tt,
-            finders = [$($f:literal)*]
-        ) => {{
-            let src: &[u8] = $src;
-            let len: usize = src.len();
-            let mut state = ParseState::new(len);
+        $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
+        $tx:ident, $merge_il:tt,
+        [$($ilt:tt)*], [$($ln:tt)*],
+        [$($sr:tt)*], [$($br:tt)*],
+        $para:ident,
+        hb = $hb:tt,
+        finders = [$($f:literal)*]
+    ) => {{
+        let src: &[u8] = $src;
+        let len: usize = src.len();
+        let mut state = ParseState::new(len);
 
-            let mut _active_stack: [(u8, u8, u8, u32); $maxn] =
-                [(0u8, 0u8, 0u8, 0u32); $maxn];
-            let mut _active_depth: usize = 0;
-            let mut pos: usize = 0;
-            let mut para_start: Option<u32> = None;
-            let mut text_start: u32 = 0;
+        // Active block stack, bounded by the grammar-wide `max_nest` (shared
+        // with the inline engine). `max_nest = 1` => a single slot => the
+        // original single-active-block behaviour, byte for byte.
+        let mut _active_stack: [(u8, u8, u8, u32); $maxn] =
+            [(0u8, 0u8, 0u8, 0u32); $maxn];
+        let mut _active_depth: usize = 0;
+        let mut pos: usize = 0;
+        let mut para_start: Option<u32> = None;
+        let mut text_start: u32 = 0;
+        let mut at_line_start: bool = true;
 
-            macro_rules! flush_text {
-                ($end:expr) => {
-                    let _end = $end as u32;
-                    if text_start < _end {
-                        $crate::parse_text!(@dispatch state, $tx,
-                            $crate::span::Span::new(text_start, _end), $merge_il);
-                    }
-                };
-            }
+        let mut current_line_end: usize = 0;
+        let mut line_end_valid: bool = false;
 
-            macro_rules! close_para {
-                () => {
-                    if let Some(s) = para_start.take() {
-                        state.$para.push($crate::span::Span::new(s, pos as u32));
-                    }
-                };
-            }
+        macro_rules! flush_text {
+            ($end:expr) => {
+                let _end = $end as u32;
+                if text_start < _end {
+                    $crate::parse_text!(@dispatch state, $tx,
+                        $crate::span::Span::new(text_start, _end), $merge_il);
+                }
+            };
+        }
 
-            macro_rules! flush_para_inline {
-                ($end:expr) => {
-                    if let Some(s) = para_start {
-                        let _ps = s as usize;
-                        let _pe = $end as usize;
-                        if _ps < _pe {
-                            $crate::parse_inline!(
-                                state, src, _ps, _pe,
-                                $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true ; $($ilt)*
-                            );
-                        }
-                    }
-                };
-            }
+        macro_rules! close_para {
+            () => {
+                if let Some(s) = para_start.take() {
+                    state.$para.push($crate::span::Span::new(s, pos as u32));
+                }
+            };
+        }
 
-            while pos < len {
-                let current_byte = match src.get(pos) {
-                    Some(&b) => b,
-                    None => break,
-                };
+        while pos < len {
+            if at_line_start {
+                at_line_start = false;
 
-                if current_byte == $eol {
-                    flush_para_inline!(pos);
+                if src[pos] == $eol {
                     flush_text!(pos);
                     close_para!();
-
-                    let is_fence = if $maxn == 1 {
-                        _active_depth > 0 && _active_stack[0].0 == 0u8
-                    } else {
-                        _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
-                    };
-
-                    if !is_fence {
+                    // A blank line closes all open continuations — unless the
+                    // innermost open block is a fence, in which case the blank
+                    // line is fence content and the whole stack persists.
+                    if !(_active_depth > 0 && _active_stack[_active_depth - 1].0 == 0u8) {
                         $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, pos ;
                             block_simple { $($sr)* } block { $($br)* });
                     }
                     pos += 1;
+                    at_line_start = true;
+                    line_end_valid = false;
                     continue;
                 }
 
-                let current_line_end = $crate::memchr::memchr($eol, &src[pos..])
+                current_line_end = $crate::memchr::memchr($eol, &src[pos..])
                     .map(|i| pos + i)
                     .unwrap_or(len);
-                let next_line_start = if current_line_end < len { current_line_end + 1 } else { len };
+                line_end_valid = true;
 
                 let mut line_consumed = false;
                 let mut line_start_progress = true;
-                let mut loop_continue_signal = false;
 
                 while line_start_progress {
                     line_start_progress = false;
@@ -517,16 +457,20 @@ macro_rules! parse_text {
                     ) {
                         Some((opened, cs)) => {
                             if opened {
-                                flush_para_inline!(pos);
                                 flush_text!(pos);
                                 close_para!();
                             }
                             text_start = cs as u32;
                             pos = cs;
-
-                            if cs >= current_line_end {
-                                if cs == current_line_end && cs < len { pos += 1; }
-                                loop_continue_signal = true;
+                            if cs == current_line_end {
+                                if cs < len { pos += 1; }
+                                at_line_start = true;
+                                line_end_valid = false;
+                            } else if cs > current_line_end {
+                                at_line_start = true;
+                                line_end_valid = false;
+                            } else {
+                                at_line_start = false;
                             }
                             line_consumed = true;
                             break;
@@ -534,6 +478,9 @@ macro_rules! parse_text {
                         None => {}
                     }
 
+                    // `parse_block!` returned `None` but may have closed an
+                    // outer continuation (depth dropped). Re-run from the same
+                    // line start so the remainder is reprocessed fresh.
                     if _active_depth != _old_depth {
                         line_start_progress = true;
                         continue;
@@ -543,15 +490,19 @@ macro_rules! parse_text {
                         state, src, pos, current_line_end, sep = $sep ; $($ln)*
                     ) {
                         Some(cs) => {
-                            flush_para_inline!(pos);
                             flush_text!(pos);
                             close_para!();
                             text_start = cs as u32;
                             pos = cs;
-
-                            if cs >= current_line_end {
-                                if cs == current_line_end && cs < len { pos += 1; }
-                                loop_continue_signal = true;
+                            if cs == current_line_end {
+                                if cs < len { pos += 1; }
+                                at_line_start = true;
+                                line_end_valid = false;
+                            } else if cs > current_line_end {
+                                at_line_start = true;
+                                line_end_valid = false;
+                            } else {
+                                at_line_start = false;
                             }
                             line_consumed = true;
                             break;
@@ -560,48 +511,72 @@ macro_rules! parse_text {
                     }
                 }
 
-                if loop_continue_signal { continue; }
+                if at_line_start { continue; }
 
                 if !line_consumed && _active_depth == 0 {
                     if para_start.is_none() {
                         para_start = Some(pos as u32);
                     }
-                    pos = next_line_start;
-                    text_start = pos as u32;
-                    continue;
+                }
+            } else {
+                if !line_end_valid {
+                    current_line_end = $crate::memchr::memchr($eol, &src[pos..])
+                        .map(|i| pos + i)
+                        .unwrap_or(len);
+                    line_end_valid = true;
+                }
+            }
+
+            let skip_inline = _active_depth > 0 && _active_stack[_active_depth - 1].0 == 0u8;
+
+            if skip_inline {
+                pos = if current_line_end < len { current_line_end + 1 } else { len };
+                at_line_start = true;
+                line_end_valid = false;
+                continue;
+            }
+
+            match $crate::swar::find_any([$eol, $($f),*], &src[pos..len])
+                .map(|r| pos + r)
+            {
+                None => {
+                    pos = len;
                 }
 
-                let skip_inline = if $maxn == 1 {
-                    _active_depth > 0 && _active_stack[0].0 == 0u8
-                } else {
-                    _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
-                };
-
-                if skip_inline {
-                    pos = next_line_start;
-                    continue;
-                }
-
-                if pos < current_line_end {
-                    let _ = $crate::parse_inline!(
-                        state, src, pos, current_line_end,
-                        $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false ; $($ilt)*
+                Some(_p) if src[_p] == $eol => {
+                    let (_le, _hb) = $crate::parse_text!(
+                        @hb_check _p, text_start as usize, src ; $hb
                     );
+                    flush_text!(_le);
+                    $crate::parse_text!(@hb_push state, _le, _hb ; $hb);
+                    text_start = (_p + 1) as u32;
+                    pos = _p + 1;
+                    at_line_start = true;
+                    line_end_valid = false;
                 }
-                pos = next_line_start;
-                text_start = pos as u32;
-            }
 
-            flush_para_inline!(len);
-            flush_text!(len);
-            if let Some(s) = para_start {
-                state.$para.push($crate::span::Span::new(s, len as u32));
+                Some(_p) => {
+                    let new_pos = $crate::parse_inline!(
+                        state, src, pos, current_line_end,
+                        $tx, $merge_il, $esc, $sep, $tab, $maxn ; $($ilt)*
+                    );
+                    text_start = new_pos as u32;
+                    pos = new_pos;
+                    at_line_start = true;
+                    line_end_valid = false;
+                }
             }
-            $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
-                block_simple { $($sr)* } block { $($br)* });
+        }
 
-            state.into_content(src)
-        }};
+        flush_text!(len);
+        if let Some(s) = para_start {
+            state.$para.push($crate::span::Span::new(s, len as u32));
+        }
+        $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
+            block_simple { $($sr)* } block { $($br)* });
+
+        state.into_content(src)
+    }};
 
 
     (@hb_check $p:ident, $ts:expr, $src:ident ;

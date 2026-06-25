@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 meon.workspace = true
+meon-md.workspace  = true
 
 [[bin]]
 name = "parse_text"

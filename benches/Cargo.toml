@@ -6,17 +6,7 @@ publish = false
 
 [dependencies]
 meon-md.workspace = true
-meon-json.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
-
-[dev-dependencies]
-pulldown-cmark = { version = "0.13.4", default-features = false }
-comrak = { version = "0.52.0", default-features = false }
-simd-json = "0.17.0"
-sonic-rs = "0.5.8"
-
-[profile.bench]
-debug = true
 
 [[bench]]
 name = "meon-md_parse"
@@ -24,20 +14,4 @@ harness = false
 
 [[bench]]
 name = "meon-md_standalone"
-harness = false
-
-[[bench]]
-name = "meon-md_compare"
-harness = false
-
-[[bench]]
-name = "meon-json_parse"
-harness = false
-
-[[bench]]
-name = "meon-json_standalone"
-harness = false
-
-[[bench]]
-name = "meon-json_compare"
 harness = false

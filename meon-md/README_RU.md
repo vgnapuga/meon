@@ -18,16 +18,11 @@
 * **meon-md**    <--
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
-* **meon-json**
-  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
-  * [***crates.io***](https://crates.io/crates/meon-json)
 
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
-* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
-* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
-* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
-* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
-* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
+* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
+* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
+* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
 
 ---
 
@@ -178,7 +173,7 @@ for (heading, span) in MarkdownParser::find_headings(src) {
 Standalone-итераторы работают без межэлементного контекста. Они могут
 возвращать спаны которые полный парсер подавил бы (например, маркеры жирного
 текста внутри блока с кодом). Подробнее —
-[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators).
+[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*.
 
 ---
 
@@ -237,7 +232,7 @@ assert_eq!(c.italics.len(), 1);
   а не представляется собственным спаном.
 
 Подробнее —
-[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs)
+[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs) - *GitHub*
 — про оставшиеся компромиссы движка, включая ограничение `max_nest` и
 ограничение одного активного `chained`-правила.
 
@@ -246,8 +241,8 @@ assert_eq!(c.italics.len(), 1);
 ## Лицензия
 
 `meon-md` доступен под лицензией
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
+[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
 
-Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
+Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
 
-Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md).
+Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.

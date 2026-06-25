@@ -13,15 +13,10 @@
 * **meon-md**
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
-* **meon-json**
-  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
-  * [***crates.io***](https://crates.io/crates/meon-json)
 
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
-* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
-* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
 
 ---
@@ -169,14 +164,11 @@ meon/                 ← корень воркспейса (этот файл)
 ├── meon/             ← движок парсинга + рантайм макросы
 ├── meon-macros/      ← прок-макрос define_parser!
 ├── meon-md/          ← грамматика Markdown построенная на meon
-├── meon-json/        ← грамматика-ридер JSON построенная на meon
 ├── benches/          ← бенчмарки criterion
 └── fuzz/             ← cargo-fuzz харнес
 ```
 
 `meon-md` — конкретная грамматика которая парсит полезное подмножество Markdown. Она демонстрирует что движок покрывает реальную сложность, и служит бенчмарком и fuzz-целью проекта.
-
-`meon-json` — вторая референс-грамматика, плоский span-based JSON-ридер. Она показывает, что движок не привязан к Markdown: структурно противоположный формат — глубокая вложенность, контейнеры, пары `key: value`, переносы строк как обычное содержимое — выводится из тех же примитивов `define_parser!`, выдавая один плоский `Vec` на каждый вид элементов (объекты, массивы, строки, члены) вместо дерева.
 
 ---
 
