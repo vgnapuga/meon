@@ -71,7 +71,7 @@ fn trim_end(src: &[u8], start: usize, mut end: usize) -> usize {
     end
 }
 
-impl<'a> JsonContent<'a> {
+impl JsonContent<'_> {
     /// Type every member value, every array element, AND every bare
     /// top-level value, in one pass, returning owned span vectors.
     pub fn type_scalars(&self) -> TypedScalars {
@@ -193,7 +193,7 @@ impl<'a> JsonContent<'a> {
                 }
                 b'}' | b']' => {
                     if depth > 0 {
-                        depth -= 1;
+                        depth = depth.saturating_sub(1);
                     }
                     i += 1;
                 }
