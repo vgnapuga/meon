@@ -20,7 +20,7 @@
 //! `REPEAT_COUNT` tiles each base document so the working set is large enough
 //! for a stable measurement and clearly larger than L2/L3.
 
-pub const REPEAT_COUNT: usize = 10;
+pub const REPEAT_COUNT: usize = 1000;
 
 // Criterion knobs. Tuned for a sane local run time while staying statistically
 // stable. For publication-grade numbers raise SAMPLE_SIZE / SAMPLE_TIME.
