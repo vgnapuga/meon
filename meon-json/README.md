@@ -92,14 +92,14 @@ found once; values are materialised by type only on request.
 The engine produces these structural fields directly. All spans are `u32`
 byte offsets into the borrowed source.
 
-| Element        | Syntax            | Field     | Type          | Notes                                                              |
-|----------------|-------------------|-----------|---------------|--------------------------------------------------------------------|
-| Object         | `{ ... }`         | `objects` | `Vec<Span>`   | Content only (braces excluded — `objects_raw()` includes them)     |
-| Array          | `[ ... ]`         | `arrays`  | `Vec<Span>`   | Content only (brackets excluded — `arrays_raw()` includes them)    |
-| String         | `"..."`           | `strings` | `Vec<Span>`   | Content only (quotes excluded); empty `""` emits **no** span       |
-| Member         | `key : value`     | `members` | `Vec<Member>` | One per pair; `key` / `value` are raw spans (delimiters included)  |
+| Element        | Syntax            | Field     | Type          | Notes                                                               |
+|----------------|-------------------|-----------|---------------|---------------------------------------------------------------------|
+| Object         | `{ ... }`         | `objects` | `Vec<Span>`   | Content only (braces excluded — `objects_raw()` includes them)      |
+| Array          | `[ ... ]`         | `arrays`  | `Vec<Span>`   | Content only (brackets excluded — `arrays_raw()` includes them)     |
+| String         | `"..."`           | `strings` | `Vec<Span>`   | Content only (quotes excluded); empty `""` emits **no** span        |
+| Member         | `key : value`     | `members` | `Vec<Member>` | One per pair; `key` / `value` are raw spans (delimiters included)   |
 | Top-level value| bare `42`, `true` | `scalars` | `Vec<Span>`   | Inline fallback: bare values outside any container, and stray tails |
-| Document run   | whole input       | `loose`   | `Vec<Span>`   | Block-level fallback; one span over the whole document             |
+| Document run   | whole input       | `loose`   | `Vec<Span>`   | Block-level fallback; one span over the whole document              |
 
 Individual **array elements** are not tracked as spans by the engine — only
 the array's own outer span is. Per-element access is the typing post-pass's

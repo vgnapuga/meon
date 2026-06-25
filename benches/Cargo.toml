@@ -10,6 +10,8 @@ meon-json.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [dev-dependencies]
+pulldown-cmark = { version = "0.13", default-features = false }
+comrak = { version = "0.39", default-features = false }
 simd-json = "0.14"
 
 [profile.bench]
@@ -21,6 +23,10 @@ harness = false
 
 [[bench]]
 name = "meon-md_standalone"
+harness = false
+
+[[bench]]
+name = "meon-md_compare"
 harness = false
 
 [[bench]]

@@ -13,6 +13,9 @@ EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/README_RU.md)
 * **meon-md**
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
   * [***crates.io***](https://crates.io/crates/meon-md)
+* **meon-json**
+  * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
+  * [***crates.io***](https://crates.io/crates/meon-json)
 
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
@@ -184,6 +187,7 @@ meon/                 ← workspace root (this file)
 ├── meon/             ← parsing engine + runtime macros
 ├── meon-macros/      ← define_parser! proc-macro
 ├── meon-md/          ← Markdown grammar built on meon
+├── meon-json/        ← JSON reader grammar built on meon
 ├── benches/          ← criterion benchmarks
 └── fuzz/             ← cargo-fuzz harness
 ```
@@ -191,6 +195,12 @@ meon/                 ← workspace root (this file)
 `meon-md` is a concrete grammar that parses a useful subset of Markdown. It
 demonstrates that the engine covers real-world complexity, and serves as
 the benchmark and fuzz target for the project.
+
+`meon-json` is a second reference grammar — a flat, span-based JSON reader. It
+shows the engine is not Markdown-specific: a structurally opposite format —
+deep nesting, containers, `key: value` pairs, line breaks as ordinary content
+— falls out of the same `define_parser!` primitives, emitting one flat `Vec`
+per element kind (objects, arrays, strings, members) instead of a tree.
 
 ---
 
