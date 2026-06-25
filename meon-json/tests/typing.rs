@@ -582,3 +582,229 @@ fn test_40_carriage_return_after_colon_trimmed_for_typing() {
     assert_eq!(c.str(c.members[0].value).unwrap(), "\r5");
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
 }
+
+// ==========================================================================
+// Array-element comma-split: a comma INSIDE a string element
+//
+// The string-skip in `for_each_array_element` exists precisely so the split
+// delimiter (`,`) is not honoured while inside a `"..."`. Prior tests checked
+// the skip against escaped quotes (31/32) and brackets (33) — but never
+// against a bare comma, which is the one byte the splitter actually keys on.
+// This is the most direct test of that guarantee, and it was missing.
+// ==========================================================================
+
+// 41. A comma inside a string element must not split it: `"x,y"` is one
+//     element (first byte `"`, classifies to `None`), so only the real
+//     sibling number types. Getting the skip wrong would split `"x,y"` into
+//     `"x` and `y"`, and the second fragment (`y"`) would still classify to
+//     `None` — so the give-away is whether the number is found at the right
+//     boundary, which only holds if the comma was correctly skipped.
+#[test]
+fn test_41_comma_inside_array_element_string_not_split() {
+    let src = br#"["x,y", 1]"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert_eq!(texts(src, &t.nums), vec!["1"]);
+    assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// ==========================================================================
+// Classifier boundary — the first byte is the WHOLE contract
+//
+// test_27 pinned the number side (`1abc` -> Num). These pin the rest of the
+// boundary: the keyword side, and the bytes that look number-ish to a human
+// but are NOT in the classifier's set.
+// ==========================================================================
+
+// 42. The dual of test_27 for keywords: any lowercase `t`/`f`/`n`-led run is
+//     routed by its first byte alone, regardless of what follows. `nan` is
+//     Null, `txy` is True, `fzz` is False — none of them are real JSON
+//     keywords, but the classifier never looks past byte zero. Pinned on
+//     purpose, exactly as the number-prefix case is.
+#[test]
+fn test_42_lowercase_keyword_prefix_typed_by_first_byte() {
+    let src = br#"{"a":nan,"b":txy,"c":fzz}"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert_eq!(texts(src, &t.nulls), vec!["nan"]);
+    assert_eq!(texts(src, &t.trues), vec!["txy"]);
+    assert_eq!(texts(src, &t.falses), vec!["fzz"]);
+    assert!(t.nums.is_empty());
+}
+
+// 43. A leading `+` or `.` is NOT a number start to the classifier — only a
+//     digit or a leading `-` is. JSON forbids both `+5` and `.5` anyway, but
+//     the point here is the classifier's own set: these route to `None` and
+//     stay untyped rather than being leniently accepted as numbers.
+#[test]
+fn test_43_plus_and_dot_leading_not_classified_as_num() {
+    let src = br#"{"a":+5,"b":.5}"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// 44. A lone `-` (no digits after) is still a number to the classifier — the
+//     first byte is `-`, and that is the entire decision. Degenerate, but it
+//     is the documented first-byte contract, so it is locked in rather than
+//     left ambiguous.
+#[test]
+fn test_44_lone_minus_typed_as_num() {
+    let src = br#"{"a":-}"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(texts(src, &c.type_scalars().nums), vec!["-"]);
+}
+
+// ==========================================================================
+// Keys (and other non-value positions) are never a typing source
+// ==========================================================================
+
+// 45. A numeric-looking KEY is a quoted string — it lands in `strings`, never
+//     in a typed vector. `type_scalars` only ever visits member *values*,
+//     array elements, and bare top-level scalars; keys are not among its
+//     three sources. So `{"1":2,"3":4}` types `2` and `4`, never `1` or `3`.
+#[test]
+fn test_45_numeric_looking_keys_never_typed() {
+    let src = br#"{"1":2,"3":4}"#;
+    let c = JsonParser::parse(src);
+    let nums = sorted_texts(src, &c.type_scalars().nums);
+    assert_eq!(nums, vec!["2", "4"]);
+    assert!(!nums.contains(&"1".to_string()));
+    assert!(!nums.contains(&"3".to_string()));
+}
+
+// ==========================================================================
+// Three-source traversal ORDER
+//
+// test_19 noted the order (members, then array elements, then bare top-level
+// scalars) but only exercised two of the three sources. This drives all three
+// at once and asserts the un-sorted order, so a reordering of `for_each_scalar`
+// would be caught.
+// ==========================================================================
+
+// 46. Members first (`"a":1`), then array elements (`[2,3]`), then the bare
+//     trailing top-level scalar (`4`). The numbers must appear in exactly that
+//     order, not sorted — `1, 2, 3, 4` here only because that is the source
+//     order, not a coincidence of value.
+#[test]
+fn test_46_three_source_traversal_order() {
+    let src = br#"{"a":1,"b":[2,3]}4"#;
+    let c = JsonParser::parse(src);
+    // un-sorted: order is the contract under test
+    assert_eq!(texts(src, &c.type_scalars().nums), vec!["1", "2", "3", "4"]);
+}
+
+// ==========================================================================
+// Degenerate / whitespace-only values
+// ==========================================================================
+
+// 47. A member value that is whitespace only: `process_scalar` trims it to an
+//     empty span (`start == end`) and emits nothing — no panic, no phantom
+//     scalar. (The raw member value, by contrast, keeps the spaces; that is a
+//     structural concern, tested in `tests/integration.rs`.)
+#[test]
+fn test_47_whitespace_only_member_value_types_nothing() {
+    let src = br#"{"a":   }"#;
+    let c = JsonParser::parse(src);
+    let t = c.type_scalars();
+    assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
+}
+
+// 48. A trailing comma in an array leaves an empty final segment, which the
+//     splitter skips — no phantom typed scalar. The two real elements still
+//     type. (Structural tolerance of the trailing comma is locked down in
+//     `tests/integration.rs`; this is its typing-side counterpart.)
+#[test]
+fn test_48_array_trailing_comma_no_phantom_typed_scalar() {
+    let src = br#"[1,2,]"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(sorted_texts(src, &c.type_scalars().nums), vec!["1", "2"]);
+}
+
+// ==========================================================================
+// Bare top-level `false` / `null`
+//
+// test_15/16 covered bare top-level number and `true`; the other two keyword
+// kinds had no bare-top-level test.
+// ==========================================================================
+
+// 49. A bare top-level `false` routes to `falses` via `self.scalars`.
+#[test]
+fn test_49_bare_top_level_false_typed() {
+    let src = br#"false"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(texts(src, &c.type_scalars().falses), vec!["false"]);
+}
+
+// 50. A bare top-level `null` routes to `nulls` via `self.scalars`.
+#[test]
+fn test_50_bare_top_level_null_typed() {
+    let src = br#"null"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(texts(src, &c.type_scalars().nulls), vec!["null"]);
+}
+
+// ==========================================================================
+// trim_end — trailing whitespace that is NOT a space
+//
+// test_23/30 exercise trim_end against a trailing space; test_25 against a
+// trailing newline. A trailing TAB (and the symmetry of trim_end matching all
+// four bytes on the trailing side, not just leading) had no direct test.
+// ==========================================================================
+
+// 51. A trailing tab is stripped by `trim_end` before classification, even
+//     though the engine's own `allow_sep` never touches it: the raw member
+//     value keeps the `\t`, the typed span does not.
+#[test]
+fn test_51_trailing_tab_trimmed_before_classification() {
+    let src = b"{\"a\":5\t}";
+    let c = JsonParser::parse(src);
+    assert_eq!(c.str(c.members[0].value).unwrap(), "5\t");
+    assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
+}
+
+// ==========================================================================
+// Empty / trivial inputs
+// ==========================================================================
+
+// 52. An empty object and empty input both type nothing — no members, no
+//     arrays, no scalars to visit — and neither panics.
+#[test]
+fn test_52_empty_object_and_empty_input_type_nothing() {
+    for src in [&b"{}"[..], &b""[..]] {
+        let c = JsonParser::parse(src);
+        let t = c.type_scalars();
+        assert!(
+            t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty()
+        );
+    }
+}
+
+// ==========================================================================
+// Immutability of the post-pass
+//
+// The module doc promises `type_scalars` writes nothing back into
+// `JsonContent` — it "stays an immutable record of exactly what the engine
+// saw". This pins that: typing twice yields identical results, and the
+// content's own structural fields are untouched by typing.
+// ==========================================================================
+
+// 53. `type_scalars` is repeatable and side-effect-free: two calls produce
+//     byte-identical span sets, and the content's structural fields are
+//     unchanged across them.
+#[test]
+fn test_53_type_scalars_is_repeatable_and_non_mutating() {
+    let src = br#"{"a":1,"b":[2,3]}"#;
+    let c = JsonParser::parse(src);
+
+    let members_before = c.members.len();
+    let arrays_before = c.arrays.len();
+
+    let t1 = c.type_scalars();
+    let t2 = c.type_scalars();
+    assert_eq!(bounds(&t1.nums), bounds(&t2.nums));
+
+    // The content struct is an immutable record — typing did not disturb it.
+    assert_eq!(c.members.len(), members_before);
+    assert_eq!(c.arrays.len(), arrays_before);
+}

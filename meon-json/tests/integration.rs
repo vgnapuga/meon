@@ -744,3 +744,276 @@ fn test_56_deep_nesting_near_max_no_panic() {
     assert_eq!(c.objects.len(), DEPTH);
     assert_eq!(c.members.len(), DEPTH);
 }
+
+// ==========================================================================
+// Nesting depth — AT and BEYOND the max_nest = 64 cap
+//
+// test_56 only reached depth 30 (well under the cap). These pin the boundary
+// itself, where the bounded-stack / overflow path actually engages.
+//
+// Frame budget matters and differs by shape:
+//   - pure array nesting `[[[...]]]` costs ONE frame per level (one asymmetric
+//     open), so 64 levels exactly fill the stack.
+//   - object nesting `{"a":{...}}` costs TWO frames per level (the `{` open
+//     AND the `:` key_value frame), so the effective cap is 32 levels = 64
+//     frames. This is why test_56 chose 30 — it was already near that real
+//     ceiling for the object shape.
+// ==========================================================================
+
+// 57. Pure array nesting at EXACTLY the cap: 64 levels, one frame each, fill
+//     the stack precisely with no overflow. All 64 containers are tracked.
+#[test]
+fn test_57_array_nesting_at_max_nest_cap() {
+    let depth = 64;
+    let s = "[".repeat(depth) + &"]".repeat(depth);
+    let c = JsonParser::parse(s.as_bytes());
+    assert_eq!(c.arrays.len(), 64);
+}
+
+// 58. Pure array nesting BEYOND the cap: 70 levels. The 6 innermost opens
+//     find the stack full and bump the one-shot overflow counter instead of
+//     pushing a frame; their matching closes drain that counter symmetrically.
+//     No kv frames interleave here, so the accounting is clean — exactly the
+//     64 outermost containers are tracked, and nothing panics or overcounts.
+#[test]
+fn test_58_array_nesting_beyond_cap_clamped() {
+    let depth = 70;
+    let s = "[".repeat(depth) + &"]".repeat(depth);
+    let c = JsonParser::parse(s.as_bytes());
+    assert_eq!(c.arrays.len(), 64);
+}
+
+// 59. Object nesting at the object-shape's true cap: 32 levels of `{"a":...}`
+//     consume 64 frames (one `{` + one `:` kv frame per level) — the stack
+//     fills exactly, with no overflow. Every object and every member is
+//     tracked. This is the boundary test_56 sat just under.
+#[test]
+fn test_59_object_nesting_at_frame_cap() {
+    let depth = 32;
+    let s = r#"{"a":"#.repeat(depth) + "1" + &"}".repeat(depth);
+    let c = JsonParser::parse(s.as_bytes());
+    assert_eq!(c.objects.len(), 32);
+    assert_eq!(c.members.len(), 32);
+}
+
+// 60. Object nesting BEYOND the frame cap: 40 levels need 80 frames; only the
+//     outer 32 fit. The over-cap levels engage the overflow counter, which
+//     interleaves with the per-level key_value drains in an
+//     implementation-defined way — so this test deliberately asserts only the
+//     robust invariants (no panic, counts bounded by the cap, at least the
+//     outermost level survives) rather than an exact over-cap count. If you
+//     ever want exact numbers here, decide and document the
+//     overflow-vs-kv-drain ordering first; today it is intentionally not a
+//     contract.
+#[test]
+fn test_60_object_nesting_beyond_cap_no_panic_bounded() {
+    let depth = 40;
+    let s = r#"{"a":"#.repeat(depth) + "1" + &"}".repeat(depth);
+    let c = JsonParser::parse(s.as_bytes());
+    assert!(c.objects.len() <= 32);
+    assert!(c.members.len() <= 32);
+    assert!(!c.members.is_empty());
+}
+
+// ==========================================================================
+// Blank lines — the multi-line run boundary
+//
+// The whole multi-line capability rests on "a document with NO blank lines":
+// a blank line closes the accumulated run and drains the inline stack. These
+// two pin both sides of that contract — the benign case and the cliff.
+// ==========================================================================
+
+// 61. A blank line BETWEEN two complete, self-contained documents is benign:
+//     each run closes cleanly on its own, so both objects and both members
+//     are recovered, and the block-level fallback records the two runs as two
+//     separate `loose` spans.
+#[test]
+fn test_61_blank_line_between_complete_documents() {
+    let c = JsonParser::parse(b"{\"a\":1}\n\n{\"b\":2}");
+    assert_eq!(c.objects.len(), 2);
+    assert_eq!(c.members.len(), 2);
+    assert_eq!(c.loose.len(), 2);
+}
+
+// 62. A blank line INSIDE a container is the documented limitation, pinned
+//     down as a characterization test. The `{` sits on its own run, which the
+//     blank line closes before the object can ever reach its `}` — so the open
+//     container frame is discarded at the run's end and the object is LOST
+//     (`objects == 0`). The trailing `"a": 1` becomes a second run; its
+//     key_value pair still finalises at end-of-run, so a member survives, but
+//     with no enclosing object. No panic either way. If the run model ever
+//     learns to span blank lines, this test will flag the behaviour change.
+#[test]
+fn test_62_blank_line_inside_container_breaks_it() {
+    let c = JsonParser::parse(b"{\n\n  \"a\": 1\n}");
+    assert_eq!(c.objects.len(), 0); // the outer object did not survive
+    assert_eq!(c.members.len(), 1); // its member did, orphaned
+    assert_eq!(c.loose.len(), 2); // two runs, split by the blank line
+}
+
+// ==========================================================================
+// Non-ASCII / UTF-8 content
+//
+// Every prior test is ASCII; spans are byte offsets, so multibyte content is
+// the natural place for an off-by-one to hide, and `str()`'s documented
+// "None on invalid UTF-8, never panic" contract had zero coverage.
+// ==========================================================================
+
+// 63. A multibyte (Cyrillic) key and value resolve to the correct slices —
+//     byte offsets land on char boundaries, `str()` succeeds.
+#[test]
+fn test_63_multibyte_key_and_value_resolve() {
+    let c = JsonParser::parse("{\"ключ\":\"значение\"}".as_bytes());
+    assert_eq!(c.members.len(), 1);
+    assert_eq!(c.str(c.members[0].key).unwrap(), "\"ключ\"");
+    assert_eq!(c.str(c.members[0].value).unwrap(), "\"значение\"");
+    let s = texts(&c, &c.strings);
+    assert!(s.contains(&"ключ".to_string()));
+    assert!(s.contains(&"значение".to_string()));
+}
+
+// 64. A 4-byte UTF-8 scalar (emoji) as a string value: the value span covers
+//     all four content bytes plus the quotes, and resolves cleanly.
+#[test]
+fn test_64_emoji_string_value_resolves() {
+    let c = JsonParser::parse("{\"a\":\"😀\"}".as_bytes());
+    assert_eq!(c.members.len(), 1);
+    assert_eq!(c.str(c.members[0].value).unwrap(), "\"😀\"");
+    assert!(texts(&c, &c.strings).contains(&"😀".to_string()));
+}
+
+// 65. Invalid UTF-8 inside a string value: the engine works on raw bytes, so
+//     parsing still succeeds structurally — but `str()` returns `None` (the
+//     documented contract) instead of panicking, while `bytes()` hands back
+//     the raw span verbatim. Note this test cannot use the `members()` helper,
+//     which unwraps `str()`.
+#[test]
+fn test_65_invalid_utf8_value_str_none_bytes_raw() {
+    let c = JsonParser::parse(b"{\"a\":\"\xff\xfe\"}");
+    assert_eq!(c.members.len(), 1);
+    assert!(c.str(c.members[0].value).is_none()); // contract: None, not panic
+    assert_eq!(c.bytes(c.members[0].value), b"\"\xff\xfe\"");
+}
+
+// ==========================================================================
+// `loose` — block-level fallback (described in this file's header but, until
+// now, never actually asserted on)
+// ==========================================================================
+
+// 66. For a single-line document, `loose` is exactly one span covering the
+//     whole input — the engine has no blank lines to split the run on.
+#[test]
+fn test_66_loose_single_span_covers_whole_input() {
+    let src = br#"{"a":1}"#;
+    let c = JsonParser::parse(src);
+    assert_eq!(c.loose.len(), 1);
+    assert_eq!(c.bytes(c.loose[0]), src);
+}
+
+// 67. A pretty-printed, multi-line document with no blank lines is still ONE
+//     `loose` span over the whole input: internal `\n`s are ordinary run
+//     content, not run boundaries.
+#[test]
+fn test_67_loose_single_span_over_multiline_no_blank() {
+    let src = b"{\n  \"a\": 1,\n  \"b\": 2\n}";
+    let c = JsonParser::parse(src);
+    assert_eq!(c.loose.len(), 1);
+    assert_eq!(c.bytes(c.loose[0]), src);
+}
+
+// ==========================================================================
+// Accessor coverage: `strings_raw()` / `strings_clean()`
+//
+// Prior tests exercised `arrays_raw()` / `objects_raw()` but never the
+// generated accessors on the `strings` field.
+// ==========================================================================
+
+// 68. `strings_raw()` yields the quote-inclusive slice; `strings_clean()`
+//     yields the bare content. (`strings` itself is the content-only form.)
+#[test]
+fn test_68_strings_raw_and_clean_accessors() {
+    let c = JsonParser::parse(br#"{"a":"b"}"#);
+    let raws: Vec<String> = c
+        .strings_raw()
+        .map(|b| std::str::from_utf8(b).unwrap().to_string())
+        .collect();
+    assert!(raws.contains(&r#""a""#.to_string()));
+    assert!(raws.contains(&r#""b""#.to_string()));
+
+    let cleans: Vec<String> = c
+        .strings_clean()
+        .map(|b| std::str::from_utf8(b).unwrap().to_string())
+        .collect();
+    assert!(cleans.contains(&"a".to_string()));
+    assert!(cleans.contains(&"b".to_string()));
+}
+
+// ==========================================================================
+// More malformed / edge shapes (no panic, sane partial output)
+// ==========================================================================
+
+// 69. A trailing comma in an object is tolerated: the `,` finalises the
+//     preceding member, and the immediately-following `}` closes the object
+//     with no phantom extra member.
+#[test]
+fn test_69_object_trailing_comma_tolerated() {
+    let c = JsonParser::parse(br#"{"a":1,}"#);
+    assert_eq!(c.objects.len(), 1);
+    assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
+}
+
+// 70. A trailing comma in an array does not panic; the array still closes and
+//     its content span keeps the trailing comma verbatim (element-level
+//     handling is a post-pass concern, not the engine's).
+#[test]
+fn test_70_array_trailing_comma_no_panic() {
+    let c = JsonParser::parse(br#"[1,2,]"#);
+    assert_eq!(c.arrays.len(), 1);
+    assert_eq!(c.str(c.arrays[0]).unwrap(), "1,2,");
+}
+
+// 71. A comma INSIDE a string element is opaque content, not a structural
+//     separator — the string is captured whole, comma and all. (The same
+//     guarantee test_25 made for a member value, here for an array element.)
+#[test]
+fn test_71_comma_inside_array_element_string_is_opaque() {
+    let c = JsonParser::parse(br#"["a,b","c"]"#);
+    assert_eq!(c.arrays.len(), 1);
+    let s = texts(&c, &c.strings);
+    assert!(s.contains(&"a,b".to_string()));
+    assert!(s.contains(&"c".to_string()));
+}
+
+// 72. A `\uXXXX` escape is NOT decoded — the engine treats the backslash run
+//     as ordinary opaque bytes, so the raw value carries the literal
+//     `\u0041`, not `A`. (Decoding, if wanted, is a caller concern.)
+#[test]
+fn test_72_unicode_escape_is_opaque_content() {
+    let c = JsonParser::parse(br#"{"a":"\u0041"}"#);
+    assert_eq!(c.members.len(), 1);
+    assert_eq!(c.str(c.members[0].value).unwrap(), r#""\u0041""#);
+    assert!(texts(&c, &c.strings).contains(&r#"\u0041"#.to_string()));
+}
+
+// 73. A missing value (`{"a":}`): the `:` opens a key_value frame whose value
+//     is empty, and the `}` immediately closes it. The member is committed
+//     with an empty value span; no panic.
+#[test]
+fn test_73_missing_value_empty_no_panic() {
+    let c = JsonParser::parse(br#"{"a":}"#);
+    assert_eq!(c.objects.len(), 1);
+    assert_eq!(c.members.len(), 1);
+    assert_eq!(c.str(c.members[0].key).unwrap(), r#""a""#);
+    assert_eq!(c.str(c.members[0].value).unwrap(), "");
+}
+
+// 74. A key with no colon (`{"a"}`): no `:` means no key_value frame is ever
+//     opened, so there is no member — just the object, with the bare string
+//     `"a"` landing in `strings`. No panic.
+#[test]
+fn test_74_key_without_colon_no_member() {
+    let c = JsonParser::parse(br#"{"a"}"#);
+    assert_eq!(c.objects.len(), 1);
+    assert_eq!(c.members.len(), 0);
+    assert_eq!(sorted(&c, &c.strings), vec!["a"]);
+}
