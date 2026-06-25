@@ -195,12 +195,13 @@ cargo fuzz run parse_text fuzz/corpus/parse_text -- -runs=0
 
 ## Campaign log
 
- realese version | date       | toolchain          | total exec | cov  | ft   | corp       | exec/s | rss   |
------------------|------------|--------------------|------------|------|------|------------|--------|-------|
- v0.1.0          | 2026-06-15 | nightly-2026-05-22 | ~104M      | 841  | 4766 | 1758/252Kb | ~35k   | 629Mb |
- v0.2.0          | 2026-06-21 | nightly-2026-05-22 | ~111M      | 1114 | 6853 | 2346/440Kb | ~32k   | 641Mb |
+| realese version | date       | toolchain          | total exec | cov  | ft    | corp        | exec/s | rss   |
+|-----------------|------------|--------------------|------------|------|-------|-------------|--------|-------|
+| v0.1.0          | 2026-06-15 | nightly-2026-05-22 | ~104M      | 841  | 4766  | 1758/252Kb  | ~35k   | 629Mb |
+| v0.2.0          | 2026-06-21 | nightly-2026-05-22 | ~111M      | 1114 | 6853  | 2346/440Kb  | ~32k   | 641Mb |
+| v0.3.0          | 2026-06-26 | nightly-2026-05-22 | ~100M      | 3529 | 22591 | 6641/1610Kb | ~6k    | 711Mb |
 
-**Coverage saturation** at `cov: 1114 ft: 6853 corp: 1758/252Kb` means
+**Coverage saturation** at `cov: 3529 ft: 22591 corp: 6641/1610Kb` means
 libFuzzer exhausted reachable branches on random inputs without seeds. Adding
 seed documents from real Markdown files or from the benchmark corpora will
 push coverage higher by guiding the fuzzer into structured code paths. The

@@ -26,7 +26,7 @@ pub const REPEAT_COUNT: usize = 1000;
 // stable. For publication-grade numbers raise SAMPLE_SIZE / SAMPLE_TIME.
 pub const WARMUP_TIME: u64 = 3;
 pub const SAMPLE_TIME: u64 = 10;
-pub const SAMPLE_SIZE: usize = 10;
+pub const SAMPLE_SIZE: usize = 200;
 
 pub fn doc_plain() -> String {
     let mut doc = String::new();

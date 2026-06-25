@@ -20,9 +20,11 @@
   * [***crates.io***](https://crates.io/crates/meon-json)
 
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
-* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
-* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
-* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
+* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
+* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
+* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
+* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
+* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
 
 ---
 
@@ -105,7 +107,7 @@ let content = MyFormatParser::parse(b"hello world\n");
 `meon-macros` только производит токены — у него нет рантайм-следа.
 
 Подробное описание каждого этапа — в
-[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
+[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline).
 
 ---
 
@@ -130,15 +132,15 @@ error: expected literal (fence min)
 независимо от того как `meon` импортирован или переименован в `Cargo.toml`.
 
 Подробное объяснение — в
-[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene) - *GitHub*.
+[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene).
 
 ---
 
 ## Лицензия
 
 `meon-macros` доступен под лицензией
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
+[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
 
-Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
+Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
 
-Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.
+Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md).

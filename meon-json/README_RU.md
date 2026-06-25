@@ -26,9 +26,11 @@ opt-in пост-проход, а не часть горячего цикла: к
   * [***crates.io***](https://crates.io/crates/meon-json)
 
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
-* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
-* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
-* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md) - *GitHub*
+* [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
+* [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
+* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
+* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
+* [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
 
 ---
 
@@ -232,7 +234,7 @@ Standalone-итераторы работают без контекста: они
 `parse`. Для корректной вложенности предпочитайте полный парс; за `find_*`
 тянитесь только ради одиночного, нечувствительного к вложенности прохода (как
 `find_strings`). См.
-[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*.
+[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators).
 
 ---
 
@@ -294,15 +296,15 @@ assert_eq!(c.members.len(), 3);
   специально не отслеживается.
 
 Подробнее об оставшихся компромиссах движка —
-[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs) - *GitHub*.
+[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs).
 
 ---
 
 ## Лицензия
 
 `meon-json` доступен под лицензией
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
+[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
 
-Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
+Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
 
-Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.
+Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md).
