@@ -71,8 +71,7 @@ fn trim_end(src: &[u8], start: usize, mut end: usize) -> usize {
     end
 }
 
-#[allow(clippy::extra_unused_lifetimes)]
-impl<'a> JsonContent<'_> {
+impl<'a> JsonContent<'a> {
     /// Type every member value, every array element, AND every bare
     /// top-level value, in one pass, returning owned span vectors.
     pub fn type_scalars(&self) -> TypedScalars {
@@ -165,7 +164,7 @@ impl<'a> JsonContent<'_> {
         }
 
         let mut seg_start = inner_start;
-        let depth: u32 = 0;
+        let mut depth: u32 = 0;
         let mut i = inner_start;
 
         while i < inner_end {
@@ -189,12 +188,12 @@ impl<'a> JsonContent<'_> {
                     }
                 }
                 b'{' | b'[' => {
-                    let _ = depth.saturating_sub(1);
+                    depth += 1;
                     i += 1;
                 }
                 b'}' | b']' => {
                     if depth > 0 {
-                        let _ = depth.saturating_sub(1);
+                        depth -= 1;
                     }
                     i += 1;
                 }
