@@ -19,12 +19,12 @@ use meon_json::JsonParser;
 
 /// Scales every corpus. `REPEAT_COUNT` top-level array elements (×30 for `numbers`,
 /// which are cheaper per element). Raise it for a `big` run that exceeds cache.
-pub const REPEAT_COUNT: usize = 1000_000;
+pub const REPEAT_COUNT: usize = 10_000;
 
 // Criterion knobs, shared with the markdown benches' values.
 pub const WARMUP_TIME: u64 = 3;
 pub const SAMPLE_TIME: u64 = 10;
-pub const SAMPLE_SIZE: usize = 50;
+pub const SAMPLE_SIZE: usize = 200;
 
 pub fn doc_numbers() -> String {
     let mut s = String::with_capacity(REPEAT_COUNT * 30 * 8);
