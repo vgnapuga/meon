@@ -29,8 +29,8 @@
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README_RU.md)
-* * ***MD_COMPARE.md***    <--
-* * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
+  * ***MD_COMPARE.md***    <--
+  * [***JSON_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE.md)
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
 
 ---
@@ -318,18 +318,53 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_compare --features 
 <summary>plain</summary>
 
 ```
-find_codes         full=       0  standalone=       0   thrpt: [6.1953 6.2034 6.2115 GiB/s]
-find_italics       full=       0  standalone=       0   thrpt: [6.2317 6.2402 6.2484 GiB/s]
-find_bolds         full=       0  standalone=       0   thrpt: [6.3200 6.3243 6.3279 GiB/s]
-find_bold_italics  full=       0  standalone=       0   thrpt: [6.2220 6.2341 6.2451 GiB/s]
-find_autolinks     full=       0  standalone=       0   thrpt: [6.0844 6.0918 6.0990 GiB/s]
-find_links         full=       0  standalone=       0   thrpt: [6.0163 6.0318 6.0454 GiB/s]
-find_headings      full=       0  standalone=       0   thrpt: [9.9465 10.009 10.061 GiB/s]
-find_thematic_breaks full=     0  standalone=       0   thrpt: [9.3659 9.3792 9.3943 GiB/s]
-find_fenced_codes  full=       0  standalone=       0   thrpt: [9.7946 9.8004 9.8056 GiB/s]
-find_blockquotes   full=       0  standalone=       0   thrpt: [10.094 10.103 10.112 GiB/s]
-find_bullet_items  full=       0  standalone=       0   thrpt: [9.5774 9.5851 9.5921 GiB/s]
-find_ordered_items full=       0  standalone=       0   thrpt: [9.0396 9.0820 9.1271 GiB/s]
+  find_codes         full=       0  standalone=       0
+                        time:   [439.60 µs 439.86 µs 440.19 µs]
+                        thrpt:  [6.2156 GiB/s 6.2202 GiB/s 6.2240 GiB/s]
+
+  find_italics       full=       0  standalone=       0
+                        time:   [448.63 µs 449.16 µs 449.60 µs]
+                        thrpt:  [6.0855 GiB/s 6.0914 GiB/s 6.0986 GiB/s]
+
+  find_bolds         full=       0  standalone=       0
+                        time:   [437.01 µs 439.54 µs 443.74 µs]
+                        thrpt:  [6.1659 GiB/s 6.2247 GiB/s 6.2608 GiB/s]
+
+  find_bold_italics  full=       0  standalone=       0
+                        time:   [436.30 µs 437.31 µs 438.64 µs]
+                        thrpt:  [6.2375 GiB/s 6.2565 GiB/s 6.2710 GiB/s]
+
+  find_autolinks     full=       0  standalone=       0
+                        time:   [446.15 µs 447.11 µs 448.62 µs]
+                        thrpt:  [6.0988 GiB/s 6.1194 GiB/s 6.1325 GiB/s]
+
+  find_links         full=       0  standalone=       0
+                        time:   [443.19 µs 443.55 µs 443.92 µs]
+                        thrpt:  [6.1634 GiB/s 6.1685 GiB/s 6.1735 GiB/s]
+
+  find_headings      full=       0  standalone=       0
+                        time:   [263.94 µs 265.05 µs 266.29 µs]
+                        thrpt:  [10.275 GiB/s 10.323 GiB/s 10.366 GiB/s]
+
+  find_thematic_breaks full=     0  standalone=       0
+                        time:   [282.79 µs 283.30 µs 283.76 µs]
+                        thrpt:  [9.6420 GiB/s 9.6576 GiB/s 9.6752 GiB/s]
+
+  find_fenced_codes  full=       0  standalone=       0
+                        time:   [280.17 µs 280.81 µs 281.93 µs]
+                        thrpt:  [9.7046 GiB/s 9.7435 GiB/s 9.7657 GiB/s]
+
+  find_blockquotes   full=       0  standalone=       0
+                        time:   [266.62 µs 266.74 µs 266.85 µs]
+                        thrpt:  [10.253 GiB/s 10.257 GiB/s 10.262 GiB/s]
+
+  find_bullet_items  full=       0  standalone=       0
+                        time:   [280.83 µs 280.98 µs 281.15 µs]
+                        thrpt:  [9.7316 GiB/s 9.7374 GiB/s 9.7425 GiB/s]
+
+  find_ordered_items full=       0  standalone=       0
+                        time:   [293.65 µs 294.00 µs 294.41 µs]
+                        thrpt:  [9.2933 GiB/s 9.3063 GiB/s 9.3172 GiB/s]
 ```
 
 </details>
@@ -338,18 +373,53 @@ find_ordered_items full=       0  standalone=       0   thrpt: [9.0396 9.0820 9.
 <summary>hot</summary>
 
 ```
-find_codes         full=    5000  standalone=    5000   thrpt: [3.0572 3.0611 3.0652 GiB/s]
-find_italics       full=    5000  standalone=    5000   thrpt: [2.5659 2.5688 2.5717 GiB/s]
-find_bolds         full=    5000  standalone=    5000   thrpt: [2.5309 2.5368 2.5424 GiB/s]
-find_bold_italics  full=       0  standalone=       0   thrpt: [2.6338 2.6388 2.6441 GiB/s]
-find_autolinks     full=    5000  standalone=    5000   thrpt: [2.9027 2.9067 2.9107 GiB/s]
-find_links         full=    5000  standalone=    5000   thrpt: [2.6780 2.6835 2.6897 GiB/s]
-find_headings      full=    5000  standalone=    5000   thrpt: [6.1249 6.1322 6.1389 GiB/s]
-find_thematic_breaks full=     0  standalone=       0   thrpt: [5.8048 5.8129 5.8202 GiB/s]
-find_fenced_codes  full=       0  standalone=       0   thrpt: [5.8966 5.8998 5.9022 GiB/s]
-find_blockquotes   full=       0  standalone=       0   thrpt: [6.2932 6.2969 6.3004 GiB/s]
-find_bullet_items  full=       0  standalone=       0   thrpt: [5.7912 5.7955 5.7995 GiB/s]
-find_ordered_items full=       0  standalone=       0   thrpt: [5.6031 5.6141 5.6242 GiB/s]
+  find_codes         full=    5000  standalone=    5000
+                        time:   [245.28 µs 245.50 µs 245.74 µs]
+                        thrpt:  [2.9962 GiB/s 2.9992 GiB/s 3.0019 GiB/s]
+
+  find_italics       full=    5000  standalone=    5000
+                        time:   [287.68 µs 287.82 µs 287.95 µs]
+                        thrpt:  [2.5571 GiB/s 2.5582 GiB/s 2.5594 GiB/s]
+
+  find_bolds         full=    5000  standalone=    5000
+                        time:   [299.68 µs 299.96 µs 300.27 µs]
+                        thrpt:  [2.4521 GiB/s 2.4547 GiB/s 2.4570 GiB/s]
+
+  find_bold_italics  full=       0  standalone=       0
+                        time:   [277.21 µs 278.00 µs 279.04 µs]
+                        thrpt:  [2.6387 GiB/s 2.6486 GiB/s 2.6561 GiB/s]
+
+  find_autolinks     full=    5000  standalone=    5000
+                        time:   [256.79 µs 258.35 µs 259.42 µs]
+                        thrpt:  [2.8383 GiB/s 2.8500 GiB/s 2.8673 GiB/s]
+
+  find_links         full=    5000  standalone=    5000
+                        time:   [274.13 µs 275.12 µs 276.79 µs]
+                        thrpt:  [2.6602 GiB/s 2.6763 GiB/s 2.6859 GiB/s]
+
+  find_headings      full=    5000  standalone=    5000
+                        time:   [119.65 µs 119.74 µs 119.83 µs]
+                        thrpt:  [6.1447 GiB/s 6.1492 GiB/s 6.1540 GiB/s]
+
+  find_thematic_breaks full=     0  standalone=       0
+                        time:   [126.00 µs 126.07 µs 126.16 µs]
+                        thrpt:  [5.8361 GiB/s 5.8405 GiB/s 5.8439 GiB/s]
+
+  find_fenced_codes  full=       0  standalone=       0
+                        time:   [125.04 µs 125.12 µs 125.19 µs]
+                        thrpt:  [5.8814 GiB/s 5.8847 GiB/s 5.8883 GiB/s]
+
+  find_blockquotes   full=       0  standalone=       0
+                        time:   [118.54 µs 119.20 µs 119.85 µs]
+                        thrpt:  [6.1434 GiB/s 6.1771 GiB/s 6.2116 GiB/s]
+
+  find_bullet_items  full=       0  standalone=       0
+                        time:   [126.14 µs 126.79 µs 127.46 µs]
+                        thrpt:  [5.7768 GiB/s 5.8074 GiB/s 5.8370 GiB/s]
+
+  find_ordered_items full=       0  standalone=       0
+                        time:   [130.59 µs 130.78 µs 131.15 µs]
+                        thrpt:  [5.6143 GiB/s 5.6300 GiB/s 5.6382 GiB/s]
 ```
 
 </details>
@@ -358,18 +428,53 @@ find_ordered_items full=       0  standalone=       0   thrpt: [5.6031 5.6141 5.
 <summary>heavy</summary>
 
 ```
-find_codes         full=   10000  standalone=   10000   thrpt: [2.5170 2.5256 2.5345 GiB/s]
-find_italics       full=   12000  standalone=   12000   thrpt: [1.8209 1.8255 1.8300 GiB/s]
-find_bolds         full=   12000  standalone=   12000   thrpt: [1.8337 1.8354 1.8372 GiB/s]
-find_bold_italics  full=    6000  standalone=    6000   thrpt: [1.8460 1.8520 1.8577 GiB/s]
-find_autolinks     full=    4000  standalone=    4000   thrpt: [3.1476 3.1529 3.1582 GiB/s]
-find_links         full=    6000  standalone=    6000   thrpt: [2.6893 2.6921 2.6951 GiB/s]
-find_headings      full=    2000  standalone=    2000   thrpt: [5.6510 5.6622 5.6729 GiB/s]
-find_thematic_breaks full=  2000  standalone=    2000   thrpt: [5.3913 5.3978 5.4039 GiB/s]
-find_fenced_codes  full=    2000  standalone=    2000   thrpt: [5.1953 5.1998 5.2038 GiB/s]
-find_blockquotes   full=    4000  standalone=    2000   thrpt: [5.5004 5.5056 5.5112 GiB/s]
-find_bullet_items  full=    6000  standalone=    6000   thrpt: [5.3964 5.4017 5.4063 GiB/s]
-find_ordered_items full=    4000  standalone=    4000   thrpt: [4.9289 4.9328 4.9367 GiB/s]
+  find_codes         full=   10000  standalone=   10000
+                        time:   [565.36 µs 565.77 µs 566.35 µs]
+                        thrpt:  [2.5341 GiB/s 2.5367 GiB/s 2.5386 GiB/s]
+
+  find_italics       full=   12000  standalone=   12000
+                        time:   [794.70 µs 803.03 µs 814.77 µs]
+                        thrpt:  [1.7615 GiB/s 1.7872 GiB/s 1.8059 GiB/s]
+
+  find_bolds         full=   12000  standalone=   12000
+                        time:   [797.14 µs 797.89 µs 798.53 µs]
+                        thrpt:  [1.7973 GiB/s 1.7987 GiB/s 1.8004 GiB/s]
+
+  find_bold_italics  full=    6000  standalone=    6000
+                        time:   [819.52 µs 821.18 µs 822.57 µs]
+                        thrpt:  [1.7448 GiB/s 1.7477 GiB/s 1.7512 GiB/s]
+
+  find_autolinks     full=    4000  standalone=    4000
+                        time:   [497.27 µs 499.20 µs 501.02 µs]
+                        thrpt:  [2.8645 GiB/s 2.8750 GiB/s 2.8862 GiB/s]
+
+  find_links         full=    6000  standalone=    6000
+                        time:   [550.56 µs 551.07 µs 551.67 µs]
+                        thrpt:  [2.6015 GiB/s 2.6044 GiB/s 2.6068 GiB/s]
+
+  find_headings      full=    2000  standalone=    2000
+                        time:   [247.47 µs 247.66 µs 247.88 µs]
+                        thrpt:  [5.7898 GiB/s 5.7950 GiB/s 5.7995 GiB/s]
+
+  find_thematic_breaks full=  2000  standalone=    2000
+                        time:   [265.19 µs 266.33 µs 267.99 µs]
+                        thrpt:  [5.3553 GiB/s 5.3887 GiB/s 5.4118 GiB/s]
+
+  find_fenced_codes  full=    2000  standalone=    2000
+                        time:   [277.96 µs 278.37 µs 278.95 µs]
+                        thrpt:  [5.1450 GiB/s 5.1557 GiB/s 5.1633 GiB/s]
+
+  find_blockquotes   full=    4000  standalone=    2000
+                        time:   [255.04 µs 255.15 µs 255.29 µs]
+                        thrpt:  [5.6218 GiB/s 5.6250 GiB/s 5.6272 GiB/s]
+
+  find_bullet_items  full=    6000  standalone=    6000
+                        time:   [271.36 µs 271.66 µs 271.96 µs]
+                        thrpt:  [5.2772 GiB/s 5.2830 GiB/s 5.2889 GiB/s]
+
+find_ordered_items full=    4000  standalone=    4000
+                        time:   [287.23 µs 287.47 µs 287.69 µs]
+                        thrpt:  [4.9886 GiB/s 4.9925 GiB/s 4.9966 GiB/s]
 ```
 
 </details>
@@ -380,18 +485,53 @@ find_ordered_items full=    4000  standalone=    4000   thrpt: [4.9289 4.9328 4.
 <summary>plain</summary>
 
 ```
-find_codes         full=       0  standalone=       0   thrpt: [8.1828 8.1932 8.2026 GiB/s]
-find_italics       full=       0  standalone=       0   thrpt: [8.1114 8.1282 8.1432 GiB/s]
-find_bolds         full=       0  standalone=       0   thrpt: [8.1344 8.1478 8.1602 GiB/s]
-find_bold_italics  full=       0  standalone=       0   thrpt: [8.0428 8.0487 8.0549 GiB/s]
-find_autolinks     full=       0  standalone=       0   thrpt: [8.3315 8.3499 8.3668 GiB/s]
-find_links         full=       0  standalone=       0   thrpt: [8.4980 8.5150 8.5306 GiB/s]
-find_headings      full=       0  standalone=       0   thrpt: [10.570 10.574 10.578 GiB/s]
-find_thematic_breaks full=     0  standalone=       0   thrpt: [10.131 10.160 10.189 GiB/s]
-find_fenced_codes  full=       0  standalone=       0   thrpt: [10.129 10.133 10.138 GiB/s]
-find_blockquotes   full=       0  standalone=       0   thrpt: [11.147 11.159 11.170 GiB/s]
-find_bullet_items  full=       0  standalone=       0   thrpt: [10.283 10.288 10.293 GiB/s]
-find_ordered_items full=       0  standalone=       0   thrpt: [9.6926 9.6962 9.6997 GiB/s]
+  find_codes         full=       0  standalone=       0
+                        time:   [323.61 µs 323.95 µs 324.37 µs]
+                        thrpt:  [8.4349 GiB/s 8.4460 GiB/s 8.4547 GiB/s]
+
+  find_italics       full=       0  standalone=       0
+                        time:   [323.64 µs 324.19 µs 324.97 µs]
+                        thrpt:  [8.4193 GiB/s 8.4397 GiB/s 8.4538 GiB/s]
+
+  find_bolds         full=       0  standalone=       0
+                        time:   [325.06 µs 325.96 µs 327.01 µs]
+                        thrpt:  [8.3668 GiB/s 8.3937 GiB/s 8.4171 GiB/s]
+
+  find_bold_italics  full=       0  standalone=       0
+                        time:   [323.56 µs 324.00 µs 324.72 µs]
+                        thrpt:  [8.4259 GiB/s 8.4446 GiB/s 8.4559 GiB/s]
+
+  find_autolinks     full=       0  standalone=       0
+                        time:   [323.77 µs 327.77 µs 333.69 µs]
+                        thrpt:  [8.1994 GiB/s 8.3476 GiB/s 8.4506 GiB/s]
+
+  find_links         full=       0  standalone=       0
+                        time:   [331.43 µs 332.72 µs 333.51 µs]
+                        thrpt:  [8.2037 GiB/s 8.2233 GiB/s 8.2553 GiB/s]
+
+  find_headings      full=       0  standalone=       0
+                        time:   [242.73 µs 242.96 µs 243.18 µs]
+                        thrpt:  [11.251 GiB/s 11.261 GiB/s 11.272 GiB/s]
+
+  find_thematic_breaks full=     0  standalone=       0
+                        time:   [262.27 µs 262.57 µs 262.85 µs]
+                        thrpt:  [10.409 GiB/s 10.420 GiB/s 10.432 GiB/s]
+
+  find_fenced_codes  full=       0  standalone=       0
+                        time:   [266.07 µs 266.18 µs 266.30 µs]
+                        thrpt:  [10.274 GiB/s 10.279 GiB/s 10.283 GiB/s]
+
+  find_blockquotes   full=       0  standalone=       0
+                        time:   [247.03 µs 247.18 µs 247.33 µs]
+                        thrpt:  [11.062 GiB/s 11.069 GiB/s 11.076 GiB/s]
+
+  find_bullet_items  full=       0  standalone=       0
+                        time:   [262.08 µs 262.29 µs 262.49 µs]
+                        thrpt:  [10.423 GiB/s 10.431 GiB/s 10.440 GiB/s]
+
+  find_ordered_items full=       0  standalone=       0
+                        time:   [280.73 µs 280.93 µs 281.15 µs]
+                        thrpt:  [9.7317 GiB/s 9.7391 GiB/s 9.7463 GiB/s]
 ```
 
 </details>
@@ -400,18 +540,53 @@ find_ordered_items full=       0  standalone=       0   thrpt: [9.6926 9.6962 9.
 <summary>hot</summary>
 
 ```
-find_codes         full=    5000  standalone=    5000   thrpt: [4.0420 4.0478 4.0532 GiB/s]
-find_italics       full=    5000  standalone=    5000   thrpt: [3.1363 3.1421 3.1473 GiB/s]
-find_bolds         full=    5000  standalone=    5000   thrpt: [3.1716 3.1817 3.1894 GiB/s]
-find_bold_italics  full=       0  standalone=       0   thrpt: [3.1776 3.1806 3.1835 GiB/s]
-find_autolinks     full=    5000  standalone=    5000   thrpt: [3.5401 3.5440 3.5474 GiB/s]
-find_links         full=    5000  standalone=    5000   thrpt: [3.5824 3.5856 3.5883 GiB/s]
-find_headings      full=    5000  standalone=    5000   thrpt: [6.6629 6.6657 6.6681 GiB/s]
-find_thematic_breaks full=     0  standalone=       0   thrpt: [6.1628 6.1677 6.1721 GiB/s]
-find_fenced_codes  full=       0  standalone=       0   thrpt: [6.1414 6.1429 6.1444 GiB/s]
-find_blockquotes   full=       0  standalone=       0   thrpt: [6.6334 6.6363 6.6390 GiB/s]
-find_bullet_items  full=       0  standalone=       0   thrpt: [6.1071 6.1125 6.1179 GiB/s]
-find_ordered_items full=       0  standalone=       0   thrpt: [5.9099 5.9121 5.9144 GiB/s]
+  find_codes         full=    5000  standalone=    5000
+                        time:   [181.20 µs 181.29 µs 181.38 µs]
+                        thrpt:  [4.0594 GiB/s 4.0614 GiB/s 4.0634 GiB/s]
+
+  find_italics       full=    5000  standalone=    5000
+                        time:   [233.56 µs 233.64 µs 233.73 µs]
+                        thrpt:  [3.1502 GiB/s 3.1514 GiB/s 3.1526 GiB/s]
+
+  find_bolds         full=    5000  standalone=    5000
+                        time:   [229.64 µs 229.80 µs 229.98 µs]
+                        thrpt:  [3.2016 GiB/s 3.2041 GiB/s 3.2063 GiB/s]
+
+  find_bold_italics  full=       0  standalone=       0
+                        time:   [232.17 µs 233.02 µs 234.30 µs]
+                        thrpt:  [3.1426 GiB/s 3.1598 GiB/s 3.1714 GiB/s]
+
+  find_autolinks     full=    5000  standalone=    5000
+                        time:   [205.88 µs 206.55 µs 207.70 µs]
+                        thrpt:  [3.5450 GiB/s 3.5647 GiB/s 3.5764 GiB/s]
+
+  find_links         full=    5000  standalone=    5000
+                        time:   [204.68 µs 204.82 µs 205.01 µs]
+                        thrpt:  [3.5916 GiB/s 3.5949 GiB/s 3.5973 GiB/s]
+
+  find_headings      full=    5000  standalone=    5000
+                        time:   [110.70 µs 110.92 µs 111.16 µs]
+                        thrpt:  [6.6235 GiB/s 6.6383 GiB/s 6.6513 GiB/s]
+
+  find_thematic_breaks full=     0  standalone=       0
+                        time:   [118.78 µs 118.86 µs 118.94 µs]
+                        thrpt:  [6.1906 GiB/s 6.1945 GiB/s 6.1988 GiB/s]
+
+  find_fenced_codes  full=       0  standalone=       0
+                        time:   [119.62 µs 119.68 µs 119.75 µs]
+                        thrpt:  [6.1486 GiB/s 6.1520 GiB/s 6.1556 GiB/s]
+
+  find_blockquotes   full=       0  standalone=       0
+                        time:   [110.93 µs 110.97 µs 111.01 µs]
+                        thrpt:  [6.6326 GiB/s 6.6354 GiB/s 6.6378 GiB/s]
+
+  find_bullet_items  full=       0  standalone=       0
+                        time:   [119.21 µs 119.28 µs 119.34 µs]
+                        thrpt:  [6.1696 GiB/s 6.1731 GiB/s 6.1763 GiB/s]
+
+  find_ordered_items full=       0  standalone=       0
+                        time:   [122.73 µs 122.79 µs 122.83 µs]
+                        thrpt:  [5.9944 GiB/s 5.9965 GiB/s 5.9992 GiB/s]
 ```
 
 </details>
@@ -420,18 +595,53 @@ find_ordered_items full=       0  standalone=       0   thrpt: [5.9099 5.9121 5.
 <summary>heavy</summary>
 
 ```
-find_codes         full=   10000  standalone=   10000   thrpt: [3.3614 3.3659 3.3706 GiB/s]
-find_italics       full=   12000  standalone=   12000   thrpt: [2.3355 2.3419 2.3468 GiB/s]
-find_bolds         full=   12000  standalone=   12000   thrpt: [2.3698 2.3725 2.3748 GiB/s]
-find_bold_italics  full=    6000  standalone=    6000   thrpt: [2.3187 2.3217 2.3246 GiB/s]
-find_autolinks     full=    4000  standalone=    4000   thrpt: [4.0837 4.0875 4.0909 GiB/s]
-find_links         full=    6000  standalone=    6000   thrpt: [3.5257 3.5296 3.5333 GiB/s]
-find_headings      full=    2000  standalone=    2000   thrpt: [6.1845 6.1883 6.1918 GiB/s]
-find_thematic_breaks full=  2000  standalone=    2000   thrpt: [5.8192 5.8258 5.8323 GiB/s]
-find_fenced_codes  full=    2000  standalone=    2000   thrpt: [5.6464 5.6498 5.6532 GiB/s]
-find_blockquotes   full=    4000  standalone=    2000   thrpt: [6.1060 6.1078 6.1097 GiB/s]
-find_bullet_items  full=    6000  standalone=    6000   thrpt: [5.7834 5.7884 5.7938 GiB/s]
-find_ordered_items full=    4000  standalone=    4000   thrpt: [5.4213 5.4242 5.4267 GiB/s]
+  find_codes         full=   10000  standalone=   10000
+                        time:   [420.02 µs 420.35 µs 420.74 µs]
+                        thrpt:  [3.4111 GiB/s 3.4142 GiB/s 3.4169 GiB/s]
+
+  find_italics       full=   12000  standalone=   12000
+                        time:   [613.72 µs 614.16 µs 614.59 µs]
+                        thrpt:  [2.3352 GiB/s 2.3368 GiB/s 2.3385 GiB/s]
+
+  find_bolds         full=   12000  standalone=   12000
+                        time:   [613.02 µs 613.97 µs 615.20 µs]
+                        thrpt:  [2.3329 GiB/s 2.3375 GiB/s 2.3412 GiB/s]
+
+  find_bold_italics  full=    6000  standalone=    6000
+                        time:   [610.56 µs 612.49 µs 614.09 µs]
+                        thrpt:  [2.3371 GiB/s 2.3432 GiB/s 2.3506 GiB/s]
+
+  find_autolinks     full=    4000  standalone=    4000
+                        time:   [368.56 µs 369.27 µs 369.81 µs]
+                        thrpt:  [3.8808 GiB/s 3.8865 GiB/s 3.8940 GiB/s]
+
+  find_links         full=    6000  standalone=    6000
+                        time:   [405.21 µs 405.44 µs 405.65 µs]
+                        thrpt:  [3.5380 GiB/s 3.5398 GiB/s 3.5419 GiB/s]
+
+  find_headings      full=    2000  standalone=    2000
+                        time:   [232.59 µs 232.73 µs 232.94 µs]
+                        thrpt:  [6.1613 GiB/s 6.1667 GiB/s 6.1704 GiB/s]
+
+  find_thematic_breaks full=  2000  standalone=    2000
+                        time:   [245.32 µs 245.56 µs 245.92 µs]
+                        thrpt:  [5.8360 GiB/s 5.8446 GiB/s 5.8504 GiB/s]
+
+  find_fenced_codes  full=    2000  standalone=    2000
+                        time:   [254.46 µs 254.66 µs 254.82 µs]
+                        thrpt:  [5.6321 GiB/s 5.6357 GiB/s 5.6402 GiB/s]
+
+  find_blockquotes   full=    4000  standalone=    2000
+                        time:   [234.97 µs 235.08 µs 235.18 µs]
+                        thrpt:  [6.1026 GiB/s 6.1050 GiB/s 6.1080 GiB/s]
+
+  find_bullet_items  full=    6000  standalone=    6000
+                        time:   [247.28 µs 247.45 µs 247.60 µs]
+                        thrpt:  [5.7963 GiB/s 5.8000 GiB/s 5.8038 GiB/s]
+
+  find_ordered_items full=    4000  standalone=    4000
+                        time:   [263.64 µs 263.79 µs 263.94 µs]
+                        thrpt:  [5.4375 GiB/s 5.4405 GiB/s 5.4438 GiB/s]
 ```
 
 </details>

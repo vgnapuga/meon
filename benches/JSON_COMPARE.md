@@ -32,8 +32,8 @@ intra-engine benches.
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
-* * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
-* * ***JSON_COMPARE.md***    <--
+  * [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md)
+  * ***JSON_COMPARE.md***    <--
 * [***FUZZING.md***](https://github.com/vgnapuga/meon/blob/main/fuzz/README.md)
 
 ---
@@ -305,10 +305,21 @@ Shown for both `small` and `big`.
 <summary>numbers</summary>
 
 ```
-find_objects   full=        0  standalone=        0   thrpt: [43.699 44.230 44.748 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [41.567 42.188 42.811 GiB/s]
-find_strings   full=        0  standalone=        0   thrpt: [43.884 44.574 45.339 GiB/s]
-find_members   full=        0  standalone=        0   thrpt: [43.498 43.750 43.976 GiB/s]
+  find_objects   full=        0  standalone=        0
+                        time:   [40.710 µs 41.302 µs 41.911 µs]
+                        thrpt:  [44.208 GiB/s 44.860 GiB/s 45.512 GiB/s]
+                        
+  find_arrays    full=        1  standalone=        1
+                        time:   [42.002 µs 42.610 µs 43.206 µs]
+                        thrpt:  [42.883 GiB/s 43.483 GiB/s 44.113 GiB/s]
+                          
+  find_strings   full=        0  standalone=        0
+                        time:   [39.991 µs 40.544 µs 41.095 µs]
+                        thrpt:  [45.087 GiB/s 45.699 GiB/s 46.331 GiB/s]
+                          
+  find_members   full=        0  standalone=        0
+                        time:   [39.493 µs 40.121 µs 40.807 µs]
+                        thrpt:  [45.404 GiB/s 46.180 GiB/s 46.915 GiB/s]
 ```
 
 </details>
@@ -317,10 +328,21 @@ find_members   full=        0  standalone=        0   thrpt: [43.498 43.750 43.9
 <summary>objects</summary>
 
 ```
-find_objects   full=    20000  standalone=    20000   thrpt: [4.3098 4.3217 4.3342 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [40.928 41.523 42.177 GiB/s]
-find_strings   full=   120000  standalone=   120000   thrpt: [843.98 846.58 849.19 MiB/s]
-find_members   full=   100000  standalone=   100000   thrpt: [843.47 844.85 846.23 MiB/s]
+  find_objects   full=    20000  standalone=    20000
+                        time:   [300.02 µs 300.09 µs 300.15 µs]
+                        thrpt:  [4.5198 GiB/s 4.5208 GiB/s 4.5217 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [29.547 µs 29.951 µs 30.349 µs]
+                        thrpt:  [44.701 GiB/s 45.296 GiB/s 45.915 GiB/s]
+                        
+  find_strings   full=   120000  standalone=   120000
+                        time:   [1.5835 ms 1.5840 ms 1.5847 ms]
+                        thrpt:  [876.61 MiB/s 876.99 MiB/s 877.29 MiB/s]
+                        
+  find_members   full=   100000  standalone=   100000
+                        time:   [1.6096 ms 1.6099 ms 1.6101 ms]
+                        thrpt:  [862.79 MiB/s 862.93 MiB/s 863.05 MiB/s]
 ```
 
 </details>
@@ -329,10 +351,21 @@ find_members   full=   100000  standalone=   100000   thrpt: [843.47 844.85 846.
 <summary>nested</summary>
 
 ```
-find_objects   full=    50000  standalone=    20000   thrpt: [3.7569 3.7673 3.7779 GiB/s]
-find_arrays    full=    10001  standalone=    10000   thrpt: [6.8639 6.8803 6.8958 GiB/s]
-find_strings   full=   130000  standalone=   130000   thrpt: [634.21 636.08 637.99 MiB/s]
-find_members   full=   100000  standalone=    60000   thrpt: [1.1102 1.1112 1.1120 GiB/s]
+  find_objects   full=    50000  standalone=    20000
+                        time:   [281.29 µs 281.49 µs 281.70 µs]
+                        thrpt:  [3.9159 GiB/s 3.9188 GiB/s 3.9216 GiB/s]
+                        
+  find_arrays    full=    10001  standalone=    10000
+                        time:   [152.18 µs 152.88 µs 153.73 µs]
+                        thrpt:  [7.1756 GiB/s 7.2157 GiB/s 7.2488 GiB/s]
+                        
+  find_strings   full=   130000  standalone=   130000
+                        time:   [1.7137 ms 1.7147 ms 1.7158 ms]
+                        thrpt:  [658.32 MiB/s 658.76 MiB/s 659.15 MiB/s]
+
+  find_members   full=   100000  standalone=    60000
+                        time:   [987.10 µs 987.18 µs 987.27 µs]
+                        thrpt:  [1.1173 GiB/s 1.1174 GiB/s 1.1175 GiB/s]
 ```
 
 </details>
@@ -343,10 +376,21 @@ find_members   full=   100000  standalone=    60000   thrpt: [1.1102 1.1112 1.11
 <summary>numbers</summary>
 
 ```
-find_objects   full=        0  standalone=        0   thrpt: [11.842 11.891 11.938 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [11.975 12.007 12.039 GiB/s]
-find_strings   full=        0  standalone=        0   thrpt: [11.885 11.937 11.983 GiB/s]
-find_members   full=        0  standalone=        0   thrpt: [11.893 11.938 11.981 GiB/s]
+  find_objects   full=        0  standalone=        0
+                        time:   [17.893 ms 17.931 ms 17.983 ms]
+                        thrpt:  [11.857 GiB/s 11.891 GiB/s 11.916 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [19.018 ms 19.261 ms 19.465 ms]
+                        thrpt:  [10.954 GiB/s 11.070 GiB/s 11.211 GiB/s]
+
+  find_strings   full=        0  standalone=        0
+                        time:   [18.032 ms 18.253 ms 18.491 ms]
+                        thrpt:  [11.531 GiB/s 11.681 GiB/s 11.824 GiB/s]
+
+  find_members   full=        0  standalone=        0
+                        time:   [17.792 ms 17.819 ms 17.856 ms]
+                        thrpt:  [11.941 GiB/s 11.966 GiB/s 11.984 GiB/s]
 ```
 
 </details>
@@ -355,10 +399,21 @@ find_members   full=        0  standalone=        0   thrpt: [11.893 11.938 11.9
 <summary>objects</summary>
 
 ```
-find_objects   full=  2000000  standalone=  2000000   thrpt: [4.1262 4.1351 4.1439 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [12.199 12.240 12.272 GiB/s]
-find_strings   full= 12000000  standalone= 12000000   thrpt: [910.84 913.30 915.42 MiB/s]
-find_members   full= 10000000  standalone= 10000000   thrpt: [894.30 896.53 898.66 MiB/s]
+  find_objects   full=  2000000  standalone=  2000000
+                        time:   [35.591 ms 35.685 ms 35.755 ms]
+                        thrpt:  [4.1068 GiB/s 4.1149 GiB/s 4.1257 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [12.167 ms 12.189 ms 12.213 ms]
+                        thrpt:  [12.023 GiB/s 12.047 GiB/s 12.069 GiB/s]
+
+  find_strings   full= 12000000  standalone= 12000000
+                        time:   [169.23 ms 169.41 ms 169.61 ms]
+                        thrpt:  [886.54 MiB/s 887.55 MiB/s 888.53 MiB/s]
+
+  find_members   full= 10000000  standalone= 10000000
+                        time:   [170.28 ms 170.62 ms 171.02 ms]
+                        thrpt:  [879.21 MiB/s 881.27 MiB/s 883.05 MiB/s]
 ```
 
 </details>
@@ -367,10 +422,21 @@ find_members   full= 10000000  standalone= 10000000   thrpt: [894.30 896.53 898.
 <summary>nested</summary>
 
 ```
-find_objects   full=  5000000  standalone=  2000000   thrpt: [3.5463 3.5585 3.5704 GiB/s]
-find_arrays    full=  1000001  standalone=  1000000   thrpt: [5.8169 5.8338 5.8510 GiB/s]
-find_strings   full= 13000000  standalone= 13000000   thrpt: [682.84 685.97 689.08 MiB/s]
-find_members   full= 10000000  standalone=  6000000   thrpt: [1.1045 1.1127 1.1209 GiB/s]
+  find_objects   full=  5000000  standalone=  2000000
+                        time:   [33.383 ms 33.458 ms 33.588 ms]
+                        thrpt:  [3.5615 GiB/s 3.5754 GiB/s 3.5834 GiB/s]
+
+  find_arrays    full=  1000001  standalone=  1000000
+                        time:   [20.383 ms 20.417 ms 20.446 ms]
+                        thrpt:  [5.8508 GiB/s 5.8590 GiB/s 5.8687 GiB/s]
+
+  find_strings   full= 13000000  standalone= 13000000
+                        time:   [182.25 ms 182.61 ms 183.08 ms]
+                        thrpt:  [669.08 MiB/s 670.78 MiB/s 672.12 MiB/s]
+
+  find_members   full= 10000000  standalone=  6000000
+                        time:   [106.44 ms 106.58 ms 106.72 ms]
+                        thrpt:  [1.1210 GiB/s 1.1224 GiB/s 1.1238 GiB/s]
 ```
 
 </details>
@@ -383,10 +449,21 @@ find_members   full= 10000000  standalone=  6000000   thrpt: [1.1045 1.1127 1.12
 <summary>numbers</summary>
 
 ```
-find_objects   full=        0  standalone=        0   thrpt: [45.270 45.800 46.309 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [44.885 45.356 45.835 GiB/s]
-find_strings   full=        0  standalone=        0   thrpt: [47.595 47.899 48.191 GiB/s]
-find_members   full=        0  standalone=        0   thrpt: [44.655 45.183 45.697 GiB/s]
+  find_objects   full=        0  standalone=        0
+                        time:   [39.971 µs 40.444 µs 40.991 µs]
+                        thrpt:  [45.201 GiB/s 45.812 GiB/s 46.354 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [41.829 µs 42.189 µs 42.562 µs]
+                        thrpt:  [43.532 GiB/s 43.917 GiB/s 44.295 GiB/s]
+
+  find_strings   full=        0  standalone=        0
+                        time:   [41.789 µs 42.252 µs 42.694 µs]
+                        thrpt:  [43.397 GiB/s 43.851 GiB/s 44.337 GiB/s]
+
+  find_members   full=        0  standalone=        0
+                        time:   [41.508 µs 42.182 µs 42.866 µs]
+                        thrpt:  [43.224 GiB/s 43.924 GiB/s 44.637 GiB/s]
 ```
 
 </details>
@@ -395,10 +472,21 @@ find_members   full=        0  standalone=        0   thrpt: [44.655 45.183 45.6
 <summary>objects</summary>
 
 ```
-find_objects   full=    20000  standalone=    20000   thrpt: [5.1394 5.1423 5.1451 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [45.130 45.470 45.801 GiB/s]
-find_strings   full=   120000  standalone=   120000   thrpt: [1.0926 1.0947 1.0968 GiB/s]
-find_members   full=   100000  standalone=   100000   thrpt: [1.0095 1.0109 1.0122 GiB/s]
+  find_objects   full=    20000  standalone=    20000
+                        time:   [248.93 µs 249.15 µs 249.37 µs]
+                        thrpt:  [5.4402 GiB/s 5.4451 GiB/s 5.4499 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [29.019 µs 29.330 µs 29.629 µs]
+                        thrpt:  [45.787 GiB/s 46.255 GiB/s 46.750 GiB/s]
+
+  find_strings   full=   120000  standalone=   120000
+                        time:   [1.2349 ms 1.2364 ms 1.2379 ms]
+                        thrpt:  [1.0960 GiB/s 1.0973 GiB/s 1.0986 GiB/s]
+
+  find_members   full=   100000  standalone=   100000
+                        time:   [1.3471 ms 1.3489 ms 1.3508 ms]
+                        thrpt:  [1.0043 GiB/s 1.0057 GiB/s 1.0071 GiB/s]
 ```
 
 </details>
@@ -407,10 +495,21 @@ find_members   full=   100000  standalone=   100000   thrpt: [1.0095 1.0109 1.01
 <summary>nested</summary>
 
 ```
-find_objects   full=    50000  standalone=    20000   thrpt: [4.8394 4.8460 4.8517 GiB/s]
-find_arrays    full=    10001  standalone=    10000   thrpt: [7.7273 7.7924 7.8565 GiB/s]
-find_strings   full=   130000  standalone=   130000   thrpt: [834.68 837.32 839.41 MiB/s]
-find_members   full=   100000  standalone=    60000   thrpt: [1.3276 1.3299 1.3320 GiB/s]
+  find_objects   full=    50000  standalone=    20000
+                        time:   [232.58 µs 232.94 µs 233.28 µs]
+                        thrpt:  [4.7287 GiB/s 4.7356 GiB/s 4.7429 GiB/s]
+
+  find_arrays    full=    10001  standalone=    10000
+                        time:   [142.54 µs 145.18 µs 148.29 µs]
+                        thrpt:  [7.4390 GiB/s 7.5980 GiB/s 7.7389 GiB/s]
+
+  find_strings   full=   130000  standalone=   130000
+                        time:   [1.3239 ms 1.3257 ms 1.3275 ms]
+                        thrpt:  [850.91 MiB/s 852.08 MiB/s 853.23 MiB/s]
+
+  find_members   full=   100000  standalone=    60000
+                        time:   [835.83 µs 836.77 µs 837.81 µs]
+                        thrpt:  [1.3167 GiB/s 1.3183 GiB/s 1.3198 GiB/s]
 ```
 
 </details>
@@ -421,10 +520,21 @@ find_members   full=   100000  standalone=    60000   thrpt: [1.3276 1.3299 1.33
 <summary>numbers</summary>
 
 ```
-find_objects   full=        0  standalone=        0   thrpt: [11.913 11.959 12.002 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [11.862 11.934 11.992 GiB/s]
-find_strings   full=        0  standalone=        0   thrpt: [11.843 11.900 11.954 GiB/s]
-find_members   full=        0  standalone=        0   thrpt: [11.857 11.910 11.960 GiB/s]
+  find_objects   full=        0  standalone=        0
+                        time:   [17.841 ms 17.958 ms 18.166 ms]
+                        thrpt:  [11.737 GiB/s 11.873 GiB/s 11.951 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [17.802 ms 17.854 ms 17.921 ms]
+                        thrpt:  [11.898 GiB/s 11.942 GiB/s 11.977 GiB/s]
+
+  find_strings   full=        0  standalone=        0
+                        time:   [17.843 ms 17.874 ms 17.901 ms]
+                        thrpt:  [11.911 GiB/s 11.929 GiB/s 11.950 GiB/s]
+
+  find_members   full=        0  standalone=        0
+                        time:   [17.746 ms 17.779 ms 17.816 ms]
+                        thrpt:  [11.968 GiB/s 11.993 GiB/s 12.015 GiB/s]
 ```
 
 </details>
@@ -433,10 +543,21 @@ find_members   full=        0  standalone=        0   thrpt: [11.857 11.910 11.9
 <summary>objects</summary>
 
 ```
-find_objects   full=  2000000  standalone=  2000000   thrpt: [4.7771 4.7937 4.8087 GiB/s]
-find_arrays    full=        1  standalone=        1   thrpt: [12.164 12.200 12.230 GiB/s]
-find_strings   full= 12000000  standalone= 12000000   thrpt: [1.1422 1.1448 1.1473 GiB/s]
-find_members   full= 10000000  standalone= 10000000   thrpt: [1.0536 1.0558 1.0579 GiB/s]
+  find_objects   full=  2000000  standalone=  2000000
+                        time:   [30.389 ms 30.474 ms 30.555 ms]
+                        thrpt:  [4.8057 GiB/s 4.8185 GiB/s 4.8319 GiB/s]
+
+  find_arrays    full=        1  standalone=        1
+                        time:   [12.100 ms 12.160 ms 12.238 ms]
+                        thrpt:  [11.999 GiB/s 12.075 GiB/s 12.135 GiB/s]
+
+  find_strings   full= 12000000  standalone= 12000000
+                        time:   [128.84 ms 129.81 ms 130.91 ms]
+                        thrpt:  [1.1217 GiB/s 1.1312 GiB/s 1.1397 GiB/s]
+
+  find_members   full= 10000000  standalone= 10000000
+                        time:   [141.47 ms 142.95 ms 144.72 ms]
+                        thrpt:  [1.0146 GiB/s 1.0272 GiB/s 1.0379 GiB/s]
 ```
 
 </details>
@@ -445,10 +566,21 @@ find_members   full= 10000000  standalone= 10000000   thrpt: [1.0536 1.0558 1.05
 <summary>nested</summary>
 
 ```
-find_objects   full=  5000000  standalone=  2000000   thrpt: [4.2459 4.2578 4.2694 GiB/s]
-find_arrays    full=  1000001  standalone=  1000000   thrpt: [6.6552 6.6879 6.7183 GiB/s]
-find_strings   full= 13000000  standalone= 13000000   thrpt: [905.56 906.38 907.16 MiB/s]
-find_members   full= 10000000  standalone=  6000000   thrpt: [1.3037 1.3115 1.3198 GiB/s]
+  find_objects   full=  5000000  standalone=  2000000
+                        time:   [28.129 ms 28.213 ms 28.330 ms]
+                        thrpt:  [4.2225 GiB/s 4.2399 GiB/s 4.2527 GiB/s]
+
+  find_arrays    full=  1000001  standalone=  1000000
+                        time:   [17.688 ms 17.795 ms 17.935 ms]
+                        thrpt:  [6.6698 GiB/s 6.7223 GiB/s 6.7628 GiB/s]
+
+  find_strings   full= 13000000  standalone= 13000000
+                        time:   [136.25 ms 136.81 ms 137.58 ms]
+                        thrpt:  [890.34 MiB/s 895.39 MiB/s 899.07 MiB/s]
+
+  find_members   full= 10000000  standalone=  6000000
+                        time:   [90.492 ms 90.885 ms 91.262 ms]
+                        thrpt:  [1.3108 GiB/s 1.3162 GiB/s 1.3219 GiB/s]
 ```
 
 </details>
