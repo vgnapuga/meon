@@ -7,6 +7,12 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [0.3.1] - 2026-07-05
+
+### Changed
+- removed doubled bullets from docs.
+- added additional info about `time` in `standalone` benchmarks.
+
 ## [0.3.0] - 2026-06-26
 
 ### Added
