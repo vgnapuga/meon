@@ -1065,9 +1065,5 @@ Standalone-итераторы (`find_*`) производят отличающи
 
 ## Лицензия
 
-`meon` доступен под лицензией
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
-
-Если условия AGPL-3.0 несовместимы с вашим сценарием использования, доступна коммерческая лицензия — см. [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
-
-Внося вклад в проект, вы соглашаетесь с [***Соглашением о лицензировании контрибуций (CLA)***](https://github.com/vgnapuga/meon/blob/main/CLA.md).
+`meon` доступен под
+[***MIT***](./LICENSE-MIT)/[***APACHE-2.0***](./LICENSE-APACHE) лицензией.

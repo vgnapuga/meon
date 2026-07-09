@@ -9,13 +9,13 @@
 feature-флагов, **а не** занимать место в рейтинге среди других парсеров (см.
 [Честность измерений](#честность-измерений)).
 
-| Бенч                  | Измеряет                                                             |
-|-----------------------|---------------------------------------------------------------------|
-| `meon-md_parse`       | `MarkdownParser::parse` — полный однопроходной парс.               |
-| `meon-md_standalone`  | Итераторы `find_*` — один вид элементов, без контекста.            |
-| `meon-md_compare`     | meon-md против `pulldown-cmark` / `comrak` — cross-parser ПС.       |
+| Бенч                  | Измеряет                                                                    |
+|-----------------------|-----------------------------------------------------------------------------|
+| `meon-md_parse`       | `MarkdownParser::parse` — полный однопроходной парс.                        |
+| `meon-md_standalone`  | Итераторы `find_*` — один вид элементов, без контекста.                     |
+| `meon-md_compare`     | meon-md против `pulldown-cmark` / `comrak` — cross-parser ПС.               |
 | `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — структурный / типизированный парс. |
-| `meon-json_compare`   | meon-json против `simd-json` / `sonic-rs` — cross-parser ПС.        |
+| `meon-json_compare`   | meon-json против `simd-json` / `sonic-rs` — cross-parser ПС.                |
 
 Отчёты о составе корпусов, полные таблицы результатов и cross-parser числа живут
 в своих документах — этот файл это обзор, как-запускать, рамка честности и

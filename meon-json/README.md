@@ -299,9 +299,4 @@ for the engine's remaining trade-offs.
 ## License
 
 `meon-json` is available under the
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE) - *GitHub*.
-
-If the AGPL-3.0 terms are incompatible with your use case, a commercial
-license is available — see [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md) - *GitHub*.
-
-By contributing, you agree to the [***Contributor License Agreement***](https://github.com/vgnapuga/meon/blob/main/CLA.md) - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.
