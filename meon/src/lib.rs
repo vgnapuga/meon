@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2025 Nikita Shavrin
+// SPDX-License-Identifier: MIT/Apache-2.0
+// Copyright (C) 2026 Nikita Shavrin
 
 #![cfg_attr(any(feature = "avx2", feature = "avx512"), feature(portable_simd))]
 #![warn(missing_docs)]
