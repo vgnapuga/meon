@@ -34,7 +34,7 @@
 
 ```toml
 [dependencies]
-meon = "0.2"
+meon = "0.3"
 ```
 
 ```rust
@@ -139,4 +139,4 @@ error: expected literal (fence min)
 ## Лицензия
 
 `meon-macros` доступен под
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *ИЛИ* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.

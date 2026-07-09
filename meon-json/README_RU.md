@@ -38,7 +38,7 @@ opt-in пост-проход, а не часть горячего цикла: к
 
 ```toml
 [dependencies]
-meon-json = "0.1"
+meon-json = "0.2"
 ```
 
 ```rust
@@ -303,4 +303,4 @@ assert_eq!(c.members.len(), 3);
 ## Лицензия
 
 `meon-json` доступен под
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *ИЛИ* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.

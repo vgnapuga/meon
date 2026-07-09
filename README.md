@@ -220,4 +220,4 @@ Without either flag the crate compiles on stable Rust.
 ## License
 
 `meon` is available under the
-[***MIT***](./LICENSE-MIT)/[***APACHE-2.0***](./LICENSE-APACHE) license.
+[***MIT***](./LICENSE-MIT) *OR* [***APACHE-2.0***](./LICENSE-APACHE) license.

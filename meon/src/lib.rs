@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT/Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (C) 2026 Nikita Shavrin
 
 #![cfg_attr(any(feature = "avx2", feature = "avx512"), feature(portable_simd))]

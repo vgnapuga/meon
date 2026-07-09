@@ -10,7 +10,7 @@ iterators for lazily extracting one element kind at a time.
 
 ```toml
 [dependencies]
-meon = "0.3"
+meon = "0.4"
 ```
 
 * **meon**    <--
@@ -483,4 +483,4 @@ Without either flag the crate compiles on stable Rust using a SWAR
 ## License
 
 `meon` is available under the
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *OR* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.

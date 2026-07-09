@@ -37,7 +37,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.2"
+meon = "0.3"
 ```
 
 ```rust
@@ -147,4 +147,4 @@ for the full explanation.
 ## License
 
 `meon-macros` is available under the
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *OR* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.

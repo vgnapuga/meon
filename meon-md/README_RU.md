@@ -35,7 +35,7 @@
 
 ```toml
 [dependencies]
-meon-md = "0.1"
+meon-md = "0.2"
 ```
 
 ```rust
@@ -246,4 +246,4 @@ assert_eq!(c.italics.len(), 1);
 ## Лицензия
 
 `meon-md` доступен под
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *OR* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.

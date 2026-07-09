@@ -1035,4 +1035,4 @@ crate, not the engine. No changes to `meon` are needed.
 ## License
 
 `meon` is available under the
-[***MIT***](./LICENSE-MIT)/[***APACHE-2.0***](./LICENSE-APACHE) license.
+[***MIT***](./LICENSE-MIT) *OR* [***APACHE-2.0***](./LICENSE-APACHE) license.

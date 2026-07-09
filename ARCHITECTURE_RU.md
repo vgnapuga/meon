@@ -1066,4 +1066,4 @@ Standalone-итераторы (`find_*`) производят отличающи
 ## Лицензия
 
 `meon` доступен под
-[***MIT***](./LICENSE-MIT)/[***APACHE-2.0***](./LICENSE-APACHE) лицензией.
+[***MIT***](./LICENSE-MIT) *ИЛИ* [***APACHE-2.0***](./LICENSE-APACHE) лицензией.

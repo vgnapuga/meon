@@ -38,7 +38,7 @@ hot loop — a caller that never types pays nothing.
 
 ```toml
 [dependencies]
-meon-json = "0.1"
+meon-json = "0.2"
 ```
 
 ```rust
@@ -299,4 +299,4 @@ for the engine's remaining trade-offs.
 ## License
 
 `meon-json` is available under the
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT)/[***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *OR* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) license - *GitHub*.

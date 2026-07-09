@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT/Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (C) 2026 Nikita Shavrin
 
 //! `meon-json` — a flat, span-based JSON reader built on the `meon` engine.
