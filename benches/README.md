@@ -9,7 +9,7 @@ engine. They exist to track engine performance across changes and feature
 flags — **not** to claim a ranking against other parsers (see
 [Scope & fairness](#scope--fairness)).
 
-| Bench                 | Measures                                                              |
+| Bench                 | Measures                                                             |
 |-----------------------|----------------------------------------------------------------------|
 | `meon-md_parse`       | `MarkdownParser::parse` — full single-pass parse.                    |
 | `meon-md_standalone`  | `find_*` iterators — one element kind, no context.                   |

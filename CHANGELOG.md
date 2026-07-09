@@ -7,6 +7,32 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [0.4.0] - 2026-07-09
+
+### Changed
+
+- **`meon`, `meon-macros`, `meon-md`, `meon-json`** — **relicensed** from
+  `AGPL-3.0-only OR LicenseRef-meon-commercial` to `MIT OR Apache-2.0`
+  (at the user's option). Versions published before this release remain
+  available under their original license. No code changes — versions are
+  bumped so the new license metadata lands on crates.io:
+  `meon` 0.3.0 → 0.4.0, `meon-macros` 0.2.0 → 0.3.0,
+  `meon-md` 0.2.0 → 0.3.0, `meon-json` 0.1.1 → 0.2.0.
+- Version mentions across `*.md` files updated to the actual crate versions.
+
+### Added
+
+- `CONTRIBUTING.md` — contributions are accepted under the project's dual
+  license (inbound = outbound, per Apache-2.0 §5).
+- `PULL_REQUEST_TEMPLATE.md`.
+- `LICENSE-MIT` and `LICENSE-APACHE` at the workspace root.
+
+### Removed
+
+- `CLA.md` — a contributor license agreement is unnecessary under a
+  permissive license.
+- `COMMERCIAL.md` — the commercial licensing option is discontinued.
+
 ## [0.3.1] - 2026-07-05
 
 ### Changed

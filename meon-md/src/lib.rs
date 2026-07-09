@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-// Copyright (C) 2025 Nikita Shavrin
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (C) 2026 Nikita Shavrin
 
 //! A fast flat parser for a subset of Markdown, built on the [`meon`] engine.
 //!

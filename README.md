@@ -220,9 +220,4 @@ Without either flag the crate compiles on stable Rust.
 ## License
 
 `meon` is available under the
-[***GNU Affero General Public License v3.0 (AGPL-3.0)***](https://github.com/vgnapuga/meon/blob/main/LICENSE).
-
-If the AGPL-3.0 terms are incompatible with your use case, a commercial
-license is available — see [***COMMERCIAL.md***](https://github.com/vgnapuga/meon/blob/main/COMMERCIAL.md).
-
-By contributing, you agree to the [***Contributor License Agreement***](https://github.com/vgnapuga/meon/blob/main/CLA.md).
+[***MIT***](./LICENSE-MIT) *OR* [***APACHE-2.0***](./LICENSE-APACHE) license.
