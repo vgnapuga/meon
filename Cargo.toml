@@ -17,7 +17,7 @@ authors = [ "vgnapuga <shavrin_ns@mail.ru>" ]
 repository = "https://github.com/vgnapuga/meon"
 
 [workspace.dependencies]
-meon = { path = "./meon", version = "0.3.0" }
-meon-macros = { path = "./meon-macros", version = "0.2.0" }
-meon-md = { path = "./meon-md", version = "0.2.0" }
-meon-json = { path = "./meon-json", version = "0.1.1" }
+meon = { path = "./meon", version = "0.4.0" }
+meon-macros = { path = "./meon-macros", version = "0.3.0" }
+meon-md = { path = "./meon-md", version = "0.3.0" }
+meon-json = { path = "./meon-json", version = "0.2.0" }
