@@ -20,6 +20,10 @@
 //!   **can differ by design**. This is not a bug.
 //! - Standalone iterators are faster for single-element queries on large sources
 //!   because they skip all cross-element bookkeeping.
+//! - For rules whose grammar arm declares `parse_inside = false`, a second,
+//!   context-aware method is also generated — see [`context`] and
+//!   [`context_iter`] — that closes most of this gap at the cost of one extra
+//!   sequential pass, shared across every context-aware call.
 //!
 //! # Iterator types
 //!
@@ -35,6 +39,8 @@
 //! | [`ContIter`] | `cont(byte)` | `Span` |
 //! | [`BlockMarkerIter`] | `block { (pattern) }` | `(T, Span)` |
 //! | [`BlockNumberedIter`] | `block { num(...) }` | `(T, Span)` |
+//! | [`ContextSymmetricExactIter`] | `symmetric byte { parse_inside = false; N => field }` | `Span` |
+//! | [`ContextAsymmetricExactIter`] | `asymmetric open, close { parse_inside = false; N => field }` | `Span` |
 //!
 //! [`SymmetricExactIter`]: symmetric::SymmetricExactIter
 //! [`AsymmetricExactIter`]: asymmetric::AsymmetricExactIter
@@ -46,8 +52,13 @@
 //! [`ContIter`]: cont::ContIter
 //! [`BlockMarkerIter`]: block_marker::BlockMarkerIter
 //! [`BlockNumberedIter`]: block_numbered::BlockNumberedIter
+//! [`ContextSymmetricExactIter`]: context_iter::ContextSymmetricExactIter
+//! [`ContextAsymmetricExactIter`]: context_iter::ContextAsymmetricExactIter
 
 pub(crate) mod common;
+
+pub mod context;
+pub mod context_iter;
 
 pub mod asymmetric;
 pub mod block_marker;
@@ -69,6 +80,14 @@ pub mod symmetric;
 /// standalone scanning it emits one `pub fn find_<field>(source: &[u8]) ->
 /// impl Iterator` method, wiring the appropriate iterator type with the rule's
 /// compile-time parameters.
+///
+/// For every rule whose grammar arm declares `parse_inside = false` — a
+/// *transparent* rule — a second method, `find_context_<field>(source, ctx:
+/// &ParseContext)`, is also emitted, plus one `Parser::context(source) ->
+/// ParseContext` builder shared by all of them. *Opaque* rules (the ones with
+/// `parse_inside = false` themselves — fences, code spans, strings, and so
+/// on) get no `find_context_*` variant: they are the source of the context,
+/// not a consumer of it.
 ///
 /// The macro is not part of the public API and is called only by the expansion
 /// of `define_parser!`. Grammar authors never invoke it directly.
@@ -99,7 +118,8 @@ pub mod symmetric;
 /// All generated `find_*` methods share the same contract: they scan the source
 /// slice independently, without any cross-element context. See the
 /// [module-level documentation](self) for a full discussion of how standalone
-/// results can differ from the full parse.
+/// results can differ from the full parse, and how `find_context_*` narrows
+/// that gap.
 ///
 /// [`SymmetricExactIter`]: symmetric::SymmetricExactIter
 /// [`AsymmetricExactIter`]: asymmetric::AsymmetricExactIter
@@ -114,12 +134,60 @@ pub mod symmetric;
 #[doc(hidden)]
 #[macro_export]
 macro_rules! define_standalone_fns {
+    // New-format entry: a `context { ... }` header (emitted by
+    // `define_parser!` from the grammar's fence rules and
+    // `parse_inside = false` inline rules) precedes the rule list. Emits
+    // `context()` alongside the finders.
+    (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal ;
+     context { fences [ $( ($fb:literal, $fm:literal) ),* ]
+               sym    [ $( ($sb:literal, $sc:literal) ),* ]
+               asym   [ $( ($ao:literal, $acl:literal, $an:literal) ),* ] }
+     $($rest:tt)*) => {
+        /// Build the [`ParseContext`](crate::ParseContext) for `source`:
+        /// every fenced block and every `parse_inside = false` inline
+        /// construct of this grammar, resolved leftmost-first in one
+        /// sequential pass. Feed the result to the `find_context_*` methods.
+        pub fn context(source: &[u8]) -> $crate::ParseContext {
+            $crate::ParseContext::build(
+                source, $eol, $esc, $sep, $tab,
+                &[ $( ($fb, $fm as u8) ),* ],
+                &[ $( ($sb, $sc as u32) ),* ],
+                &[ $( ($ao, $acl, $an as u32) ),* ],
+            )
+        }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+    };
+
+    // Legacy entry (no context header): finders only, no `context()`.
     (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal ; $($rest:tt)*) => {
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
     };
 
+    // Transparent symmetric rule: context-free finder + context-aware finder.
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
-     symmetric_exact($byte:literal, $count:literal) => $field:ident ; $($rest:tt)*) => {
+     symmetric_exact($byte:literal, $count:literal, transparent) => $field:ident ; $($rest:tt)*) => {
+        $crate::paste::paste! {
+            #[allow(missing_docs)]
+            pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
+                $crate::SymmetricExactIter::new(source, $byte, $count, $eol, $esc)
+            }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + 's {
+                $crate::ContextSymmetricExactIter::new(source, $byte, $count, $eol, $esc, ctx)
+            }
+        }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+    };
+
+    // Opaque symmetric rule (`parse_inside = false`): context-free finder
+    // only. The rule is itself a context *source* — its own spans coincide
+    // with opaque regions, so a context-aware finder for it would be
+    // degenerate.
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+     symmetric_exact($byte:literal, $count:literal, opaque) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
@@ -129,8 +197,35 @@ macro_rules! define_standalone_fns {
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
     };
 
+    // Legacy symmetric rule (no opacity marker): behaves as before.
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
-     asymmetric_exact($open:literal, $close:literal, $count:literal) => $field:ident ; $($rest:tt)*) => {
+     symmetric_exact($byte:literal, $count:literal) => $field:ident ; $($rest:tt)*) => {
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ;
+            symmetric_exact($byte, $count, opaque) => $field ; $($rest)* }
+    };
+
+    // Transparent asymmetric rule: context-free finder + context-aware finder.
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+     asymmetric_exact($open:literal, $close:literal, $count:literal, transparent) => $field:ident ; $($rest:tt)*) => {
+        $crate::paste::paste! {
+            #[allow(missing_docs)]
+            pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
+                $crate::AsymmetricExactIter::new(source, $open, $close, $count, $eol, $esc)
+            }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + 's {
+                $crate::ContextAsymmetricExactIter::new(source, $open, $close, $count, $eol, $esc, ctx)
+            }
+        }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+    };
+
+    // Opaque asymmetric rule: context-free finder only (context source).
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+     asymmetric_exact($open:literal, $close:literal, $count:literal, opaque) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
@@ -138,6 +233,13 @@ macro_rules! define_standalone_fns {
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+    };
+
+    // Legacy asymmetric rule (no opacity marker): behaves as before.
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+     asymmetric_exact($open:literal, $close:literal, $count:literal) => $field:ident ; $($rest:tt)*) => {
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ;
+            asymmetric_exact($open, $close, $count, opaque) => $field ; $($rest)* }
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
@@ -173,6 +275,16 @@ macro_rules! define_standalone_fns {
                 $crate::LineMarkerIter::new(source, $byte, $max as u8, $eol, $sep,
                     |$var| $ty { $($body)* })
             }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + 's {
+                let mut _cur = ctx.cursor();
+                $crate::LineMarkerIter::new(source, $byte, $max as u8, $eol, $sep,
+                    |$var| $ty { $($body)* })
+                    .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
+            }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
     };
@@ -187,6 +299,19 @@ macro_rules! define_standalone_fns {
                     |b| ::core::matches!(b, $($byte)|+),
                     |$var| $ty { $($body)* },
                 )
+            }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + 's {
+                let mut _cur = ctx.cursor();
+                $crate::LineUniformIter::new(
+                    source, $min as u32, $eol, $sep,
+                    |b| ::core::matches!(b, $($byte)|+),
+                    |$var| $ty { $($body)* },
+                )
+                .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
@@ -210,6 +335,15 @@ macro_rules! define_standalone_fns {
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
                 $crate::ContIter::new(source, $byte, $eol)
             }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + 's {
+                let mut _cur = ctx.cursor();
+                $crate::ContIter::new(source, $byte, $eol)
+                    .filter(move |s| !_cur.is_covered(s.start as usize))
+            }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
     };
@@ -225,6 +359,19 @@ macro_rules! define_standalone_fns {
                     |$var| $ty { $($body)* },
                 )
             }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + 's {
+                let mut _cur = ctx.cursor();
+                $crate::BlockMarkerIter::new(
+                    source, $eol, $sep, $tab,
+                    |b| ::core::matches!(b, $($byte)|+),
+                    |$var| $ty { $($body)* },
+                )
+                .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
+            }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
     };
@@ -239,6 +386,19 @@ macro_rules! define_standalone_fns {
                     |b| ::core::matches!(b, $($end)|+),
                     |$nvar, $kvar| $ty { $($body)* },
                 )
+            }
+            #[allow(missing_docs)]
+            pub fn [<find_context_ $field>]<'s>(
+                source: &'s [u8],
+                ctx: &'s $crate::ParseContext,
+            ) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + 's {
+                let mut _cur = ctx.cursor();
+                $crate::BlockNumberedIter::new(
+                    source, $eol, $sep, $tab,
+                    |b| ::core::matches!(b, $($end)|+),
+                    |$nvar, $kvar| $ty { $($body)* },
+                )
+                .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }

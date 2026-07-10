@@ -75,3 +75,8 @@ pub use engine::text_parser::standalone::{
     key_value::KvIter, line_marker::LineMarkerIter, line_uniform::LineUniformIter,
     symmetric::SymmetricExactIter,
 };
+
+pub use engine::text_parser::standalone::{
+    context::{ContextCursor, ParseContext},
+    context_iter::{ContextAsymmetricExactIter, ContextSymmetricExactIter},
+};
