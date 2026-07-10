@@ -121,7 +121,7 @@ pub fn doc_heavy() -> String {
 /// All benchmark corpora, already tiled `REPEAT_COUNT` times.
 pub fn corpora() -> Vec<(&'static str, String)> {
     vec![
-        ("plain", doc_plain().repeat(REPEAT_COUNT)),
+        // ("plain", doc_plain().repeat(REPEAT_COUNT)),
         ("hot", doc_hot().repeat(REPEAT_COUNT)),
         ("heavy", doc_heavy().repeat(REPEAT_COUNT)),
     ]
