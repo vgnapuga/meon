@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (C) 2026 Nikita Shavrin
+
 //! Procedural macro crate for the declarative parser engine.
 //!
 //! The single entry point is [`define_parser!`]. It consumes a grammar

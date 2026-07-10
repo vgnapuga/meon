@@ -58,12 +58,17 @@ pub(crate) enum StandaloneRule {
         field: Ident,
         byte: Literal,
         count: Literal,
+        /// `true` when the grammar arm declares `parse_inside = false` —
+        /// the rule is a context *source* and gets no `find_context_*` variant.
+        opaque: bool,
     },
     AsymmetricExact {
         field: Ident,
         open: Literal,
         close: Literal,
         count: Literal,
+        /// See [`StandaloneRule::SymmetricExact::opaque`].
+        opaque: bool,
     },
     Chained {
         field: Ident,
