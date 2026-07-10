@@ -35,7 +35,7 @@
 
 ```toml
 [dependencies]
-meon-md = "0.2"
+meon-md = "0.3"
 ```
 
 ```rust
