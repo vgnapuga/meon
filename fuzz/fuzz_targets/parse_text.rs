@@ -259,4 +259,44 @@ fuzz_target!(|data: &[u8]| {
     for s in MdKvFuzzParser::find_fenced_codes(data) {
         kv_check(s.start, s.end);
     }
+
+    // ------------------------------------------------------------------ //
+    // (3) `context()` map + `find_context_*` iterators — yet another      //
+    //     codegen path (the context header arm + the transparent-rule     //
+    //     arms). Same floor as (1) and (2): build the `ParseContext`,     //
+    //     then drive each context-aware scanner to completion and assert  //
+    //     every span it yields stays in bounds. No cross-comparison —     //
+    //     only *transparent* rules (`parse_inside = true`) get a context  //
+    //     variant, so opaque sources (`codes`, `autolinks`,               //
+    //     `fenced_codes`) and the `chained`/`kv` rules (`links`, `pairs`) //
+    //     are absent here by construction.                                //
+    // ------------------------------------------------------------------ //
+    let ctx = MdKvFuzzParser::context(data);
+    for &s in ctx.spans() {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_context_italics(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_context_bolds(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_context_bold_italics(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_context_headings(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_context_thematic_breaks(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_context_bullet_items(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for (_, s) in MdKvFuzzParser::find_context_ordered_items(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
+    for s in MdKvFuzzParser::find_context_blockquotes(data, &ctx) {
+        kv_check(s.start, s.end);
+    }
 });
