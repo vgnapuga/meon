@@ -138,7 +138,7 @@ macro_rules! define_standalone_fns {
     // `define_parser!` from the grammar's fence rules and
     // `parse_inside = false` inline rules) precedes the rule list. Emits
     // `context()` alongside the finders.
-    (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal ;
+    (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal, max_nest=$maxn:literal ;
      context { fences [ $( ($fb:literal, $fm:literal) ),* ]
                sym    [ $( ($sb:literal, $sc:literal) ),* ]
                asym   [ $( ($ao:literal, $acl:literal, $an:literal) ),* ] }
@@ -155,16 +155,16 @@ macro_rules! define_standalone_fns {
                 &[ $( ($ao, $acl, $an as u32) ),* ],
             )
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     // Legacy entry (no context header): finders only, no `context()`.
-    (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal ; $($rest:tt)*) => {
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+    (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal, max_nest=$maxn:literal ; $($rest:tt)*) => {
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     // Transparent symmetric rule: context-free finder + context-aware finder.
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      symmetric_exact($byte:literal, $count:literal, transparent) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -179,14 +179,14 @@ macro_rules! define_standalone_fns {
                 $crate::ContextSymmetricExactIter::new(source, $byte, $count, $eol, $esc, ctx)
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     // Opaque symmetric rule (`parse_inside = false`): context-free finder
     // only. The rule is itself a context *source* — its own spans coincide
     // with opaque regions, so a context-aware finder for it would be
     // degenerate.
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      symmetric_exact($byte:literal, $count:literal, opaque) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -194,18 +194,18 @@ macro_rules! define_standalone_fns {
                 $crate::SymmetricExactIter::new(source, $byte, $count, $eol, $esc)
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     // Legacy symmetric rule (no opacity marker): behaves as before.
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      symmetric_exact($byte:literal, $count:literal) => $field:ident ; $($rest:tt)*) => {
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ;
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ;
             symmetric_exact($byte, $count, opaque) => $field ; $($rest)* }
     };
 
     // Transparent asymmetric rule: context-free finder + context-aware finder.
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      asymmetric_exact($open:literal, $close:literal, $count:literal, transparent) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -220,11 +220,11 @@ macro_rules! define_standalone_fns {
                 $crate::ContextAsymmetricExactIter::new(source, $open, $close, $count, $eol, $esc, ctx)
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     // Opaque asymmetric rule: context-free finder only (context source).
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      asymmetric_exact($open:literal, $close:literal, $count:literal, opaque) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -232,17 +232,17 @@ macro_rules! define_standalone_fns {
                 $crate::AsymmetricExactIter::new(source, $open, $close, $count, $eol, $esc)
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     // Legacy asymmetric rule (no opacity marker): behaves as before.
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      asymmetric_exact($open:literal, $close:literal, $count:literal) => $field:ident ; $($rest:tt)*) => {
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ;
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ;
             asymmetric_exact($open, $close, $count, opaque) => $field ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      chained($o1:literal, $c1:literal, $o2:literal, $c2:literal, $prefix:literal,
              $ty:ty, $pf:ident, $ff:ident, $sf:ident) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
@@ -252,10 +252,10 @@ macro_rules! define_standalone_fns {
                     |$pf, $ff, $sf| $ty { $pf, $ff, $sf })
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      kv($eq:literal, $end:literal, $allow:ident, $ty:ty, $kf:ident, $vf:ident) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -264,10 +264,10 @@ macro_rules! define_standalone_fns {
                     |$kf, $vf| $ty { $kf, $vf })
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      line_marker($byte:literal, $max:literal, $ty:ty, $var:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -286,10 +286,10 @@ macro_rules! define_standalone_fns {
                     .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      line_uniform([$($byte:literal),+], $min:literal, $ty:ty, $var:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -314,10 +314,10 @@ macro_rules! define_standalone_fns {
                 .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      fence($byte:literal, $min:literal) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -325,15 +325,15 @@ macro_rules! define_standalone_fns {
                 $crate::FenceIter::new(source, $byte, $min as u8, $eol, $sep, $tab)
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      cont($byte:literal) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
-                $crate::ContIter::new(source, $byte, $eol)
+                $crate::ContIter::new(source, $byte, $eol, $sep, $tab, $maxn as usize)
             }
             #[allow(missing_docs)]
             pub fn [<find_context_ $field>]<'s>(
@@ -341,14 +341,14 @@ macro_rules! define_standalone_fns {
                 ctx: &'s $crate::ParseContext,
             ) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + 's {
                 let mut _cur = ctx.cursor();
-                $crate::ContIter::new(source, $byte, $eol)
+                $crate::ContIter::new(source, $byte, $eol, $sep, $tab, $maxn as usize)
                     .filter(move |s| !_cur.is_covered(s.start as usize))
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      block_marker([$($byte:literal),+], $ty:ty, $var:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -373,10 +373,10 @@ macro_rules! define_standalone_fns {
                 .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
      block_numbered([$($end:literal),+], $ty:ty, $nvar:ident, $kvar:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
@@ -401,8 +401,8 @@ macro_rules! define_standalone_fns {
                 .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
             }
         }
-        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc ; $($rest)* }
+        $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt ;) => {};
+    (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;) => {};
 }

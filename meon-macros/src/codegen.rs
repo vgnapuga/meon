@@ -45,12 +45,13 @@ pub(crate) fn build_define_content(name: &Ident, cf: &CF, mc: &TS2) -> TS2 {
 }
 
 /// Emit the rule list consumed by `define_standalone_fns!`, prefixed with the
-/// `sep`/`eol`/`tab`/`escape` context.
+/// `sep`/`eol`/`tab`/`escape`/`max_nest` context.
 pub(crate) fn build_standalone_dsl(
     sep: &Literal,
     eol: &Literal,
     tab: &Literal,
     esc: &Literal,
+    max_nest: &Literal,
     rules: &[StandaloneRule],
 ) -> TS2 {
     // The opaque-region context spec: every fence rule plus every
@@ -124,5 +125,5 @@ pub(crate) fn build_standalone_dsl(
         StandaloneRule::BlockNumbered { field, end_bytes, ty, num_var, kind_var, body } =>
             quote! { block_numbered([#(#end_bytes),*], #ty, #num_var, #kind_var) { #body } => #field; },
     }).collect();
-    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc; #ctx_hdr #(#items)* }
+    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest; #ctx_hdr #(#items)* }
 }

@@ -101,6 +101,14 @@ impl ParseContext {
         let mut spans: Vec<Span> = Vec::new();
         let mut pos: usize = 0;
 
+        // One deduplicated set of trigger bytes (symmetric markers + asymmetric
+        // openers), so each line is swept for opaque starts in a *single*
+        // memchr pass rather than one pass per rule (the old per-rule loop
+        // re-scanned the whole line for every byte that was, in fact, absent).
+        let mut trig_buf = [0u8; 8];
+        let trig_n = build_triggers(sym, asym, &mut trig_buf);
+        let triggers = &trig_buf[..trig_n];
+
         while pos < len {
             let line_end = find_line_end(source, pos, eol);
 
@@ -122,11 +130,12 @@ impl ParseContext {
                 pos = if end < len { end + 1 } else { len };
                 continue;
             }
-
             // Non-fence line: scan for opaque inline constructs, leftmost-first.
             let mut i = pos;
             while i < line_end {
-                let Some((q, is_sym, ri)) = earliest_opaque(source, i, line_end, sym, asym) else {
+                let Some((q, is_sym, ri)) =
+                    earliest_opaque(source, i, line_end, sym, asym, triggers)
+                else {
                     break;
                 };
 
@@ -233,10 +242,36 @@ fn fence_closes(
     c >= open_count && src[i..line_end].iter().all(|&b| b == sep || b == tab)
 }
 
+/// Deduplicated union of trigger bytes — every symmetric marker plus every
+/// asymmetric opener — written into `buf`. Returns the count written.
+///
+/// The grammar carries at most a handful of opaque rules, so `buf`'s fixed
+/// eight slots are never exhausted in practice; any overflow is silently
+/// dropped (a dropped trigger only means its rule is missed, never unsound).
+fn build_triggers(sym: &[SymSpec], asym: &[AsymSpec], buf: &mut [u8; 8]) -> usize {
+    let mut n = 0;
+    for &(b, _) in sym {
+        if n < buf.len() && !buf[..n].contains(&b) {
+            buf[n] = b;
+            n += 1;
+        }
+    }
+    for &(o, _, _) in asym {
+        if n < buf.len() && !buf[..n].contains(&o) {
+            buf[n] = o;
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Earliest opaque trigger in `[from, line_end)` across every rule.
 ///
-/// Returns `(offset, is_symmetric, rule_index)`. Ties cannot occur across
-/// rules — the engine assumes a byte has one meaning per grammar.
+/// Returns `(offset, is_symmetric, rule_index)`. A single `memchr` /
+/// `memchr2` / `memchr3` (dispatched on the number of distinct `triggers`)
+/// finds the leftmost opener of *any* rule in one pass; the found byte then
+/// selects the owning rule. Ties cannot occur across rules — the engine
+/// assumes a byte has one meaning per grammar.
 #[inline]
 fn earliest_opaque(
     src: &[u8],
@@ -244,24 +279,29 @@ fn earliest_opaque(
     line_end: usize,
     sym: &[SymSpec],
     asym: &[AsymSpec],
+    triggers: &[u8],
 ) -> Option<(usize, bool, usize)> {
     let hay = &src[from..line_end];
-    let mut best: Option<(usize, bool, usize)> = None;
+    let rel = match triggers.len() {
+        0 => return None,
+        1 => memchr::memchr(triggers[0], hay),
+        2 => memchr::memchr2(triggers[0], triggers[1], hay),
+        3 => memchr::memchr3(triggers[0], triggers[1], triggers[2], hay),
+        _ => hay.iter().position(|b| triggers.contains(b)),
+    }?;
+    let q = from + rel;
+    let found = src[q];
     for (ri, &(b, _)) in sym.iter().enumerate() {
-        if let Some(r) = memchr::memchr(b, hay) {
-            if best.is_none_or(|(bq, _, _)| from + r < bq) {
-                best = Some((from + r, true, ri));
-            }
+        if b == found {
+            return Some((q, true, ri));
         }
     }
     for (ri, &(o, _, _)) in asym.iter().enumerate() {
-        if let Some(r) = memchr::memchr(o, hay) {
-            if best.is_none_or(|(bq, _, _)| from + r < bq) {
-                best = Some((from + r, false, ri));
-            }
+        if o == found {
+            return Some((q, false, ri));
         }
     }
-    best
+    None
 }
 
 /// Escape-aware exact-count symmetric close search in `[from, line_end)`.
