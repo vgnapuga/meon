@@ -30,7 +30,7 @@
           };
 
           rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
-            extensions = [ "rust-src" "rust-analyzer" "clippy" ];
+            extensions = [ "rust-src" "rust-analyzer" "clippy" "llvm-tools-preview" ];
           });
         in {
           default = pkgs.mkShell {
@@ -40,6 +40,7 @@
               pkg-config
               cargo-fuzz
               cargo-expand
+              cargo-llvm-cov
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.linuxPackages.perf
             ] ++ [
