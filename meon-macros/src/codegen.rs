@@ -45,7 +45,7 @@ pub(crate) fn build_define_content(name: &Ident, cf: &CF, mc: &TS2) -> TS2 {
 }
 
 /// Emit the rule list consumed by `define_standalone_fns!`, prefixed with the
-/// `sep`/`eol`/`tab`/`escape`/`max_nest` context.
+/// `sep`/`eol`/`tab`/`escape` context.
 pub(crate) fn build_standalone_dsl(
     sep: &Literal,
     eol: &Literal,
@@ -62,25 +62,27 @@ pub(crate) fn build_standalone_dsl(
     let mut ctx_asym: Vec<TS2> = Vec::new();
     for rule in rules {
         match rule {
-            StandaloneRule::Fence { byte, min, .. } => {
-                ctx_fences.push(quote! { (#byte, #min) });
+            StandaloneRule::Fence { byte, min, cap, .. } => {
+                ctx_fences.push(quote! { (#byte, #min, #cap) });
             }
             StandaloneRule::SymmetricExact {
                 byte,
                 count,
                 opaque: true,
+                cap,
                 ..
             } => {
-                ctx_sym.push(quote! { (#byte, #count) });
+                ctx_sym.push(quote! { (#byte, #count, #cap) });
             }
             StandaloneRule::AsymmetricExact {
                 open,
                 close,
                 count,
                 opaque: true,
+                cap,
                 ..
             } => {
-                ctx_asym.push(quote! { (#open, #close, #count) });
+                ctx_asym.push(quote! { (#open, #close, #count, #cap) });
             }
             _ => {}
         }
@@ -98,11 +100,11 @@ pub(crate) fn build_standalone_dsl(
     };
 
     let items: Vec<TS2> = rules.iter().map(|rule| match rule {
-        StandaloneRule::SymmetricExact { field, byte, count, opaque } => {
+        StandaloneRule::SymmetricExact { field, byte, count, opaque, .. } => {
             let o = opacity(*opaque);
             quote! { symmetric_exact(#byte, #count, #o) => #field; }
         }
-        StandaloneRule::AsymmetricExact { field, open, close, count, opaque } => {
+        StandaloneRule::AsymmetricExact { field, open, close, count, opaque, .. } => {
             let o = opacity(*opaque);
             quote! { asymmetric_exact(#open, #close, #count, #o) => #field; }
         }
@@ -116,7 +118,7 @@ pub(crate) fn build_standalone_dsl(
             quote! { line_marker(#byte, #max, #ty, #var) { #body } => #field; },
         StandaloneRule::LineUniform { field, bytes, min, ty, var, body } =>
             quote! { line_uniform([#(#bytes),*], #min, #ty, #var) { #body } => #field; },
-        StandaloneRule::Fence { field, byte, min } =>
+        StandaloneRule::Fence { field, byte, min, .. } =>
             quote! { fence(#byte, #min) => #field; },
         StandaloneRule::Cont { field, byte } =>
             quote! { cont(#byte) => #field; },

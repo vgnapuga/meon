@@ -8,6 +8,10 @@ use super::common::*;
 /// the metadata value `T`. Yields `(meta, span)` where `span` covers the
 /// content after the marker and its trailing separator.
 ///
+/// The scan is streaming: one `memchr` pass finds candidate marker bytes and
+/// an O(1) previous-byte check keeps only the ones that begin a line, so lines
+/// without the marker are never visited at all.
+///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
 pub struct LineMarkerIter<'a, T, F>
@@ -65,31 +69,38 @@ where
         let src = self.src;
         let len = src.len();
         loop {
-            if self.pos >= len {
-                return None;
-            }
-            let le = find_line_end(src, self.pos, self.eol);
+            let p = memchr::memchr(self.byte, &src[self.pos..])? + self.pos;
 
-            if self.pos < le && src[self.pos] == self.byte {
-                let mut c = 0u8;
-                let mut i = self.pos;
-                while i < le && src[i] == self.byte && c < self.max {
-                    c += 1;
-                    i += 1;
-                }
-
-                if c > 0 && (i >= le || src[i] == self.sep) {
-                    if i < le {
-                        i += 1;
-                    }
-                    let meta = (self.make)(c);
-                    let span = Span::new(i as u32, le as u32);
-                    self.pos = if le < len { le + 1 } else { len };
-                    return Some((meta, span));
-                }
+            // The marker run must begin its line.
+            if p > 0 && src[p - 1] != self.eol {
+                self.pos = p + 1;
+                continue;
             }
 
-            self.pos = if le < len { le + 1 } else { len };
+            let mut c = 0u8;
+            let mut i = p;
+            while i < len && src[i] == self.byte && c < self.max {
+                c += 1;
+                i += 1;
+            }
+
+            // The run must terminate the line or be followed by `sep`.
+            if i >= len || src[i] == self.eol {
+                let meta = (self.make)(c);
+                self.pos = if i < len { i + 1 } else { len };
+                return Some((meta, Span::new(i as u32, i as u32)));
+            }
+            if src[i] == self.sep {
+                let cs = i + 1;
+                let le = find_line_end(src, cs, self.eol);
+                let meta = (self.make)(c);
+                self.pos = if le < len { le + 1 } else { len };
+                return Some((meta, Span::new(cs as u32, le as u32)));
+            }
+
+            // Run too long or missing separator: skip it. Deeper bytes of the
+            // same run fail the line-start check in O(1).
+            self.pos = i + 1;
         }
     }
 }

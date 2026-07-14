@@ -9,39 +9,44 @@
 //! `parse_inside = false`), because they carry no cross-element state.
 //!
 //! A [`ParseContext`] closes most of that gap. It is built by **one**
-//! sequential left-to-right pass over the source that resolves every opaque
+//! streaming pass over the source — a single unified needle search per
+//! iteration (fence bytes and opaque-rule triggers share one deduplicated
+//! set, dispatched to `memchr`/`memchr2`/`memchr3` or, beyond three distinct
+//! bytes, to the SWAR [`crate::swar::find_any`]) — resolving every opaque
 //! construct with the same leftmost-wins semantics the full parser uses:
 //!
-//! 1. **Fences** are tracked line by line, mirroring `parse_block!`'s open
-//!    condition (`count >= min`, no further fence byte on the info line) and
-//!    close condition (`count >= open count`, remainder all `sep`/`tab`).
-//!    The whole region — open line through close line, or end of input for an
-//!    unclosed fence — is recorded as an opaque region.
-//! 2. On non-fence lines, **opaque inline rules** are matched with an
-//!    escape-aware forward search bounded by the line, exactly-count on both
-//!    sides for symmetric rules. A matched construct covers its full extent,
-//!    delimiters included, and the scan resumes after it — so overlapping
-//!    opaque candidates resolve leftmost-first, like the full parser's
-//!    trigger loop.
+//! 1. A needle hit that is a **fence byte at a line start** is tested against
+//!    `parse_block!`'s open condition (`count >= min`, no further fence byte
+//!    on the info line); on success the whole region — open line through
+//!    close line (`count >= open count`, remainder all `sep`/`tab`), or end
+//!    of input for an unclosed fence — is recorded as one opaque region, and
+//!    the scan resumes after it.
+//! 2. Any other hit is an **opaque inline rule** trigger, matched
+//!    **paragraph-bounded**: a match may span a single line break,
+//!    exactly-count on both sides for symmetric rules, escape-aware
+//!    throughout. A pending opener aborts on an empty line (two consecutive
+//!    `eol` bytes), a line that opens a fence (a block construct ends the
+//!    paragraph), or end of input; this mirrors the full parser and the
+//!    context-aware standalone iterators. A matched construct covers its full
+//!    extent, delimiters included, and the scan resumes after it — so
+//!    overlapping opaque candidates resolve leftmost-first, like the full
+//!    parser's trigger loop.
 //!
-//! The result is a sorted, non-overlapping `Vec<Span>` of opaque regions. A
-//! `find_context_*` iterator then skips any *candidate delimiter* whose
-//! position falls inside one of them. Note the semantics: the context
-//! suppresses **trigger positions**, not enclosing spans — a bold span may
-//! still legally *contain* a code span, exactly as in the full parse.
+//! The result is a sorted, non-overlapping `Vec<Span>` of opaque regions,
+//! preallocated from the grammar's own capacity divisors (the same `[cap]`
+//! hints that size the content vectors). A `find_context_*` iterator then
+//! skips any *candidate delimiter* whose position falls inside one of them.
+//! Note the semantics: the context suppresses **trigger positions**, not
+//! enclosing spans — a bold span may still legally *contain* a code span,
+//! exactly as in the full parse.
 //!
 //! # Remaining divergence from the full parse (by design)
 //!
-//! - Opaque inline matching here is line-bounded, like all standalone
-//!   matching; the full parser can match an opaque construct across a line
-//!   break inside one multi-line paragraph run.
 //! - Block-marker context other than fences is not modelled: a `>`
 //!   continuation marker byte is not covered (it is never a trigger byte in
 //!   practice), and inline runs are not segmented by blockquote peeling.
 //! - This construction's own closing search is escape-aware (matching the
-//!   full parser); the context-free `find_*` close search is not. The
-//!   context-aware and context-free variants of the *same* rule therefore use
-//!   identical matchers — only the region map differs.
+//!   full parser); the context-free `find_*` close search is not.
 
 use super::common::{Span, count_escape, find_line_end};
 
@@ -51,6 +56,10 @@ pub type SymSpec = (u8, u32);
 pub type AsymSpec = (u8, u8, u32);
 /// One fence rule: `(fence byte, minimum run length)`.
 pub type FenceSpec = (u8, u8);
+
+/// Maximum distinct needle bytes: up to 3 fence bytes plus up to 8 opaque
+/// triggers, deduplicated.
+const MAX_NEEDLES: usize = 11;
 
 /// A sorted, non-overlapping set of byte ranges covered by opaque constructs.
 ///
@@ -79,11 +88,14 @@ impl ParseContext {
         }
     }
 
-    /// Build the context in one sequential pass over `source`.
+    /// Build the context in one streaming pass over `source`.
     ///
     /// - `fences` — every `fence(byte, min)` rule of the grammar.
     /// - `sym` — every `symmetric` arm with `parse_inside = false`.
     /// - `asym` — every `asymmetric` arm with `parse_inside = false`.
+    /// - `cap_hint` — preallocation hint for the region vector; the generated
+    ///   `Parser::context` derives it from the grammar's `[cap]` divisors
+    ///   (`0` is always safe and merely re-grows).
     ///
     /// All slices may be empty; an empty rule set yields an empty context.
     #[allow(clippy::too_many_arguments)]
@@ -96,100 +108,177 @@ impl ParseContext {
         fences: &[FenceSpec],
         sym: &[SymSpec],
         asym: &[AsymSpec],
+        cap_hint: usize,
     ) -> Self {
         let len = source.len();
-        let mut spans: Vec<Span> = Vec::new();
+        let mut spans: Vec<Span> = Vec::with_capacity(cap_hint);
+
+        // One deduplicated needle set — fence bytes and opaque triggers
+        // together — so every iteration issues exactly ONE search
+        // (memchr/2/3, or SWAR beyond three distinct bytes), never several.
+        let mut needle_buf = [0u8; MAX_NEEDLES];
+        let nn = build_needles(fences, sym, asym, &mut needle_buf);
+        let needles = &needle_buf[..nn];
+
         let mut pos: usize = 0;
-
-        // One deduplicated set of trigger bytes (symmetric markers + asymmetric
-        // openers), so each line is swept for opaque starts in a *single*
-        // memchr pass rather than one pass per rule (the old per-rule loop
-        // re-scanned the whole line for every byte that was, in fact, absent).
-        let mut trig_buf = [0u8; 8];
-        let trig_n = build_triggers(sym, asym, &mut trig_buf);
-        let triggers = &trig_buf[..trig_n];
-
         while pos < len {
-            let line_end = find_line_end(source, pos, eol);
+            let Some(r) = find_needle(needles, &source[pos..]) else {
+                break;
+            };
+            let p = pos + r;
+            let b = source[p];
 
-            if let Some(open_count) = fence_opens(source, pos, line_end, fences) {
-                // Cover from the open line's start to the close line's end
-                // (or end of input for an unclosed fence).
-                let fb = source[pos];
-                let mut l = if line_end < len { line_end + 1 } else { len };
-                let mut end = len;
-                while l < len {
-                    let le = find_line_end(source, l, eol);
-                    if fence_closes(source, l, le, fb, open_count, sep, tab) {
-                        end = le;
-                        break;
-                    }
-                    l = if le < len { le + 1 } else { len };
-                }
-                spans.push(Span::new(pos as u32, end as u32));
-                pos = if end < len { end + 1 } else { len };
-                continue;
-            }
-            // Non-fence line: scan for opaque inline constructs, leftmost-first.
-            let mut i = pos;
-            while i < line_end {
-                let Some((q, is_sym, ri)) =
-                    earliest_opaque(source, i, line_end, sym, asym, triggers)
-                else {
-                    break;
-                };
-
-                if count_escape(source, q, escape) % 2 == 1 {
-                    i = q + 1;
+            // Fence first, and only at a line start — exactly the full
+            // parser's precedence. (A byte may be both a fence byte and an
+            // inline trigger, e.g. a backtick; a rejected open falls through
+            // to the inline rule below, mirroring `parse_block!`.)
+            if is_fence_byte(b, fences) && (p == 0 || source[p - 1] == eol) {
+                let le = find_line_end(source, p, eol);
+                if let Some(open_count) = fence_opens(source, p, le, fences) {
+                    let end = fence_close_scan(source, le, len, b, open_count, eol, sep, tab);
+                    spans.push(Span::new(p as u32, end as u32));
+                    pos = if end < len { end + 1 } else { len };
                     continue;
                 }
-
-                if is_sym {
-                    let (byte, count) = sym[ri];
-                    let mut run_end = q;
-                    let mut c = 0u32;
-                    while run_end < line_end && source[run_end] == byte {
-                        c += 1;
-                        run_end += 1;
-                    }
-                    if c != count {
-                        i = run_end;
-                        continue;
-                    }
-                    match sym_close(source, run_end, line_end, byte, count, escape) {
-                        Some(close_end) => {
-                            spans.push(Span::new(q as u32, close_end as u32));
-                            i = close_end;
-                        }
-                        None => i = run_end,
-                    }
-                } else {
-                    let (open, close, count) = asym[ri];
-                    let mut run_end = q;
-                    let mut c = 0u32;
-                    while run_end < line_end && source[run_end] == open {
-                        c += 1;
-                        run_end += 1;
-                    }
-                    if c != count {
-                        i = run_end;
-                        continue;
-                    }
-                    match asym_close(source, run_end, line_end, close, escape) {
-                        Some(cp) => {
-                            spans.push(Span::new(q as u32, (cp + 1) as u32));
-                            i = cp + 1;
-                        }
-                        None => i = run_end,
-                    }
-                }
             }
 
-            pos = if line_end < len { line_end + 1 } else { len };
+            // Inline opaque rule owning this byte, if any (a pure fence byte
+            // that failed to open is ordinary content).
+            let Some((is_sym, ri)) = rule_for(b, sym, asym) else {
+                pos = p + 1;
+                continue;
+            };
+
+            if count_escape(source, p, escape) % 2 == 1 {
+                pos = p + 1;
+                continue;
+            }
+
+            if is_sym {
+                let (byte, count) = sym[ri];
+                let mut run_end = p;
+                let mut c = 0u32;
+                while run_end < len && source[run_end] == byte {
+                    c += 1;
+                    run_end += 1;
+                }
+                if c != count {
+                    pos = run_end;
+                    continue;
+                }
+                match sym_close(source, run_end, len, byte, count, escape, eol, fences) {
+                    Some(close_end) => {
+                        spans.push(Span::new(p as u32, close_end as u32));
+                        pos = close_end;
+                    }
+                    None => pos = run_end,
+                }
+            } else {
+                let (open, close, count) = asym[ri];
+                let mut run_end = p;
+                let mut c = 0u32;
+                while run_end < len && source[run_end] == open {
+                    c += 1;
+                    run_end += 1;
+                }
+                if c != count {
+                    pos = run_end;
+                    continue;
+                }
+                match asym_close(source, run_end, len, close, escape, eol, fences) {
+                    Some(cp) => {
+                        spans.push(Span::new(p as u32, (cp + 1) as u32));
+                        pos = cp + 1;
+                    }
+                    None => pos = run_end,
+                }
+            }
         }
 
         Self { spans }
     }
+}
+
+/// Deduplicated union of every fence byte, symmetric marker and asymmetric
+/// opener, written into `buf`. Returns the count written. Overflow beyond
+/// [`MAX_NEEDLES`] is silently dropped (a dropped needle only means its rule
+/// is missed, never unsound); no known grammar comes close.
+fn build_needles(
+    fences: &[FenceSpec],
+    sym: &[SymSpec],
+    asym: &[AsymSpec],
+    buf: &mut [u8; MAX_NEEDLES],
+) -> usize {
+    let mut n = 0;
+    let mut push = |b: u8, n: &mut usize| {
+        if *n < MAX_NEEDLES && !buf[..*n].contains(&b) {
+            buf[*n] = b;
+            *n += 1;
+        }
+    };
+    for &(fb, _) in fences {
+        push(fb, &mut n);
+    }
+    for &(b, _) in sym {
+        push(b, &mut n);
+    }
+    for &(o, _, _) in asym {
+        push(o, &mut n);
+    }
+    n
+}
+
+/// One search over `hay` for any of the `needles`: `memchr`-family for up to
+/// three distinct bytes, SWAR [`crate::swar::find_any`] beyond.
+#[inline]
+fn find_needle(needles: &[u8], hay: &[u8]) -> Option<usize> {
+    let n = needles;
+    match n.len() {
+        0 => None,
+        1 => memchr::memchr(n[0], hay),
+        2 => memchr::memchr2(n[0], n[1], hay),
+        3 => memchr::memchr3(n[0], n[1], n[2], hay),
+        4 => crate::swar::find_any([n[0], n[1], n[2], n[3]], hay),
+        5 => crate::swar::find_any([n[0], n[1], n[2], n[3], n[4]], hay),
+        6 => crate::swar::find_any([n[0], n[1], n[2], n[3], n[4], n[5]], hay),
+        7 => crate::swar::find_any([n[0], n[1], n[2], n[3], n[4], n[5], n[6]], hay),
+        8 => crate::swar::find_any([n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]], hay),
+        9 => crate::swar::find_any([n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8]], hay),
+        10 => crate::swar::find_any(
+            [n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9]],
+            hay,
+        ),
+        _ => crate::swar::find_any(
+            [
+                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10],
+            ],
+            hay,
+        ),
+    }
+}
+
+/// Is `b` one of the grammar's fence bytes?
+#[inline]
+fn is_fence_byte(b: u8, fences: &[FenceSpec]) -> bool {
+    fences.iter().any(|&(fb, _)| fb == b)
+}
+
+/// The opaque inline rule owning trigger byte `b`, as `(is_symmetric, index)`.
+/// Ties cannot occur across rules — the engine assumes a byte has one meaning
+/// per grammar.
+#[inline]
+fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec]) -> Option<(bool, usize)> {
+    for (ri, &(sb, _)) in sym.iter().enumerate() {
+        if sb == b {
+            return Some((true, ri));
+        }
+    }
+    for (ri, &(o, _, _)) in asym.iter().enumerate() {
+        if o == b {
+            return Some((false, ri));
+        }
+    }
+    None
 }
 
 /// Does a fence open at `pos` on `[pos, line_end)`? Returns the run count.
@@ -242,90 +331,88 @@ fn fence_closes(
     c >= open_count && src[i..line_end].iter().all(|&b| b == sep || b == tab)
 }
 
-/// Deduplicated union of trigger bytes — every symmetric marker plus every
-/// asymmetric opener — written into `buf`. Returns the count written.
-///
-/// The grammar carries at most a handful of opaque rules, so `buf`'s fixed
-/// eight slots are never exhausted in practice; any overflow is silently
-/// dropped (a dropped trigger only means its rule is missed, never unsound).
-fn build_triggers(sym: &[SymSpec], asym: &[AsymSpec], buf: &mut [u8; 8]) -> usize {
-    let mut n = 0;
-    for &(b, _) in sym {
-        if n < buf.len() && !buf[..n].contains(&b) {
-            buf[n] = b;
-            n += 1;
-        }
-    }
-    for &(o, _, _) in asym {
-        if n < buf.len() && !buf[..n].contains(&o) {
-            buf[n] = o;
-            n += 1;
-        }
-    }
-    n
-}
-
-/// Earliest opaque trigger in `[from, line_end)` across every rule.
-///
-/// Returns `(offset, is_symmetric, rule_index)`. A single `memchr` /
-/// `memchr2` / `memchr3` (dispatched on the number of distinct `triggers`)
-/// finds the leftmost opener of *any* rule in one pass; the found byte then
-/// selects the owning rule. Ties cannot occur across rules — the engine
-/// assumes a byte has one meaning per grammar.
-#[inline]
-fn earliest_opaque(
+/// Streaming search for the closing fence line: `memchr` for the fence byte,
+/// line-start check, then `parse_block!`'s close condition. Returns the close
+/// line's end, or `len` for an unclosed fence. Content lines inside the block
+/// are never walked.
+#[allow(clippy::too_many_arguments)]
+fn fence_close_scan(
     src: &[u8],
-    from: usize,
-    line_end: usize,
-    sym: &[SymSpec],
-    asym: &[AsymSpec],
-    triggers: &[u8],
-) -> Option<(usize, bool, usize)> {
-    let hay = &src[from..line_end];
-    let rel = match triggers.len() {
-        0 => return None,
-        1 => memchr::memchr(triggers[0], hay),
-        2 => memchr::memchr2(triggers[0], triggers[1], hay),
-        3 => memchr::memchr3(triggers[0], triggers[1], triggers[2], hay),
-        _ => hay.iter().position(|b| triggers.contains(b)),
-    }?;
-    let q = from + rel;
-    let found = src[q];
-    for (ri, &(b, _)) in sym.iter().enumerate() {
-        if b == found {
-            return Some((q, true, ri));
+    open_line_end: usize,
+    len: usize,
+    byte: u8,
+    open_count: u8,
+    eol: u8,
+    sep: u8,
+    tab: u8,
+) -> usize {
+    let mut search = if open_line_end < len {
+        open_line_end + 1
+    } else {
+        len
+    };
+    loop {
+        let Some(r) = memchr::memchr(byte, &src[search..]) else {
+            return len;
+        };
+        let q = search + r;
+        if q > 0 && src[q - 1] != eol {
+            search = q + 1;
+            continue;
         }
-    }
-    for (ri, &(o, _, _)) in asym.iter().enumerate() {
-        if o == found {
-            return Some((q, false, ri));
+        let cle = find_line_end(src, q, eol);
+        if fence_closes(src, q, cle, byte, open_count, sep, tab) {
+            return cle;
         }
+        search = if cle < len { cle + 1 } else { len };
     }
-    None
 }
 
-/// Escape-aware exact-count symmetric close search in `[from, line_end)`.
-/// Returns the offset one past the closing run.
+/// Would the line starting at `ls` end the paragraph by opening a fence?
+#[inline]
+fn fence_opens_line(src: &[u8], ls: usize, eol: u8, fences: &[FenceSpec]) -> bool {
+    if !is_fence_byte(src[ls], fences) {
+        return false;
+    }
+    let le = find_line_end(src, ls, eol);
+    fence_opens(src, ls, le, fences).is_some()
+}
+
+/// Escape-aware, paragraph-bounded symmetric close search starting at `from`.
+/// Crosses a single `eol` (a pair may span one line break within a
+/// paragraph), aborting — like the full parser and the context-aware
+/// standalone iterators — on an empty line, a fence-opening line (a block
+/// construct ends the paragraph), or end of input.
+#[allow(clippy::too_many_arguments)]
 #[inline]
 fn sym_close(
     src: &[u8],
     from: usize,
-    line_end: usize,
+    len: usize,
     byte: u8,
     count: u32,
     escape: u8,
+    eol: u8,
+    fences: &[FenceSpec],
 ) -> Option<usize> {
     let mut j = from;
-    while j < line_end {
-        let r = memchr::memchr(byte, &src[j..line_end])?;
-        let cp = j + r;
-        if count_escape(src, cp, escape) % 2 == 1 {
-            j = cp + 1;
+    loop {
+        let r = memchr::memchr2(byte, eol, &src[j..])?;
+        let q = j + r;
+        if src[q] == eol {
+            if q + 1 >= len || src[q + 1] == eol || fence_opens_line(src, q + 1, eol, fences) {
+                return None;
+            }
+            j = q + 1;
+            continue;
+        }
+        if count_escape(src, q, escape) % 2 == 1 {
+            j = q + 1;
             continue;
         }
         let mut cc = 0u32;
-        let mut tmp = cp;
-        while tmp < line_end && src[tmp] == byte {
+        let mut tmp = q;
+        while tmp < len && src[tmp] == byte {
             cc += 1;
             tmp += 1;
         }
@@ -334,24 +421,37 @@ fn sym_close(
         }
         j = tmp;
     }
-    None
 }
 
-/// Escape-aware asymmetric close search in `[from, line_end)`.
-/// Returns the offset of the closing byte itself.
+/// Escape-aware, paragraph-bounded asymmetric close search starting at
+/// `from`. Same crossing/abort rules as [`sym_close`].
 #[inline]
-fn asym_close(src: &[u8], from: usize, line_end: usize, close: u8, escape: u8) -> Option<usize> {
+fn asym_close(
+    src: &[u8],
+    from: usize,
+    len: usize,
+    close: u8,
+    escape: u8,
+    eol: u8,
+    fences: &[FenceSpec],
+) -> Option<usize> {
     let mut j = from;
-    while j < line_end {
-        let r = memchr::memchr(close, &src[j..line_end])?;
-        let cp = j + r;
-        if count_escape(src, cp, escape) % 2 == 1 {
-            j = cp + 1;
+    loop {
+        let r = memchr::memchr2(close, eol, &src[j..])?;
+        let q = j + r;
+        if src[q] == eol {
+            if q + 1 >= len || src[q + 1] == eol || fence_opens_line(src, q + 1, eol, fences) {
+                return None;
+            }
+            j = q + 1;
             continue;
         }
-        return Some(cp);
+        if count_escape(src, q, escape) % 2 == 1 {
+            j = q + 1;
+            continue;
+        }
+        return Some(q);
     }
-    None
 }
 
 /// A monotone lookup cursor over a [`ParseContext`].
@@ -403,13 +503,14 @@ mod tests {
             &[(b'`', 3)],
             &[(b'`', 1)],
             &[(b'<', b'>', 1)],
+            0,
         )
     }
 
     // 01. Empty rule set / empty source produce an empty context
     #[test]
     fn test_01_empty() {
-        let m = ParseContext::build(b"abc", b'\n', b'\\', b' ', b'\t', &[], &[], &[]);
+        let m = ParseContext::build(b"abc", b'\n', b'\\', b' ', b'\t', &[], &[], &[], 0);
         assert!(m.spans().is_empty());
         let m = md_context(b"");
         assert!(m.spans().is_empty());
@@ -478,16 +579,37 @@ mod tests {
         assert!(m.spans().is_empty());
     }
 
-    // 10. Opaque matching is line-bounded
+    // ---- Paragraph-bounded behaviour --------------------------------- //
+
+    // 10. Opaque matching is paragraph-bounded: a pair may span a single line
+    //     break within one paragraph, exactly like the context-aware
+    //     standalone iterators.
     #[test]
-    fn test_10_line_bounded() {
+    fn test_10_pair_spans_single_newline() {
         let m = md_context(b"a `x\ny` b");
+        assert_eq!(m.spans(), &[Span::new(2, 7)]);
+    }
+
+    // 11. An empty line (two consecutive eol bytes) aborts a pending opener:
+    //     opaque constructs in different paragraphs never pair.
+    #[test]
+    fn test_11_empty_line_aborts_open() {
+        let m = md_context(b"a `x\n\ny` b");
         assert!(m.spans().is_empty());
     }
 
-    // 11. A fence info line with a trailing fence byte does not open
+    // 12. A fence-opening line aborts a pending opener — a block construct
+    //     ends the paragraph — but the fence itself still gets its own
+    //     region.
     #[test]
-    fn test_11_fence_info_line_reject() {
+    fn test_12_fence_aborts_pending_open() {
+        let m = md_context(b"a `x\n```\ncode\n```\n");
+        assert_eq!(m.spans(), &[Span::new(5, 17)]);
+    }
+
+    // 13. A fence info line with a trailing fence byte does not open
+    #[test]
+    fn test_13_fence_info_line_reject() {
         let m = md_context(b"``` info ` tick\ncontent\n```\n");
         // The open line is rejected (` on the info line), so the *inline*
         // code-span rule sees the ``` run (count 3 != 1, no match); third
@@ -495,17 +617,17 @@ mod tests {
         assert_eq!(m.spans(), &[Span::new(24, 28)]);
     }
 
-    // 12. Fence close requires at least the open count
+    // 14. Fence close requires at least the open count
     #[test]
-    fn test_12_fence_close_count() {
+    fn test_14_fence_close_count() {
         let src = b"````\nx\n```\n````\ny";
         let m = md_context(src);
         assert_eq!(m.spans(), &[Span::new(0, 15)]);
     }
 
-    // 13. Cursor: monotone queries, covering_end jumps
+    // 15. Cursor: monotone queries, covering_end jumps
     #[test]
-    fn test_13_cursor() {
+    fn test_15_cursor() {
         let m = md_context(b"a `b` c `d` e");
         let mut cur = m.cursor();
         assert!(!cur.is_covered(0));
@@ -516,9 +638,9 @@ mod tests {
         assert!(!cur.is_covered(12));
     }
 
-    // 14. Cursor copies fork independently
+    // 16. Cursor copies fork independently
     #[test]
-    fn test_14_cursor_copy() {
+    fn test_16_cursor_copy() {
         let m = md_context(b"a `b` c `d` e");
         let mut cur = m.cursor();
         assert!(!cur.is_covered(1));
@@ -528,15 +650,37 @@ mod tests {
         assert_eq!(cur.covering_end(2), Some(5));
     }
 
-    // 15. JSON-shaped rule set: strings only, no fences
+    // 17. JSON-shaped rule set: strings only, no fences
     #[test]
-    fn test_15_json_strings() {
+    fn test_17_json_strings() {
         let src = br#"{"a": "x, {not open}", "b": 1}"#;
-        let m = ParseContext::build(src, b'\n', b'\\', b' ', b'\t', &[], &[(b'"', 1)], &[]);
+        let m = ParseContext::build(src, b'\n', b'\\', b' ', b'\t', &[], &[(b'"', 1)], &[], 0);
         // "a" -> [1,4), "x, {not open}" -> [6,21), "b" -> [23,26)
         assert_eq!(
             m.spans(),
             &[Span::new(1, 4), Span::new(6, 21), Span::new(23, 26)]
+        );
+    }
+
+    // 18. A fence byte distinct from every trigger (`~~~` fence with backtick
+    //     code spans) exercises the pure-fence-byte needle path
+    #[test]
+    fn test_18_distinct_fence_byte() {
+        let src = b"`c`\n~~~\n`hidden`\n~~~\n`d`";
+        let m = ParseContext::build(
+            src,
+            b'\n',
+            b'\\',
+            b' ',
+            b'\t',
+            &[(b'~', 3)],
+            &[(b'`', 1)],
+            &[],
+            0,
+        );
+        assert_eq!(
+            m.spans(),
+            &[Span::new(0, 3), Span::new(4, 20), Span::new(21, 24)]
         );
     }
 }

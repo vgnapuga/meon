@@ -3,10 +3,12 @@
 use super::common::*;
 /// Iterator over `key = value` pairs in a byte slice.
 ///
-/// Scans line by line for the `eq` byte. Everything between the preceding word
-/// boundary and `eq` is the key; everything between `eq` and the first `end_byte`
-/// (or end of line) is the value. When `allow_sep` is `true`, spaces around `eq`
-/// are trimmed from both key and value.
+/// One streaming `memchr` pass finds the `eq` bytes; lines without one are
+/// never visited. Everything between the preceding word boundary and `eq` is
+/// the key; everything between `eq` and the first `end_byte` (or end of line)
+/// is the value. When `allow_sep` is `true`, spaces around `eq` are trimmed
+/// from both key and value. The pair structure itself stays line-bounded by
+/// contract: the value never extends past its line.
 ///
 /// Yields one item per `eq` occurrence via the `make` closure, which receives
 /// `(key_span, value_span)` and constructs the output type `T`.
@@ -26,7 +28,6 @@ where
     tab: u8,
     make: F,
     pos: usize,
-    line_end: usize,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -60,7 +61,6 @@ where
         tab: u8,
         make: F,
     ) -> Self {
-        let line_end = find_line_end(src, 0, eol);
         Self {
             src,
             eq,
@@ -71,7 +71,6 @@ where
             tab,
             make,
             pos: 0,
-            line_end,
             _t: std::marker::PhantomData,
         }
     }
@@ -85,47 +84,48 @@ where
 
     fn next(&mut self) -> Option<T> {
         let src = self.src;
-        loop {
-            while self.pos >= self.line_end {
-                let (next, end) = advance_line(src, self.line_end, self.eol)?;
-                self.pos = next;
-                self.line_end = end;
-            }
+        let len = src.len();
+        // One streaming pass for the `eq` byte. The backward key walks are
+        // bounded by `eol` (line starts) and by `bound` — the start of the
+        // unconsumed region, so a key never reaches back into a previous
+        // pair's value on the same line, exactly as in the line-by-line scan.
+        let bound = self.pos;
+        let eq_pos = memchr::memchr(self.eq, &src[self.pos..])? + self.pos;
 
-            let line_start = self.pos;
-            let Some(r) = memchr::memchr(self.eq, &src[self.pos..self.line_end]) else {
-                self.pos = self.line_end;
-                continue;
-            };
-            let eq_pos = self.pos + r;
-
-            let mut key_end = eq_pos;
-            if self.allow_sep {
-                while key_end > line_start && src[key_end - 1] == self.sep {
-                    key_end -= 1;
-                }
+        let mut key_end = eq_pos;
+        if self.allow_sep {
+            while key_end > bound && src[key_end - 1] == self.sep {
+                key_end -= 1;
             }
-            let mut ks = key_end;
-            while ks > line_start && src[ks - 1] != self.sep && src[ks - 1] != self.tab {
-                ks -= 1;
-            }
-
-            let mut val_start = eq_pos + 1;
-            if self.allow_sep {
-                while val_start < self.line_end && src[val_start] == self.sep {
-                    val_start += 1;
-                }
-            }
-            let val_end = memchr::memchr(self.end_byte, &src[val_start..self.line_end])
-                .map(|rr| val_start + rr)
-                .unwrap_or(self.line_end);
-
-            self.pos = val_end + usize::from(val_end < self.line_end);
-            return Some((self.make)(
-                Span::new(ks as u32, key_end as u32),
-                Span::new(val_start as u32, val_end as u32),
-            ));
         }
+        let mut ks = key_end;
+        while ks > bound
+            && src[ks - 1] != self.sep
+            && src[ks - 1] != self.tab
+            && src[ks - 1] != self.eol
+        {
+            ks -= 1;
+        }
+
+        let mut val_start = eq_pos + 1;
+        if self.allow_sep {
+            while val_start < len && src[val_start] == self.sep {
+                val_start += 1;
+            }
+        }
+        // The value ends at the first `end_byte` or at its line's end,
+        // whichever comes first.
+        let (val_end, ate_terminator) =
+            match memchr::memchr2(self.end_byte, self.eol, &src[val_start..]) {
+                Some(rr) => (val_start + rr, true),
+                None => (len, false),
+            };
+
+        self.pos = val_end + usize::from(ate_terminator);
+        Some((self.make)(
+            Span::new(ks as u32, key_end as u32),
+            Span::new(val_start as u32, val_end as u32),
+        ))
     }
 }
 

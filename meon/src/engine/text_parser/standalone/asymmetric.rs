@@ -3,12 +3,18 @@
 use super::common::*;
 /// Iterator over asymmetric exact-delimiter spans in a byte slice.
 ///
-/// Scans line by line for sequences where `count` consecutive `open` bytes are
-/// followed by content and then a single `close` byte. The returned [`Span`]
-/// covers the inner content, excluding both the opening run and the closing byte.
+/// A single streaming scan over the source for sequences where `count`
+/// consecutive `open` bytes are followed by content and then a single `close`
+/// byte. The returned [`Span`] covers the inner content, excluding both the
+/// opening run and the closing byte.
 ///
-/// Escape sequences are respected on the opening run. Matching does not cross
-/// line boundaries.
+/// Matching is **paragraph-bounded**: the closing byte may sit past a single
+/// `eol` (the pair spans lines of one paragraph, as in the full parse), but an
+/// empty line — two consecutive `eol` bytes — or the end of input aborts the
+/// pending opener.
+///
+/// Escape sequences are respected on the opening run. The closing byte is
+/// found by a plain scan (no escape check on close).
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -20,7 +26,6 @@ pub struct AsymmetricExactIter<'a> {
     eol: u8,
     escape: u8,
     pos: usize,
-    line_end: usize,
 }
 
 impl<'a> AsymmetricExactIter<'a> {
@@ -32,11 +37,11 @@ impl<'a> AsymmetricExactIter<'a> {
     /// - `open` — opening delimiter byte (e.g. `b'<'`).
     /// - `close` — closing delimiter byte (e.g. `b'>'`).
     /// - `count` — exact number of consecutive `open` bytes required.
-    /// - `eol` — line terminator byte; matching never crosses a line boundary.
+    /// - `eol` — line terminator byte; a pair may span single line breaks, but
+    ///   never an empty line (two consecutive `eol` bytes).
     /// - `escape` — escape prefix byte; an odd number of preceding escape bytes
     ///   suppresses the opening run.
     pub fn new(src: &'a [u8], open: u8, close: u8, count: u32, eol: u8, escape: u8) -> Self {
-        let line_end = find_line_end(src, 0, eol);
         Self {
             src,
             open,
@@ -45,7 +50,6 @@ impl<'a> AsymmetricExactIter<'a> {
             eol,
             escape,
             pos: 0,
-            line_end,
         }
     }
 }
@@ -55,18 +59,10 @@ impl Iterator for AsymmetricExactIter<'_> {
 
     fn next(&mut self) -> Option<Span> {
         let src = self.src;
+        let len = src.len();
         loop {
-            while self.pos >= self.line_end {
-                let (next, end) = advance_line(src, self.line_end, self.eol)?;
-                self.pos = next;
-                self.line_end = end;
-            }
-
-            let Some(r) = memchr::memchr(self.open, &src[self.pos..self.line_end]) else {
-                self.pos = self.line_end;
-                continue;
-            };
-            let p = self.pos + r;
+            // Open scan: one streaming pass for the opening byte.
+            let p = memchr::memchr(self.open, &src[self.pos..])? + self.pos;
 
             if count_escape(src, p, self.escape) % 2 == 1 {
                 self.pos = p + 1;
@@ -75,7 +71,7 @@ impl Iterator for AsymmetricExactIter<'_> {
 
             let mut c = 0u32;
             let mut end = p;
-            while end < self.line_end && src[end] == self.open {
+            while end < len && src[end] == self.open {
                 c += 1;
                 end += 1;
             }
@@ -85,10 +81,28 @@ impl Iterator for AsymmetricExactIter<'_> {
                 continue;
             }
 
+            // Close scan, bounded by the end of the paragraph: a single `eol`
+            // is ordinary content, two in a row (an empty line) — or the end
+            // of input — abort the pending opener.
             let cs = end;
-            match memchr::memchr(self.close, &src[cs..self.line_end]) {
-                Some(r2) => {
-                    let cp = cs + r2;
+            let mut j = cs;
+            let close = loop {
+                let Some(r) = memchr::memchr2(self.close, self.eol, &src[j..]) else {
+                    break None;
+                };
+                let q = j + r;
+                if src[q] == self.eol {
+                    if q + 1 >= len || src[q + 1] == self.eol {
+                        break None;
+                    }
+                    j = q + 1;
+                    continue;
+                }
+                break Some(q);
+            };
+
+            match close {
+                Some(cp) => {
                     self.pos = cp + 1;
                     return Some(Span::new(cs as u32, cp as u32));
                 }
@@ -104,9 +118,9 @@ impl Iterator for AsymmetricExactIter<'_> {
 mod tests {
     use super::*;
 
-    // 01. Parses a standard matching pattern with the exact count of open markers
+    // 01. Parses a standard valid sequence with exact open marker count
     #[test]
-    fn test_01_standard_exact_match() {
+    fn test_01_standard_valid_sequence() {
         let src = b"<<text>";
         let mut iter = AsymmetricExactIter::new(src, b'<', b'>', 2, b'\n', b'\\');
 
@@ -163,13 +177,15 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // 07. Skips an unclosed sequence on the current line and recovers on a subsequent line
+    // 07. An opener left unclosed on its own line pairs with the next closing
+    //     byte past a single newline — matching is paragraph-bounded, not
+    //     line-bounded. The embedded newline stays inside the span.
     #[test]
-    fn test_07_unclosed_sequence_recovers_on_next_line() {
+    fn test_07_unclosed_pairs_across_single_newline() {
         let src = b"<<unclosed\n<<valid>";
         let mut iter = AsymmetricExactIter::new(src, b'<', b'>', 2, b'\n', b'\\');
 
-        assert_eq!(iter.next(), Some(Span::new(13, 18)));
+        assert_eq!(iter.next(), Some(Span::new(2, 18)));
         assert_eq!(iter.next(), None);
     }
 
@@ -202,12 +218,14 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // 11. Rejects patterns split across a line boundary as parsing cannot cross newlines
+    // 11. A close marker on the next line of the same paragraph now completes
+    //     the pair — a single newline no longer separates open from close.
     #[test]
-    fn test_11_newline_separating_close_marker_fails() {
+    fn test_11_close_marker_across_single_newline() {
         let src = b"<<a\n>";
         let mut iter = AsymmetricExactIter::new(src, b'<', b'>', 2, b'\n', b'\\');
 
+        assert_eq!(iter.next(), Some(Span::new(2, 4)));
         assert_eq!(iter.next(), None);
     }
 
@@ -249,6 +267,29 @@ mod tests {
 
         assert_eq!(iter.next(), Some(Span::new(2, 3)));
         assert_eq!(iter.next(), Some(Span::new(7, 10)));
+        assert_eq!(iter.next(), None);
+    }
+
+    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+
+    // 16. An empty line (two consecutive eol bytes) aborts a pending opener:
+    //     delimiters in different paragraphs never pair.
+    #[test]
+    fn test_16_empty_line_aborts_pending_open() {
+        let src = b"<<open\n\nclose> other";
+        let mut iter = AsymmetricExactIter::new(src, b'<', b'>', 2, b'\n', b'\\');
+
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. After a paragraph break aborts one opener, a fresh pair in the next
+    //     paragraph still matches normally.
+    #[test]
+    fn test_17_fresh_pair_after_paragraph_break() {
+        let src = b"<<a\n\n<<b>";
+        let mut iter = AsymmetricExactIter::new(src, b'<', b'>', 2, b'\n', b'\\');
+
+        assert_eq!(iter.next(), Some(Span::new(7, 8)));
         assert_eq!(iter.next(), None);
     }
 }

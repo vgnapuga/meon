@@ -127,48 +127,70 @@ impl Iterator for ContIter<'_> {
             self.pending_len = 0;
             self.pending_idx = 0;
 
-            if self.pos >= len {
-                // End of input: flush every still-open frame, innermost-first.
-                if self.open_len > 0 {
-                    self.close_from(0, len as u32);
-                    continue;
-                }
-                return None;
-            }
-
-            let le = find_line_end(src, self.pos, self.eol);
-
-            // Peel: every open frame's marker must still be present at the
-            // running position; the first one that is gone closes it and every
-            // frame nested inside it, at this line's start.
-            let mut cur = self.pos;
-            let mut fi = 0;
-            let mut broke = false;
-            while fi < self.open_len {
-                if cur < le && src[cur] == self.byte {
-                    cur = self.consume_marker(cur, le);
-                    fi += 1;
-                } else {
-                    self.close_from(fi, self.pos as u32);
-                    broke = true;
-                    break;
-                }
-            }
-
-            if broke {
-                // Reprocess this same line against the now-shallower stack:
-                // the surviving frames re-peel and the open phase runs from
-                // where their markers ended. `pos` is not advanced here.
+            // End of input: flush every still-open frame, innermost-first.
+            if self.open_len > 0 && self.pos >= len {
+                self.close_from(0, len as u32);
                 continue;
             }
 
-            // Open phase: any further markers past the peeled frames open new
-            // frames, bounded by the grammar's `max_nest` cap. Markers past the
-            // cap are left unconsumed (content), matching the full parse.
-            while cur < le && src[cur] == self.byte && self.open_len < self.cap {
-                self.open[self.open_len] = cur as u32;
-                self.open_len += 1;
-                cur = self.consume_marker(cur, le);
+            // Streaming scan: the next marker byte anywhere ahead. Lines
+            // without a marker are never walked.
+            let hit = memchr::memchr(self.byte, &src[self.pos..]).map(|r| r + self.pos);
+
+            let ls = if self.open_len > 0 {
+                // Frames are open, and `pos` is the start of the line that
+                // must continue them. A hit anywhere past `pos` — or no hit
+                // at all — means that line does not begin with the marker, so
+                // every frame closes at its start; the hit (if any) is then
+                // re-examined as a fresh opener.
+                match hit {
+                    Some(q) if q == self.pos => q,
+                    _ => {
+                        self.close_from(0, self.pos as u32);
+                        self.pos = hit.unwrap_or(len);
+                        continue;
+                    }
+                }
+            } else {
+                let q = hit?;
+                // A fresh run must begin its line.
+                if q > 0 && src[q - 1] != self.eol {
+                    self.pos = q + 1;
+                    continue;
+                }
+                q
+            };
+
+            // Process the marker line at `ls` (a line start by construction):
+            // peel the open frames, then open new ones — the same
+            // peel/open/close machinery as `parse_block!`, re-peeling the
+            // line whenever a missing marker closed part of the stack.
+            let le = find_line_end(src, ls, self.eol);
+            loop {
+                let mut cur = ls;
+                let mut fi = 0;
+                let mut broke = false;
+                while fi < self.open_len {
+                    if cur < le && src[cur] == self.byte {
+                        cur = self.consume_marker(cur, le);
+                        fi += 1;
+                    } else {
+                        self.close_from(fi, ls as u32);
+                        broke = true;
+                        break;
+                    }
+                }
+                if !broke {
+                    // Open phase: further markers open new frames, bounded by
+                    // the grammar's `max_nest` cap. Markers past the cap are
+                    // ordinary content, matching the full parse.
+                    while cur < le && src[cur] == self.byte && self.open_len < self.cap {
+                        self.open[self.open_len] = cur as u32;
+                        self.open_len += 1;
+                        cur = self.consume_marker(cur, le);
+                    }
+                    break;
+                }
             }
 
             self.pos = if le < len { le + 1 } else { len };

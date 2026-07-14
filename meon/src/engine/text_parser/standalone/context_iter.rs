@@ -1,12 +1,22 @@
 //! Context-aware standalone iterators: [`ContextSymmetricExactIter`] and
 //! [`ContextAsymmetricExactIter`].
 //!
-//! Each is byte-for-byte the same matcher as its context-free sibling
+//! Each is the same streaming matcher as its context-free sibling
 //! ([`super::symmetric::SymmetricExactIter`] /
-//! [`super::asymmetric::AsymmetricExactIter`]) with exactly one addition: a
-//! candidate delimiter whose position lies inside a
-//! [`ParseContext`](super::context::ParseContext) opaque region is skipped,
-//! and the scan resumes after that region.
+//! [`super::asymmetric::AsymmetricExactIter`]) with two context-driven
+//! additions:
+//!
+//! - a candidate delimiter whose position lies inside a
+//!   [`ParseContext`](super::context::ParseContext) opaque region is skipped,
+//!   and the scan resumes after that region;
+//! - a *multi-line* opaque region (a fenced block — inline regions never
+//!   contain an `eol`) encountered during the close search aborts the pending
+//!   opener: a block construct ends the paragraph in the full parse, so a
+//!   pair never spans a fence.
+//!
+//! Like the context-free siblings, matching is paragraph-bounded: a pair may
+//! span single line breaks, and an empty line (two consecutive `eol` bytes)
+//! or the end of input aborts a pending opener.
 //!
 //! The context suppresses **candidate positions**, not enclosing spans: a
 //! returned span may legally *contain* an opaque region (`**a `code` b**`
@@ -18,7 +28,7 @@
 //! reuse the context-free iterator and post-filter items whose span start is
 //! covered — which is candidate-exact for whole-line constructs.
 
-use super::common::{Span, advance_line, count_escape, find_line_end};
+use super::common::{Span, count_escape};
 use super::context::{ContextCursor, ParseContext};
 
 /// Context-aware variant of [`super::symmetric::SymmetricExactIter`].
@@ -32,7 +42,6 @@ pub struct ContextSymmetricExactIter<'a> {
     eol: u8,
     escape: u8,
     pos: usize,
-    line_end: usize,
     cur: ContextCursor<'a>,
 }
 
@@ -48,7 +57,6 @@ impl<'a> ContextSymmetricExactIter<'a> {
         escape: u8,
         ctx: &'a ParseContext,
     ) -> Self {
-        let line_end = find_line_end(src, 0, eol);
         Self {
             src,
             byte,
@@ -56,7 +64,6 @@ impl<'a> ContextSymmetricExactIter<'a> {
             eol,
             escape,
             pos: 0,
-            line_end,
             cur: ctx.cursor(),
         }
     }
@@ -67,21 +74,12 @@ impl Iterator for ContextSymmetricExactIter<'_> {
 
     fn next(&mut self) -> Option<Span> {
         let src = self.src;
+        let len = src.len();
         loop {
-            // Skipping past a covered region may land `pos` several lines
-            // ahead; keep the larger of the jump target and each next line
-            // start while re-syncing.
-            while self.pos >= self.line_end {
-                let (next, end) = advance_line(src, self.line_end, self.eol)?;
-                self.line_end = end;
-                self.pos = self.pos.max(next);
-            }
-
-            let Some(r) = memchr::memchr(self.byte, &src[self.pos..self.line_end]) else {
-                self.pos = self.line_end;
-                continue;
-            };
-            let p = self.pos + r;
+            // Open scan: one streaming pass for the delimiter byte; covered
+            // candidates are skipped past their whole region (this is what
+            // steps over fenced blocks in one jump).
+            let p = memchr::memchr(self.byte, &src[self.pos..])? + self.pos;
 
             if let Some(ce) = self.cur.covering_end(p) {
                 self.pos = ce;
@@ -95,7 +93,7 @@ impl Iterator for ContextSymmetricExactIter<'_> {
 
             let mut c = 0u32;
             let mut end = p;
-            while end < self.line_end && src[end] == self.byte {
+            while end < len && src[end] == self.byte {
                 c += 1;
                 end += 1;
             }
@@ -105,31 +103,47 @@ impl Iterator for ContextSymmetricExactIter<'_> {
                 continue;
             }
 
+            // Close scan, paragraph-bounded and opaque-aware. Fork the cursor
+            // for the lookahead: close candidates are `>= p`, for which the
+            // parent cursor's index is already valid.
             let cs = end;
             let mut j = cs;
-            // Fork the cursor for the close lookahead: close candidates are
-            // >= `p`, for which the parent cursor's index is already valid.
             let mut ccur = self.cur;
             let close = loop {
-                if j >= self.line_end {
-                    break None;
-                }
-                let Some(r2) = memchr::memchr(self.byte, &src[j..self.line_end]) else {
+                let Some(r) = memchr::memchr2(self.byte, self.eol, &src[j..]) else {
                     break None;
                 };
-                let cp = j + r2;
-                if let Some(ce) = ccur.covering_end(cp) {
+                let q = j + r;
+                if src[q] == self.eol {
+                    if q + 1 >= len || src[q + 1] == self.eol {
+                        break None;
+                    }
+                    // A region opening at the next line start is either a
+                    // fenced block (multi-line: the paragraph ends, the
+                    // opener dies) or an inline region leading the line
+                    // (skip it wholesale).
+                    if let Some(ce) = ccur.covering_end(q + 1) {
+                        if memchr::memchr(self.eol, &src[q + 1..ce]).is_some() {
+                            break None;
+                        }
+                        j = ce;
+                        continue;
+                    }
+                    j = q + 1;
+                    continue;
+                }
+                if let Some(ce) = ccur.covering_end(q) {
                     j = ce;
                     continue;
                 }
                 let mut cc = 0u32;
-                let mut tmp = cp;
-                while tmp < self.line_end && src[tmp] == self.byte {
+                let mut tmp = q;
+                while tmp < len && src[tmp] == self.byte {
                     cc += 1;
                     tmp += 1;
                 }
                 if cc == self.count {
-                    break Some((cp, tmp));
+                    break Some((q, tmp));
                 }
                 j = tmp;
             };
@@ -159,7 +173,6 @@ pub struct ContextAsymmetricExactIter<'a> {
     eol: u8,
     escape: u8,
     pos: usize,
-    line_end: usize,
     cur: ContextCursor<'a>,
 }
 
@@ -176,7 +189,6 @@ impl<'a> ContextAsymmetricExactIter<'a> {
         escape: u8,
         ctx: &'a ParseContext,
     ) -> Self {
-        let line_end = find_line_end(src, 0, eol);
         Self {
             src,
             open,
@@ -185,7 +197,6 @@ impl<'a> ContextAsymmetricExactIter<'a> {
             eol,
             escape,
             pos: 0,
-            line_end,
             cur: ctx.cursor(),
         }
     }
@@ -196,18 +207,9 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
 
     fn next(&mut self) -> Option<Span> {
         let src = self.src;
+        let len = src.len();
         loop {
-            while self.pos >= self.line_end {
-                let (next, end) = advance_line(src, self.line_end, self.eol)?;
-                self.line_end = end;
-                self.pos = self.pos.max(next);
-            }
-
-            let Some(r) = memchr::memchr(self.open, &src[self.pos..self.line_end]) else {
-                self.pos = self.line_end;
-                continue;
-            };
-            let p = self.pos + r;
+            let p = memchr::memchr(self.open, &src[self.pos..])? + self.pos;
 
             if let Some(ce) = self.cur.covering_end(p) {
                 self.pos = ce;
@@ -221,7 +223,7 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
 
             let mut c = 0u32;
             let mut end = p;
-            while end < self.line_end && src[end] == self.open {
+            while end < len && src[end] == self.open {
                 c += 1;
                 end += 1;
             }
@@ -235,18 +237,29 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
             let mut j = cs;
             let mut ccur = self.cur;
             let close = loop {
-                if j >= self.line_end {
-                    break None;
-                }
-                let Some(r2) = memchr::memchr(self.close, &src[j..self.line_end]) else {
+                let Some(r) = memchr::memchr2(self.close, self.eol, &src[j..]) else {
                     break None;
                 };
-                let cp = j + r2;
-                if let Some(ce) = ccur.covering_end(cp) {
+                let q = j + r;
+                if src[q] == self.eol {
+                    if q + 1 >= len || src[q + 1] == self.eol {
+                        break None;
+                    }
+                    if let Some(ce) = ccur.covering_end(q + 1) {
+                        if memchr::memchr(self.eol, &src[q + 1..ce]).is_some() {
+                            break None;
+                        }
+                        j = ce;
+                        continue;
+                    }
+                    j = q + 1;
+                    continue;
+                }
+                if let Some(ce) = ccur.covering_end(q) {
                     j = ce;
                     continue;
                 }
-                break Some(cp);
+                break Some(q);
             };
 
             match close {
@@ -276,6 +289,7 @@ mod tests {
             &[(b'`', 3)],
             &[(b'`', 1)],
             &[(b'<', b'>', 1)],
+            0,
         )
     }
 
@@ -360,7 +374,7 @@ mod tests {
         assert_eq!(spans, vec![Span::new(1, 8)]);
     }
 
-    // 08. A jump across several lines (fence) re-syncs the line loop
+    // 08. A jump across several lines (fence) re-syncs the scan
     #[test]
     fn test_08_multiline_jump_resync() {
         let src = b"x\n```\na\nb\nc\n```\n**z**";
@@ -368,5 +382,61 @@ mod tests {
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(18, 19)]);
+    }
+
+    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+
+    // 09. A pair spanning a single newline closes, with a covered close
+    //     candidate on the first line skipped
+    #[test]
+    fn test_09_pair_spans_newline_with_covered_candidate() {
+        let src = b"*a `*` b\nc*";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(1, 10)]);
+    }
+
+    // 10. A fenced block between the opener and any close candidate ends the
+    //     paragraph: the pending opener dies, nothing pairs across the fence
+    #[test]
+    fn test_10_fence_aborts_pending_opener() {
+        let src = b"*a\n```\nx\n```\nb*";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
+        assert!(spans.is_empty());
+    }
+
+    // 11. An empty line aborts a pending opener, exactly as in the
+    //     context-free iterator
+    #[test]
+    fn test_11_empty_line_aborts_pending_opener() {
+        let src = b"*a\n\nb*";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
+        assert!(spans.is_empty());
+    }
+
+    // 12. Asymmetric pair across a single newline with a covered close
+    //     candidate skipped
+    #[test]
+    fn test_12_asymmetric_pair_spans_newline() {
+        let src = b"{a `}` b\nc} d";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(1, 10)]);
+    }
+
+    // 13. Asymmetric pending opener dies at a fenced block
+    #[test]
+    fn test_13_asymmetric_fence_aborts_pending_opener() {
+        let src = b"{a\n```\nx\n```\nb} c";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
+        assert!(spans.is_empty());
     }
 }

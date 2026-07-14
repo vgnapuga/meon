@@ -139,20 +139,27 @@ macro_rules! define_standalone_fns {
     // `parse_inside = false` inline rules) precedes the rule list. Emits
     // `context()` alongside the finders.
     (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal, max_nest=$maxn:literal ;
-     context { fences [ $( ($fb:literal, $fm:literal) ),* ]
-               sym    [ $( ($sb:literal, $sc:literal) ),* ]
-               asym   [ $( ($ao:literal, $acl:literal, $an:literal) ),* ] }
+     context { fences [ $( ($fb:literal, $fm:literal, $fcap:literal) ),* ]
+               sym    [ $( ($sb:literal, $sc:literal, $scap:literal) ),* ]
+               asym   [ $( ($ao:literal, $acl:literal, $an:literal, $acap:literal) ),* ] }
      $($rest:tt)*) => {
         /// Build the [`ParseContext`](crate::ParseContext) for `source`:
         /// every fenced block and every `parse_inside = false` inline
         /// construct of this grammar, resolved leftmost-first in one
-        /// sequential pass. Feed the result to the `find_context_*` methods.
+        /// streaming pass. The region vector is preallocated from the same
+        /// `[cap]` divisors that size the content vectors. Feed the result to
+        /// the `find_context_*` methods.
         pub fn context(source: &[u8]) -> $crate::ParseContext {
+            let _cap_hint: usize = 0
+                $( + source.len() / ($fcap as usize) )*
+                $( + source.len() / ($scap as usize) )*
+                $( + source.len() / ($acap as usize) )*;
             $crate::ParseContext::build(
                 source, $eol, $esc, $sep, $tab,
                 &[ $( ($fb, $fm as u8) ),* ],
                 &[ $( ($sb, $sc as u32) ),* ],
                 &[ $( ($ao, $acl, $an as u32) ),* ],
+                _cap_hint,
             )
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }

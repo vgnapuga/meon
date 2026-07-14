@@ -8,6 +8,12 @@ use super::common::*;
 /// The delimiter byte is passed to `make` to produce the metadata value `T`.
 /// Yields `(meta, span)` where `span` covers the entire matched line.
 ///
+/// At construction the `matches` predicate is probed over all 256 byte values;
+/// when it accepts at most three bytes (every grammar in practice) the scan is
+/// streaming — one `memchr` pass for the delimiter bytes plus an O(1)
+/// line-start check — so lines without a delimiter are never visited. A
+/// predicate accepting more bytes falls back to the line-by-line scan.
+///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
 pub struct LineUniformIter<'a, T, M, F>
@@ -22,6 +28,9 @@ where
     matches: M,
     make: F,
     pos: usize,
+    needles: [u8; 3],
+    nn: usize,
+    streaming: bool,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -45,6 +54,11 @@ where
     /// - `make` — closure that receives the delimiter byte and constructs the
     ///   metadata value `T`.
     pub fn new(src: &'a [u8], min: u32, eol: u8, sep: u8, matches: M, make: F) -> Self {
+        let mut needles = [0u8; 3];
+        let (nn, streaming) = match probe_matcher(&matches, &mut needles) {
+            Some(n) => (n, true),
+            None => (0, false),
+        };
         Self {
             src,
             min,
@@ -53,7 +67,66 @@ where
             matches,
             make,
             pos: 0,
+            needles,
+            nn,
+            streaming,
             _t: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, M, F> LineUniformIter<'_, T, M, F>
+where
+    M: Fn(u8) -> bool,
+    F: Fn(u8) -> T,
+{
+    /// Streaming scan: `memchr` for the probed delimiter bytes, line-start
+    /// check, then a single forward walk that both validates the line and
+    /// finds its end.
+    fn next_streaming(&mut self) -> Option<(T, Span)> {
+        let src = self.src;
+        let len = src.len();
+        loop {
+            let p = find_any_of(&self.needles, self.nn, &src[self.pos..])? + self.pos;
+
+            // The delimiter must begin its line. A hit mid-line rules the
+            // whole line out (a valid line consists of delimiter/`sep` only,
+            // so no later hit on it can be a line start): skip to the next
+            // line instead of rejecting the remaining hits one by one.
+            if p > 0 && src[p - 1] != self.eol {
+                let le = find_line_end(src, p, self.eol);
+                self.pos = if le < len { le + 1 } else { len };
+                continue;
+            }
+
+            let delim = src[p];
+            let mut count = 0u32;
+            let mut i = p;
+            let mut valid = true;
+            while i < len {
+                let b = src[i];
+                if b == self.eol {
+                    break;
+                }
+                if b == delim {
+                    count += 1;
+                } else if b != self.sep {
+                    valid = false;
+                    break;
+                }
+                i += 1;
+            }
+
+            if valid && count >= self.min {
+                let meta = (self.make)(delim);
+                let span = Span::new(p as u32, i as u32);
+                self.pos = if i < len { i + 1 } else { len };
+                return Some((meta, span));
+            }
+
+            // Invalid or short line: no other hit on it can match — skip it.
+            let le = find_line_end(src, i, self.eol);
+            self.pos = if le < len { le + 1 } else { len };
         }
     }
 }
@@ -66,6 +139,9 @@ where
     type Item = (T, Span);
 
     fn next(&mut self) -> Option<(T, Span)> {
+        if self.streaming {
+            return self.next_streaming();
+        }
         let src = self.src;
         let len = src.len();
         loop {

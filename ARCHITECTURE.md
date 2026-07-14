@@ -400,7 +400,7 @@ The content struct has five field categories, each with a distinct storage
 layout that directly reflects parsing semantics:
 
 | Section        | Field type              | Populated by        |
-|----------------|--------------------------|---------------------|
+|----------------|-------------------------|---------------------|
 | `inline`       | `Vec<T>`                | `parse_inline!`     |
 | `inline_simple`| `Vec<Span>`             | `parse_inline!`     |
 | `line`         | `Vec<(T, Span)>`        | `parse_line!`       |
@@ -613,7 +613,7 @@ engine (§9). `max_nest = 1` reduces it to a single slot and reproduces the
 original, single-active-block behaviour exactly: at most one block open at a
 time, no block opening inside another.
 
-| Discriminant (field 0) | Meaning            | Field 1  | Field 2 | Field 3  |
+| Discriminant (field 0)  | Meaning             | Field 1  | Field 2 | Field 3  |
 |-------------------------|---------------------|----------|---------|----------|
 | `0`                     | Open fence          | `byte`   | `count` | `start`  |
 | `1`                     | Continuation (`>`)  | `byte`   | `0`     | `start`  |
@@ -687,18 +687,18 @@ Iterators use three shared utilities from `standalone/common.rs`:
 
 ### Iterator types
 
-| Type                | Matching rule         | Item type       |
-|---------------------|------------------------|-----------------|
-| `SymmetricExactIter`| `symmetric N =>`      | `Span`          |
-| `AsymmetricExactIter`| `asymmetric N =>`    | `Span`          |
-| `ChainedIter`       | `chained`             | `T`             |
-| `KvIter`            | `key_value`           | `T`             |
-| `LineMarkerIter`    | `line`                | `(T, Span)`     |
-| `LineUniformIter`   | `line_simple`         | `(T, Span)`     |
-| `FenceIter`         | `fence`               | `Span`          |
-| `ContIter`          | `cont`                | `Span`          |
-| `BlockMarkerIter`   | `block (pattern)`     | `(T, Span)`     |
-| `BlockNumberedIter` | `block num(...)`        | `(T, Span)`     |
+| Type                  | Matching rule         | Item type       |
+|-----------------------|-----------------------|-----------------|
+| `SymmetricExactIter`  | `symmetric N =>`      | `Span`          |
+| `AsymmetricExactIter` | `asymmetric N =>`     | `Span`          |
+| `ChainedIter`         | `chained`             | `T`             |
+| `KvIter`              | `key_value`           | `T`             |
+| `LineMarkerIter`      | `line`                | `(T, Span)`     |
+| `LineUniformIter`     | `line_simple`         | `(T, Span)`     |
+| `FenceIter`           | `fence`               | `Span`          |
+| `ContIter`            | `cont`                | `Span`          |
+| `BlockMarkerIter`     | `block (pattern)`     | `(T, Span)`     |
+| `BlockNumberedIter`   | `block num(...)`      | `(T, Span)`     |
 
 ---
 

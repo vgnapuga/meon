@@ -176,13 +176,14 @@ fn collect_symmetric_standalone(ts: TS2, byte: Literal, opaque: bool, cf: &mut C
             Some(TT::Literal(count)) => {
                 c.advance();
                 if c.is_fat_arrow() {
-                    let (f, _) = c.arrow_field_cap("sym exact")?;
+                    let (f, cap) = c.arrow_field_cap("sym exact")?;
                     c.skip(',');
                     cf.standalone.push(StandaloneRule::SymmetricExact {
                         field: f,
                         byte: byte.clone(),
                         count,
                         opaque,
+                        cap,
                     });
                 }
             }
@@ -228,7 +229,7 @@ fn collect_asymmetric_standalone(
             Some(TT::Literal(count)) => {
                 c.advance();
                 if c.is_fat_arrow() {
-                    let (f, _) = c.arrow_field_cap("asym exact")?;
+                    let (f, cap) = c.arrow_field_cap("asym exact")?;
                     c.skip(',');
                     cf.standalone.push(StandaloneRule::AsymmetricExact {
                         field: f,
@@ -236,6 +237,7 @@ fn collect_asymmetric_standalone(
                         close: close.clone(),
                         count,
                         opaque,
+                        cap,
                     });
                 }
             }
@@ -541,13 +543,14 @@ fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
                 let args = c.next_group(Delimiter::Parenthesis, "fence/cont args")?;
                 let (f, cap) = c.arrow_field_cap("block_simple field")?;
                 c.skip(';');
-                cf.block_simple.push((f.clone(), cap));
+                cf.block_simple.push((f.clone(), cap.clone()));
                 if kind == "fence" {
                     let (byte, min) = parse_fence_args(args.stream())?;
                     cf.standalone.push(StandaloneRule::Fence {
                         field: f,
                         byte,
                         min,
+                        cap,
                     });
                 } else {
                     let byte = parse_cont_args(args.stream())?;
