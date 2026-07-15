@@ -439,4 +439,61 @@ mod tests {
             ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
         assert!(spans.is_empty());
     }
+    // 14. Escaped openers are skipped by both context-aware iterators
+    #[test]
+    fn test_14_escaped_openers_skipped() {
+        let src = b"\\*a* *b*";
+        let ctx = ParseContext::default();
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(4, 5)]);
+        let src = b"\\{a} {b}";
+        let spans: Vec<_> =
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(6, 7)]);
+    }
+
+    // 15. A wrong-length asymmetric open run is skipped
+    #[test]
+    fn test_15_asym_run_mismatch() {
+        let src = b"{{a} {b}";
+        let ctx = ParseContext::default();
+        let spans: Vec<_> =
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(6, 7)]);
+    }
+
+    // 16. Symmetric close search skips a wrong-count closing run and an
+    //     inline opaque region leading the next line
+    #[test]
+    fn test_16_sym_close_edges() {
+        let src = b"**a*b**";
+        let ctx = ParseContext::default();
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(2, 5)]);
+
+        let src = b"*a\n`x` b*";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(1, 8)]);
+    }
+
+    // 17. Asymmetric close search: empty-line abort and an inline opaque
+    //     region leading the next line
+    #[test]
+    fn test_17_asym_close_edges() {
+        let src = b"{a\n\nb} {c}";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(8, 9)]);
+
+        let src = b"{a\n`x` b} c";
+        let ctx = md_context(src);
+        let spans: Vec<_> =
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(1, 8)]);
+    }
 }

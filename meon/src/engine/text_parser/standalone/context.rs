@@ -683,4 +683,88 @@ mod tests {
             &[Span::new(0, 3), Span::new(4, 20), Span::new(21, 24)]
         );
     }
+    // ---- Wide needle sets, fence-byte edges, asymmetric branches -------- //
+
+    // 19. Every find_needle arm from 4 through 11+ needles finds a pair of
+    //     the last (rarest) trigger byte — the SWAR dispatch works end to end
+    #[test]
+    fn test_19_wide_needle_sets() {
+        let alphabet = *b"qwzjvxkyfgd";
+        for n in 4..=11usize {
+            let sym: Vec<SymSpec> = alphabet[..n].iter().map(|&b| (b, 1)).collect();
+            let last = alphabet[n - 1];
+            let src = [last, b'h', b'i', last, b' ', b'.'];
+            let m = ParseContext::build(&src, b'\n', b'\\', b' ', b'\t', &[], &sym, &[], 0);
+            assert_eq!(m.spans(), &[Span::new(0, 4)], "needle count {n}");
+        }
+    }
+
+    // 20. Needles beyond the fixed buffer are dropped: the overflowing rule
+    //     simply never matches, everything else still does
+    #[test]
+    fn test_20_needle_overflow_dropped() {
+        let alphabet = *b"qwzjvxkyfgdm";
+        let sym: Vec<SymSpec> = alphabet.iter().map(|&b| (b, 1)).collect();
+        let m = ParseContext::build(b"mam qbq", b'\n', b'\\', b' ', b'\t', &[], &sym, &[], 0);
+        assert_eq!(m.spans(), &[Span::new(4, 7)]);
+    }
+
+    // 21. Two distinct fence rules coexist; a mid-line or short-run fence
+    //     byte that opens nothing is ordinary content
+    #[test]
+    fn test_21_two_fence_rules() {
+        let src = b"~~ not\n```\na\n```\n~~~\nb\n~~~\nx ``` y";
+        let m = ParseContext::build(
+            src,
+            b'\n',
+            b'\\',
+            b' ',
+            b'\t',
+            &[(b'`', 3), (b'~', 3)],
+            &[],
+            &[],
+            0,
+        );
+        assert_eq!(m.spans(), &[Span::new(7, 16), Span::new(17, 26)]);
+    }
+
+    // 22. Close-fence scan: a mid-line fence byte and a close-line with
+    //     trailing junk are both skipped before the true close
+    #[test]
+    fn test_22_fence_close_scan_edges() {
+        let src = b"```\ncode ` tick\n``` x\n```\nafter";
+        let m = md_context(src);
+        assert_eq!(m.spans(), &[Span::new(0, 25)]);
+    }
+
+    // 23. Asymmetric: a wrong-length open run and an unclosed opener both
+    //     yield nothing; escaped close candidates are skipped
+    #[test]
+    fn test_23_asym_branches() {
+        let m = md_context(b"<<double> x");
+        assert!(m.spans().is_empty());
+        let m = md_context(b"a <never closes");
+        assert!(m.spans().is_empty());
+        let m = md_context(b"<a\\>b> c");
+        assert_eq!(m.spans(), &[Span::new(0, 6)]);
+    }
+
+    // 24. Asymmetric close search is paragraph-bounded: crosses one newline,
+    //     aborts on an empty line and on a fence-opening line
+    #[test]
+    fn test_24_asym_paragraph_bounds() {
+        let m = md_context(b"<a\nb> c");
+        assert_eq!(m.spans(), &[Span::new(0, 5)]);
+        let m = md_context(b"<a\n\nb> c");
+        assert!(m.spans().is_empty());
+        let m = md_context(b"<a\n```\nx\n```\nb> c");
+        assert_eq!(m.spans(), &[Span::new(3, 12)]);
+    }
+
+    // 25. Symmetric close search skips a wrong-count closing run
+    #[test]
+    fn test_25_sym_close_run_mismatch() {
+        let m = md_context(b"`a``b` x");
+        assert_eq!(m.spans(), &[Span::new(0, 6)]);
+    }
 }

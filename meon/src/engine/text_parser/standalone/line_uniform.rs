@@ -338,4 +338,38 @@ mod tests {
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
     }
+    // ---- Per-line fallback path (matcher accepting more than 3 bytes) --- //
+
+    fn wide_matches(b: u8) -> bool {
+        matches!(b, b'=' | b'-' | b'*' | b'_')
+    }
+
+    // 16. A matcher accepting four bytes forces the line-by-line fallback,
+    //     which must produce the same result as the streaming path
+    #[test]
+    fn test_16_fallback_uniform_lines() {
+        let src = b"====\n- - -\nplain\n____";
+        let mut iter = LineUniformIter::new(src, 3, b'\n', b' ', wide_matches, stab_make);
+        assert_eq!(iter.next(), Some((b'=', Span::new(0, 4))));
+        assert_eq!(iter.next(), Some((b'-', Span::new(5, 10))));
+        assert_eq!(iter.next(), Some((b'_', Span::new(17, 21))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. Fallback: an invalid byte mid-line and a below-minimum count both
+    //     reject the line
+    #[test]
+    fn test_17_fallback_rejections() {
+        let src = b"==x==\n**\n***";
+        let mut iter = LineUniformIter::new(src, 3, b'\n', b' ', wide_matches, stab_make);
+        assert_eq!(iter.next(), Some((b'*', Span::new(9, 12))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 18. Fallback: empty input and empty lines terminate cleanly
+    #[test]
+    fn test_18_fallback_empty() {
+        let mut iter = LineUniformIter::new(b"\n\n", 3, b'\n', b' ', wide_matches, stab_make);
+        assert_eq!(iter.next(), None);
+    }
 }
