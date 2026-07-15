@@ -1340,3 +1340,49 @@ fn nest_60_fence_close_inside_cont_span_includes_content() {
     assert_eq!(depth, 1);
     assert_eq!(st_close.fenced_codes.len(), 1);
 }
+
+// ================================================================
+// fence line-remainder closures (peel-phase close and open info)
+// ================================================================
+
+// 17. A closing fence line with trailing separators and tabs still closes
+//     (the remainder scan actually runs, unlike a bare fence line)
+#[test]
+fn fence_17_close_with_trailing_whitespace() {
+    let src = b"``` \t ";
+    let mut active = Some((0u8, b'`', 3u8, 0u32));
+    let (st, _) = run_block!(&mut active, src, 0, src.len());
+    assert!(active.is_none());
+    assert_eq!(st.fenced_codes.len(), 1);
+}
+
+// 18. A close-line candidate with junk after the fence run does not close
+#[test]
+fn fence_18_close_with_junk_not_closed() {
+    let src = b"``` x";
+    let mut active = Some((0u8, b'`', 3u8, 0u32));
+    let (st, _) = run_block!(&mut active, src, 0, src.len());
+    assert!(active.is_some());
+    assert!(st.fenced_codes.is_empty());
+}
+
+// 19. An opening fence with an info string opens (the info scan runs over a
+//     non-empty remainder)
+#[test]
+fn fence_19_open_with_info_string() {
+    let src = b"```rust";
+    let mut active = None;
+    let (_, res) = run_block!(&mut active, src, 0, src.len());
+    assert!(matches!(res, Some((true, _))));
+    assert!(active.is_some());
+}
+
+// 20. An opening fence whose info string contains the fence byte is rejected
+#[test]
+fn fence_20_open_rejected_by_fence_byte_in_info() {
+    let src = b"``` a`b";
+    let mut active = None;
+    let (_, res) = run_block!(&mut active, src, 0, src.len());
+    assert!(res.is_none());
+    assert!(active.is_none());
+}

@@ -320,4 +320,39 @@ mod tests {
         assert_eq!(iter.next(), Some((b'+', Span::new(6, 10))));
         assert_eq!(iter.next(), None);
     }
+    // ---- Per-line fallback path (matcher accepting more than 3 bytes) --- //
+
+    fn wide_matches(b: u8) -> bool {
+        matches!(b, b'*' | b'-' | b'+' | b'~')
+    }
+
+    // 16. A matcher accepting four bytes forces the line-by-line fallback,
+    //     which must produce the same result as the streaming path
+    #[test]
+    fn test_16_fallback_standard_item() {
+        let src = b"* item\n";
+        let mut iter = BlockMarkerIter::new(src, b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), Some((b'*', Span::new(2, 6))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. Fallback: indentation, a non-matching line, and a marker without
+    //     its separator are all handled as in the streaming path
+    #[test]
+    fn test_17_fallback_indent_and_skips() {
+        let src = b"plain\n  ~ deep\n-nosep\n+ ok";
+        let mut iter = BlockMarkerIter::new(src, b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), Some((b'~', Span::new(10, 14))));
+        assert_eq!(iter.next(), Some((b'+', Span::new(24, 26))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 18. Fallback: empty input and empty lines terminate cleanly
+    #[test]
+    fn test_18_fallback_empty() {
+        let mut iter = BlockMarkerIter::new(b"", b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), None);
+        let mut iter = BlockMarkerIter::new(b"\n\n", b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), None);
+    }
 }

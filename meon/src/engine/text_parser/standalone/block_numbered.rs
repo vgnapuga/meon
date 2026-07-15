@@ -350,4 +350,37 @@ mod tests {
 
         assert_eq!(iter.next(), None);
     }
+    // ---- Per-line fallback path (matcher accepting more than 3 bytes) --- //
+
+    fn wide_end_matches(b: u8) -> bool {
+        matches!(b, b'.' | b')' | b':' | b'/')
+    }
+
+    // 16. A delimiter predicate accepting four bytes forces the line-by-line
+    //     fallback, which must produce the same result as the streaming path
+    #[test]
+    fn test_16_fallback_standard_item() {
+        let src = b"1. a\n22) b";
+        let mut iter = BlockNumberedIter::new(src, b'\n', b' ', b'\t', wide_end_matches, stub_make);
+        assert_eq!(iter.next(), Some(((1, b'.'), Span::new(3, 4))));
+        assert_eq!(iter.next(), Some(((22, b')'), Span::new(9, 10))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. Fallback: indentation, missing digits, a digit run without its
+    //     delimiter, and a delimiter without its separator all skip the line
+    #[test]
+    fn test_17_fallback_skips() {
+        let src = b"plain.\n12x\n3.nosep\n  4: ok";
+        let mut iter = BlockNumberedIter::new(src, b'\n', b' ', b'\t', wide_end_matches, stub_make);
+        assert_eq!(iter.next(), Some(((4, b':'), Span::new(24, 26))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 18. Fallback: empty input terminates cleanly
+    #[test]
+    fn test_18_fallback_empty() {
+        let mut iter = BlockNumberedIter::new(b"", b'\n', b' ', b'\t', wide_end_matches, stub_make);
+        assert_eq!(iter.next(), None);
+    }
 }
