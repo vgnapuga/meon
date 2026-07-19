@@ -9,6 +9,15 @@ use super::common::*;
 /// to construct the metadata value `T`. Yields `(meta, span)` where `span`
 /// covers the content portion of the line.
 ///
+/// At construction the `end_matches` predicate is probed over all 256 byte
+/// values; when it accepts at most three bytes (every grammar in practice) the
+/// scan is streaming — one `memchr` pass for the *delimiter* bytes (`.`/`)`),
+/// then a backward walk over the digit run and the `sep`/`tab` indentation to
+/// confirm the item leads its line. Scanning by the delimiter avoids needing a
+/// ten-byte digit search primitive; a stray delimiter in prose is rejected by
+/// the digit check in O(1). A predicate accepting more bytes falls back to the
+/// line-by-line scan.
+///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
 pub struct BlockNumberedIter<'a, T, E, F>
@@ -23,6 +32,9 @@ where
     end_matches: E,
     make: F,
     pos: usize,
+    needles: [u8; 3],
+    nn: usize,
+    streaming: bool,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -45,6 +57,11 @@ where
     /// - `make` — closure that receives `(number, delimiter_byte)` and constructs
     ///   the metadata value `T`.
     pub fn new(src: &'a [u8], eol: u8, sep: u8, tab: u8, end_matches: E, make: F) -> Self {
+        let mut needles = [0u8; 3];
+        let (nn, streaming) = match probe_matcher(&end_matches, &mut needles) {
+            Some(n) => (n, true),
+            None => (0, false),
+        };
         Self {
             src,
             eol,
@@ -53,7 +70,74 @@ where
             end_matches,
             make,
             pos: 0,
+            needles,
+            nn,
+            streaming,
             _t: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, E, F> BlockNumberedIter<'_, T, E, F>
+where
+    E: Fn(u8) -> bool,
+    F: Fn(u32, u8) -> T,
+{
+    /// Streaming scan: `memchr` for the probed delimiter bytes, a backward
+    /// walk over the digit run (at most 9 digits, as in the forward path) and
+    /// the `sep`/`tab` indentation, then the same post-delimiter separator
+    /// check as the line-by-line path.
+    fn next_streaming(&mut self) -> Option<(T, Span)> {
+        let src = self.src;
+        let len = src.len();
+        loop {
+            let p = find_any_of(&self.needles, self.nn, &src[self.pos..])? + self.pos;
+
+            // A failed hit is rejected in place (`p + 1`), NOT by skipping to
+            // the line end: prose delimiters (`.` after a word) are rare per
+            // line, so an O(1) reject per hit beats re-scanning each line's
+            // tail for its end. (This is the opposite trade-off from
+            // `block_marker`/`line_uniform`, whose needles collide with dense
+            // emphasis runs.)
+            //
+            // Walk the digit run backward from the delimiter.
+            let mut k = p;
+            let mut dc = 0u8;
+            while k > 0 && src[k - 1].is_ascii_digit() && dc < 9 {
+                k -= 1;
+                dc += 1;
+            }
+            // No digits at all, or a run longer than the 9-digit cap.
+            if dc == 0 || (k > 0 && src[k - 1].is_ascii_digit()) {
+                self.pos = p + 1;
+                continue;
+            }
+
+            // Only sep/tab indentation may precede the digits on their line.
+            let mut ls = k;
+            while ls > 0 && (src[ls - 1] == self.sep || src[ls - 1] == self.tab) {
+                ls -= 1;
+            }
+            if ls > 0 && src[ls - 1] != self.eol {
+                self.pos = p + 1;
+                continue;
+            }
+
+            // The delimiter must be followed by a separator, then content.
+            let nxt = p + 1;
+            if nxt < len && (src[nxt] == self.sep || src[nxt] == self.tab) {
+                let mut num = 0u32;
+                for &d in &src[k..p] {
+                    num = num * 10 + (d - b'0') as u32;
+                }
+                let cs = nxt + 1;
+                let le = find_line_end(src, cs, self.eol);
+                let meta = (self.make)(num, src[p]);
+                self.pos = if le < len { le + 1 } else { len };
+                return Some((meta, Span::new(cs as u32, le as u32)));
+            }
+
+            self.pos = p + 1;
         }
     }
 }
@@ -66,6 +150,9 @@ where
     type Item = (T, Span);
 
     fn next(&mut self) -> Option<(T, Span)> {
+        if self.streaming {
+            return self.next_streaming();
+        }
         let src = self.src;
         let len = src.len();
         loop {
@@ -261,6 +348,39 @@ mod tests {
         let src = b"1.";
         let mut iter = BlockNumberedIter::new(src, b'\n', b' ', b'\t', stub_end_matches, stub_make);
 
+        assert_eq!(iter.next(), None);
+    }
+    // ---- Per-line fallback path (matcher accepting more than 3 bytes) --- //
+
+    fn wide_end_matches(b: u8) -> bool {
+        matches!(b, b'.' | b')' | b':' | b'/')
+    }
+
+    // 16. A delimiter predicate accepting four bytes forces the line-by-line
+    //     fallback, which must produce the same result as the streaming path
+    #[test]
+    fn test_16_fallback_standard_item() {
+        let src = b"1. a\n22) b";
+        let mut iter = BlockNumberedIter::new(src, b'\n', b' ', b'\t', wide_end_matches, stub_make);
+        assert_eq!(iter.next(), Some(((1, b'.'), Span::new(3, 4))));
+        assert_eq!(iter.next(), Some(((22, b')'), Span::new(9, 10))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. Fallback: indentation, missing digits, a digit run without its
+    //     delimiter, and a delimiter without its separator all skip the line
+    #[test]
+    fn test_17_fallback_skips() {
+        let src = b"plain.\n12x\n3.nosep\n  4: ok";
+        let mut iter = BlockNumberedIter::new(src, b'\n', b' ', b'\t', wide_end_matches, stub_make);
+        assert_eq!(iter.next(), Some(((4, b':'), Span::new(24, 26))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 18. Fallback: empty input terminates cleanly
+    #[test]
+    fn test_18_fallback_empty() {
+        let mut iter = BlockNumberedIter::new(b"", b'\n', b' ', b'\t', wide_end_matches, stub_make);
         assert_eq!(iter.next(), None);
     }
 }

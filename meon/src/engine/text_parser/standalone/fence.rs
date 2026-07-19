@@ -12,6 +12,11 @@ use super::common::*;
 /// The returned [`Span`] covers the entire block from the opening fence byte to
 /// the end of the closing fence line (inclusive).
 ///
+/// The scan is streaming: one `memchr` pass finds candidate fence bytes and an
+/// O(1) previous-byte check keeps only the ones that begin a line — both for
+/// opening and for closing fences — so content lines inside and outside blocks
+/// are never walked byte-by-byte.
+///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
 pub struct FenceIter<'a> {
@@ -57,52 +62,60 @@ impl Iterator for FenceIter<'_> {
         let src = self.src;
         let len = src.len();
         loop {
-            if self.pos >= len {
-                return None;
-            }
-            let le = find_line_end(src, self.pos, self.eol);
+            let p = memchr::memchr(self.byte, &src[self.pos..])? + self.pos;
 
-            if self.pos < le && src[self.pos] == self.byte {
-                let mut c = 0u8;
-                let mut i = self.pos;
-                while i < le && src[i] == self.byte {
-                    c = c.saturating_add(1);
-                    i += 1;
-                }
-
-                if c >= self.min && src[i..le].iter().all(|&b| b != self.byte) {
-                    let fence_start = self.pos as u32;
-                    let fence_count = c;
-                    let mut search = if le < len { le + 1 } else { len };
-
-                    let fence_end = loop {
-                        if search >= len {
-                            break len;
-                        }
-                        let cle = find_line_end(src, search, self.eol);
-
-                        if search < cle && src[search] == self.byte {
-                            let mut cc = 0u8;
-                            let mut j = search;
-                            while j < cle && src[j] == self.byte {
-                                cc = cc.saturating_add(1);
-                                j += 1;
-                            }
-                            if cc >= fence_count
-                                && src[j..cle].iter().all(|&b| b == self.sep || b == self.tab)
-                            {
-                                break if cle < len { cle + 1 } else { len };
-                            }
-                        }
-                        search = if cle < len { cle + 1 } else { len };
-                    };
-
-                    self.pos = fence_end;
-                    return Some(Span::new(fence_start, fence_end as u32));
-                }
+            // An opening fence must begin its line.
+            if p > 0 && src[p - 1] != self.eol {
+                self.pos = p + 1;
+                continue;
             }
 
-            self.pos = if le < len { le + 1 } else { len };
+            let mut c = 0u8;
+            let mut i = p;
+            while i < len && src[i] == self.byte {
+                c = c.saturating_add(1);
+                i += 1;
+            }
+            let le = find_line_end(src, i, self.eol);
+
+            if c < self.min || src[i..le].contains(&self.byte) {
+                // Not an opener, and nothing later on this line can be one
+                // (line start is required): resume on the next line.
+                self.pos = if le < len { le + 1 } else { len };
+                continue;
+            }
+
+            let fence_start = p as u32;
+            let fence_count = c;
+            let mut search = if le < len { le + 1 } else { len };
+
+            // Close search: only fence bytes at line starts are candidates;
+            // content lines are skipped by the memchr stream entirely.
+            let fence_end = loop {
+                let Some(r) = memchr::memchr(self.byte, &src[search..]) else {
+                    break len;
+                };
+                let q = search + r;
+                if q > 0 && src[q - 1] != self.eol {
+                    search = q + 1;
+                    continue;
+                }
+                let mut cc = 0u8;
+                let mut j = q;
+                while j < len && src[j] == self.byte {
+                    cc = cc.saturating_add(1);
+                    j += 1;
+                }
+                let cle = find_line_end(src, j, self.eol);
+                if cc >= fence_count && src[j..cle].iter().all(|&b| b == self.sep || b == self.tab)
+                {
+                    break if cle < len { cle + 1 } else { len };
+                }
+                search = if cle < len { cle + 1 } else { len };
+            };
+
+            self.pos = fence_end;
+            return Some(Span::new(fence_start, fence_end as u32));
         }
     }
 }

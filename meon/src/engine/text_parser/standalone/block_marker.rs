@@ -9,6 +9,13 @@ use super::common::*;
 /// by the `make` closure from the marker byte, and `span` covers the content
 /// portion of the line.
 ///
+/// At construction the `matches` predicate is probed over all 256 byte values;
+/// when it accepts at most three bytes (every grammar in practice) the scan is
+/// streaming — one `memchr` pass for the marker bytes, with a backward walk
+/// over `sep`/`tab` indentation to confirm the marker leads its line — so
+/// lines without a marker are never visited. A predicate accepting more bytes
+/// falls back to the line-by-line scan.
+///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
 pub struct BlockMarkerIter<'a, T, M, F>
@@ -23,6 +30,9 @@ where
     matches: M,
     make: F,
     pos: usize,
+    needles: [u8; 3],
+    nn: usize,
+    streaming: bool,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -45,6 +55,11 @@ where
     /// - `make` — closure that receives the marker byte and constructs the
     ///   metadata value `T`.
     pub fn new(src: &'a [u8], eol: u8, sep: u8, tab: u8, matches: M, make: F) -> Self {
+        let mut needles = [0u8; 3];
+        let (nn, streaming) = match probe_matcher(&matches, &mut needles) {
+            Some(n) => (n, true),
+            None => (0, false),
+        };
         Self {
             src,
             eol,
@@ -53,7 +68,57 @@ where
             matches,
             make,
             pos: 0,
+            needles,
+            nn,
+            streaming,
             _t: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, M, F> BlockMarkerIter<'_, T, M, F>
+where
+    M: Fn(u8) -> bool,
+    F: Fn(u8) -> T,
+{
+    /// Streaming scan: `memchr` for the probed marker bytes, a backward walk
+    /// over `sep`/`tab` indentation to confirm line leadership, then the same
+    /// post-marker separator check as the line-by-line path.
+    fn next_streaming(&mut self) -> Option<(T, Span)> {
+        let src = self.src;
+        let len = src.len();
+        loop {
+            let p = find_any_of(&self.needles, self.nn, &src[self.pos..])? + self.pos;
+
+            // Only sep/tab indentation may precede the marker on its line. A
+            // failed hit rules the whole line out (a later hit would need
+            // everything before it to be sep/tab, which this hit already
+            // violates): skip to the next line instead of rejecting the
+            // remaining hits one by one.
+            let mut k = p;
+            while k > 0 && (src[k - 1] == self.sep || src[k - 1] == self.tab) {
+                k -= 1;
+            }
+            if k > 0 && src[k - 1] != self.eol {
+                let le = find_line_end(src, p, self.eol);
+                self.pos = if le < len { le + 1 } else { len };
+                continue;
+            }
+
+            // The marker must be followed by a separator, then content.
+            let nxt = p + 1;
+            if nxt < len && (src[nxt] == self.sep || src[nxt] == self.tab) {
+                let cs = nxt + 1;
+                let le = find_line_end(src, cs, self.eol);
+                let meta = (self.make)(src[p]);
+                self.pos = if le < len { le + 1 } else { len };
+                return Some((meta, Span::new(cs as u32, le as u32)));
+            }
+
+            // Marker at line start without its separator: the line is ruled
+            // out for the same reason — skip it.
+            let le = find_line_end(src, p, self.eol);
+            self.pos = if le < len { le + 1 } else { len };
         }
     }
 }
@@ -66,6 +131,9 @@ where
     type Item = (T, Span);
 
     fn next(&mut self) -> Option<(T, Span)> {
+        if self.streaming {
+            return self.next_streaming();
+        }
         let src = self.src;
         let len = src.len();
         loop {
@@ -250,6 +318,41 @@ mod tests {
         let mut iter = BlockMarkerIter::new(src, b'\n', b' ', b'\t', stub_matches, stub_make);
 
         assert_eq!(iter.next(), Some((b'+', Span::new(6, 10))));
+        assert_eq!(iter.next(), None);
+    }
+    // ---- Per-line fallback path (matcher accepting more than 3 bytes) --- //
+
+    fn wide_matches(b: u8) -> bool {
+        matches!(b, b'*' | b'-' | b'+' | b'~')
+    }
+
+    // 16. A matcher accepting four bytes forces the line-by-line fallback,
+    //     which must produce the same result as the streaming path
+    #[test]
+    fn test_16_fallback_standard_item() {
+        let src = b"* item\n";
+        let mut iter = BlockMarkerIter::new(src, b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), Some((b'*', Span::new(2, 6))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. Fallback: indentation, a non-matching line, and a marker without
+    //     its separator are all handled as in the streaming path
+    #[test]
+    fn test_17_fallback_indent_and_skips() {
+        let src = b"plain\n  ~ deep\n-nosep\n+ ok";
+        let mut iter = BlockMarkerIter::new(src, b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), Some((b'~', Span::new(10, 14))));
+        assert_eq!(iter.next(), Some((b'+', Span::new(24, 26))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 18. Fallback: empty input and empty lines terminate cleanly
+    #[test]
+    fn test_18_fallback_empty() {
+        let mut iter = BlockMarkerIter::new(b"", b'\n', b' ', b'\t', wide_matches, stub_make);
+        assert_eq!(iter.next(), None);
+        let mut iter = BlockMarkerIter::new(b"\n\n", b'\n', b' ', b'\t', wide_matches, stub_make);
         assert_eq!(iter.next(), None);
     }
 }

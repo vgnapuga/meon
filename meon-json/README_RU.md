@@ -38,7 +38,7 @@ opt-in пост-проход, а не часть горячего цикла: к
 
 ```toml
 [dependencies]
-meon-json = "0.2"
+meon-json = "0.3"
 ```
 
 ```rust
@@ -233,8 +233,20 @@ Standalone-итераторы работают без контекста: они
 объявленный разделитель и **не** отслеживают вложенность так, как полный
 `parse`. Для корректной вложенности предпочитайте полный парс; за `find_*`
 тянитесь только ради одиночного, нечувствительного к вложенности прохода (как
-`find_strings`). См.
-[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators).
+`find_strings`).
+
+Строки — это непрозрачное правило грамматики, так что `JsonParser::context(src)`
+строит карту каждого строкового региона за один потоковый проход, а варианты
+`find_context_*` пропускают кандидатов внутри строк — `{` внутри строкового
+значения больше не считается открытием объекта:
+
+```rust
+let ctx = JsonParser::context(src);
+for span in JsonParser::find_context_objects(src, &ctx) { /* ... */ }
+```
+
+См.
+[`ARCHITECTURE_RU.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE_RU.md#12-standalone-итераторы) - *GitHub*.
 
 ---
 
@@ -296,7 +308,7 @@ assert_eq!(c.members.len(), 3);
   специально не отслеживается.
 
 Подробнее об оставшихся компромиссах движка —
-[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs).
+[`ARCHITECTURE_RU.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE_RU.md#17-известные-ограничения-и-намеренные-компромиссы) - *GitHub*.
 
 ---
 

@@ -8,8 +8,13 @@ use super::common::*;
 /// item per match via the `make` closure, which receives `(is_prefix, span1,
 /// span2)` and constructs the output type `T`.
 ///
-/// Matching is line-bounded. Escape sequences are respected on `open1` and on
-/// the prefix byte.
+/// A single streaming scan finds `open1` candidates; the component close
+/// searches are **paragraph-bounded**: a component may span single line
+/// breaks, but an empty line — two consecutive `eol` bytes — or the end of
+/// input aborts the candidate. The `close1`/`open2` junction must still be
+/// byte-adjacent: a newline between the two components never matches.
+///
+/// Escape sequences are respected on `open1` and on the prefix byte.
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -27,7 +32,6 @@ where
     escape: u8,
     make: F,
     pos: usize,
-    line_end: usize,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -46,7 +50,8 @@ where
     ///   (e.g. `b'('` / `b')'` for the url part).
     /// - `prefix` — optional single byte immediately before `open1` that sets
     ///   the `is_prefix` flag passed to `make` (e.g. `b'!'` for images).
-    /// - `eol` — line terminator byte; matching never crosses a line boundary.
+    /// - `eol` — line terminator byte; a component may span single line
+    ///   breaks, but never an empty line (two consecutive `eol` bytes).
     /// - `escape` — escape prefix byte; suppresses `open1` and `prefix` when
     ///   preceded by an odd number of escape bytes.
     /// - `make` — closure that receives `(is_prefix, span1, span2)` and
@@ -63,7 +68,6 @@ where
         escape: u8,
         make: F,
     ) -> Self {
-        let line_end = find_line_end(src, 0, eol);
         Self {
             src,
             open1,
@@ -75,8 +79,28 @@ where
             escape,
             make,
             pos: 0,
-            line_end,
             _t: std::marker::PhantomData,
+        }
+    }
+
+    /// Paragraph-bounded close search: the position of the next `needle` at
+    /// or after `from`, treating a single `eol` as ordinary content and an
+    /// empty line (or end of input) as the end of the search space.
+    fn para_close(&self, from: usize, needle: u8) -> Option<usize> {
+        let src = self.src;
+        let len = src.len();
+        let mut j = from;
+        loop {
+            let r = memchr::memchr2(needle, self.eol, &src[j..])?;
+            let q = j + r;
+            if src[q] == self.eol {
+                if q + 1 >= len || src[q + 1] == self.eol {
+                    return None;
+                }
+                j = q + 1;
+                continue;
+            }
+            return Some(q);
         }
     }
 }
@@ -89,18 +113,10 @@ where
 
     fn next(&mut self) -> Option<T> {
         let src = self.src;
+        let len = src.len();
         loop {
-            while self.pos >= self.line_end {
-                let (next, end) = advance_line(src, self.line_end, self.eol)?;
-                self.pos = next;
-                self.line_end = end;
-            }
-
-            let Some(r) = memchr::memchr(self.open1, &src[self.pos..self.line_end]) else {
-                self.pos = self.line_end;
-                continue;
-            };
-            let p = self.pos + r;
+            // Open scan: one streaming pass for the first opening byte.
+            let p = memchr::memchr(self.open1, &src[self.pos..])? + self.pos;
 
             if count_escape(src, p, self.escape) % 2 == 1 {
                 self.pos = p + 1;
@@ -112,23 +128,24 @@ where
                 && count_escape(src, p - 1, self.escape) % 2 == 0;
 
             let text_start = p + 1;
-            let Some(r1) = memchr::memchr(self.close1, &src[text_start..self.line_end]) else {
+            let Some(c1) = self.para_close(text_start, self.close1) else {
                 self.pos = p + 1;
                 continue;
             };
-            let c1 = text_start + r1;
+
+            // The two components must be byte-adjacent — a line break between
+            // them never matches.
             let nxt = c1 + 1;
-            if nxt >= self.line_end || src[nxt] != self.open2 {
+            if nxt >= len || src[nxt] != self.open2 {
                 self.pos = p + 1;
                 continue;
             }
 
             let url_start = nxt + 1;
-            let Some(r2) = memchr::memchr(self.close2, &src[url_start..self.line_end]) else {
+            let Some(c2) = self.para_close(url_start, self.close2) else {
                 self.pos = p + 1;
                 continue;
             };
-            let c2 = url_start + r2;
 
             self.pos = c2 + 1;
             return Some((self.make)(
@@ -197,28 +214,33 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // 05. Recovers on a subsequent line if the first line contains an unclosed first component
+    // 05. A first component left unclosed on its own line closes past a single
+    //     newline — components are paragraph-bounded, not line-bounded.
     #[test]
-    fn test_05_missing_close1_on_line() {
+    fn test_05_close1_across_single_newline() {
         let src = b"[unclosed(url\n[x](y)";
         let mut iter = ChainedIter::new(src, b'[', b']', b'(', b')', b'!', b'\n', b'\\', stub_make);
 
+        // close1 for the opener at 0 is the `]` at 16; `(` follows at 17.
         assert_eq!(
             iter.next(),
-            Some((false, Span::new(15, 16), Span::new(18, 19)))
+            Some((false, Span::new(1, 16), Span::new(18, 19)))
         );
         assert_eq!(iter.next(), None);
     }
 
-    // 06. Recovers on a subsequent line if the first line contains an unclosed second component
+    // 06. A second component left unclosed on its own line closes past a
+    //     single newline too.
     #[test]
-    fn test_06_missing_close2_on_line() {
+    fn test_06_close2_across_single_newline() {
         let src = b"[text](unclosed\n[x](y)";
         let mut iter = ChainedIter::new(src, b'[', b']', b'(', b')', b'!', b'\n', b'\\', stub_make);
 
+        // The url component opened at 7 closes at the `)` at 21, spanning the
+        // embedded newline; the inner `[x](y)` is consumed by it.
         assert_eq!(
             iter.next(),
-            Some((false, Span::new(17, 18), Span::new(20, 21)))
+            Some((false, Span::new(1, 5), Span::new(7, 21)))
         );
         assert_eq!(iter.next(), None);
     }
@@ -250,7 +272,8 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // 09. Rejects patterns split across a newline boundary as parsing is strictly line-bound
+    // 09. The two components must be byte-adjacent: a newline between close1
+    //     and open2 never matches, paragraph bounds notwithstanding
     #[test]
     fn test_09_newline_separating_components_fails() {
         let src = b"[a]\n(b)";
@@ -319,6 +342,31 @@ mod tests {
         let mut iter = ChainedIter::new(src, b'[', b']', b'(', b')', b'!', b'\n', b'\\', stub_make);
 
         assert_eq!(iter.next(), Some((false, Span::new(1, 2), Span::new(4, 5))));
+        assert_eq!(iter.next(), None);
+    }
+
+    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+
+    // 16. An empty line aborts an unclosed first component: components never
+    //     pair across paragraphs
+    #[test]
+    fn test_16_empty_line_aborts_component() {
+        let src = b"[open\n\nclosed](url)";
+        let mut iter = ChainedIter::new(src, b'[', b']', b'(', b')', b'!', b'\n', b'\\', stub_make);
+
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. A whole pair spanning a single newline inside one paragraph matches
+    #[test]
+    fn test_17_pair_spans_single_newline() {
+        let src = b"[multi\nline](url)";
+        let mut iter = ChainedIter::new(src, b'[', b']', b'(', b')', b'!', b'\n', b'\\', stub_make);
+
+        assert_eq!(
+            iter.next(),
+            Some((false, Span::new(1, 11), Span::new(13, 16)))
+        );
         assert_eq!(iter.next(), None);
     }
 }

@@ -89,7 +89,8 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     let byte_lit = c.expect_lit("symmetric byte")?;
                     let body = c.next_group(Delimiter::Brace, "symmetric body")?;
                     collect_match_arms(body.stream(), &["parse_inside", "balanced"], cf)?;
-                    collect_symmetric_standalone(body.stream(), byte_lit, cf)?;
+                    let opaque = !flag_value(body.stream(), "parse_inside").unwrap_or(true);
+                    collect_symmetric_standalone(body.stream(), byte_lit, opaque, cf)?;
                 }
                 "asymmetric" => {
                     c.advance();
@@ -98,7 +99,8 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     let close_lit = c.expect_lit("asymmetric close")?;
                     let body = c.next_group(Delimiter::Brace, "asymmetric body")?;
                     collect_match_arms(body.stream(), &["balanced", "parse_inside"], cf)?;
-                    collect_asymmetric_standalone(body.stream(), open_lit, close_lit, cf)?;
+                    let opaque = !flag_value(body.stream(), "parse_inside").unwrap_or(true);
+                    collect_asymmetric_standalone(body.stream(), open_lit, close_lit, opaque, cf)?;
                 }
                 "chained" => {
                     c.advance();
@@ -129,8 +131,28 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
     Ok(())
 }
 
+/// Read the boolean value of a `name = true|false;` flag inside a rule body.
+/// Returns `None` when the flag is absent (callers pick the rule's default).
+fn flag_value(ts: TS2, name: &str) -> Option<bool> {
+    let mut c = Cursor::new(ts);
+    while let Some(tt) = c.peek().cloned() {
+        if let TT::Ident(id) = &tt {
+            if id == name {
+                c.advance();
+                c.skip_eq_alone();
+                if let Some(TT::Ident(v)) = c.peek() {
+                    return Some(v == "true");
+                }
+                return None;
+            }
+        }
+        c.advance();
+    }
+    None
+}
+
 /// Extract the `N => field` exact-count arm of a `symmetric` block, if present.
-fn collect_symmetric_standalone(ts: TS2, byte: Literal, cf: &mut CF) -> Result<()> {
+fn collect_symmetric_standalone(ts: TS2, byte: Literal, opaque: bool, cf: &mut CF) -> Result<()> {
     let mut c = Cursor::new(ts);
     while c.peek().is_some() {
         match c.peek().cloned() {
@@ -154,12 +176,14 @@ fn collect_symmetric_standalone(ts: TS2, byte: Literal, cf: &mut CF) -> Result<(
             Some(TT::Literal(count)) => {
                 c.advance();
                 if c.is_fat_arrow() {
-                    let (f, _) = c.arrow_field_cap("sym exact")?;
+                    let (f, cap) = c.arrow_field_cap("sym exact")?;
                     c.skip(',');
                     cf.standalone.push(StandaloneRule::SymmetricExact {
                         field: f,
                         byte: byte.clone(),
                         count,
+                        opaque,
+                        cap,
                     });
                 }
             }
@@ -179,6 +203,7 @@ fn collect_asymmetric_standalone(
     ts: TS2,
     open: Literal,
     close: Literal,
+    opaque: bool,
     cf: &mut CF,
 ) -> Result<()> {
     let mut c = Cursor::new(ts);
@@ -204,13 +229,15 @@ fn collect_asymmetric_standalone(
             Some(TT::Literal(count)) => {
                 c.advance();
                 if c.is_fat_arrow() {
-                    let (f, _) = c.arrow_field_cap("asym exact")?;
+                    let (f, cap) = c.arrow_field_cap("asym exact")?;
                     c.skip(',');
                     cf.standalone.push(StandaloneRule::AsymmetricExact {
                         field: f,
                         open: open.clone(),
                         close: close.clone(),
                         count,
+                        opaque,
+                        cap,
                     });
                 }
             }
@@ -516,13 +543,14 @@ fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
                 let args = c.next_group(Delimiter::Parenthesis, "fence/cont args")?;
                 let (f, cap) = c.arrow_field_cap("block_simple field")?;
                 c.skip(';');
-                cf.block_simple.push((f.clone(), cap));
+                cf.block_simple.push((f.clone(), cap.clone()));
                 if kind == "fence" {
                     let (byte, min) = parse_fence_args(args.stream())?;
                     cf.standalone.push(StandaloneRule::Fence {
                         field: f,
                         byte,
                         min,
+                        cap,
                     });
                 } else {
                     let byte = parse_cont_args(args.stream())?;

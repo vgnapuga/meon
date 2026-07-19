@@ -10,7 +10,7 @@ iterators for lazily extracting one element kind at a time.
 
 ```toml
 [dependencies]
-meon = "0.4"
+meon = "0.5"
 ```
 
 * **meon**    <--
@@ -64,6 +64,10 @@ assert_eq!(content.texts.len(), 1);
   - `parse(source: &[u8]) -> NameContent<'_>` — full single-pass parse, O(n).
   - `find_*(source: &[u8]) -> impl Iterator` — one per rule, context-free,
     faster when you only need one element kind.
+  - `context(source: &[u8]) -> ParseContext` — the opaque-region map (fences
+    plus every `parse_inside = false` rule), built in one streaming pass.
+  - `find_context_*(source, &ctx) -> impl Iterator` — one per non-opaque
+    rule; the same matcher with candidates inside opaque regions skipped.
 - `str(span) -> Option<&str>` / `bytes(span) -> &[u8]` and `_clean` / `_raw`
   accessor methods on `NameContent` for ergonomic span-to-slice conversion.
 
@@ -437,12 +441,27 @@ for span in MyParser::find_italics(source) {
 }
 ```
 
-Standalone iterators scan the raw source without any cross-element context.
-They may yield spans that the full parser would suppress (e.g. delimiters
-inside a fence). Counts can differ from the full parse — this is by design.
-Standalone `symmetric`/`asymmetric` rules match only the exact declared
-count and never participate in the bounded-nesting stack, regardless of the
-grammar's `max_nest` or that rule's own `balanced`/`parse_inside` settings.
+Standalone iterators scan the raw source as a byte stream — one
+`memchr`-family search per candidate, so marker-free stretches are never
+walked. Inline pair matching is paragraph-bounded (a pair may span a single
+line break; an empty line aborts it), and same-type block nesting (`cont`)
+matches the full parse up to the grammar's `max_nest`. They may still yield
+spans that the full parser would suppress (e.g. delimiters inside a fence);
+counts can differ from the full parse — this is by design. Standalone
+`symmetric`/`asymmetric` rules match only the exact declared count and
+ignore `balanced` entirely.
+
+For every rule that is not itself opaque, a context-aware variant is also
+generated:
+
+```rust
+// One streaming pass builds the opaque-region map (fences plus every
+// parse_inside = false rule), shared by all context-aware finders.
+let ctx = MyParser::context(source);
+for span in MyParser::find_context_italics(source, &ctx) {
+    // candidates inside fences, code spans, etc. are skipped
+}
+```
 
 ---
 

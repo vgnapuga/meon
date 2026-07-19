@@ -3,10 +3,16 @@
 use super::common::*;
 /// Iterator over symmetric exact-delimiter spans in a byte slice.
 ///
-/// Scans line by line for paired occurrences of `byte` where both the opening
-/// and closing run consist of exactly `count` consecutive bytes. The returned
-/// [`Span`] covers the inner content between the delimiters, excluding the
-/// delimiter bytes themselves.
+/// A single streaming scan over the source: opening runs are found with one
+/// `memchr` pass (line boundaries are irrelevant while nothing is pending),
+/// and both the opening and closing run must consist of exactly `count`
+/// consecutive bytes. The returned [`Span`] covers the inner content between
+/// the delimiters, excluding the delimiter bytes themselves.
+///
+/// Matching is **paragraph-bounded**: the closing run may sit past a single
+/// `eol` (the pair spans lines of one paragraph, as in the full parse), but an
+/// empty line — two consecutive `eol` bytes — or the end of input aborts the
+/// pending opener.
 ///
 /// Escape sequences are respected on the opening delimiter: an odd number of
 /// preceding `escape` bytes suppresses the match. The closing delimiter is
@@ -21,7 +27,6 @@ pub struct SymmetricExactIter<'a> {
     eol: u8,
     escape: u8,
     pos: usize,
-    line_end: usize,
 }
 
 impl<'a> SymmetricExactIter<'a> {
@@ -33,11 +38,11 @@ impl<'a> SymmetricExactIter<'a> {
     /// - `byte` — the delimiter byte (e.g. `b'*'`).
     /// - `count` — exact number of consecutive delimiter bytes required for
     ///   both the opening and closing run.
-    /// - `eol` — line terminator byte; matching never crosses a line boundary.
+    /// - `eol` — line terminator byte; a pair may span single line breaks, but
+    ///   never an empty line (two consecutive `eol` bytes).
     /// - `escape` — escape prefix byte; an odd number of preceding escape bytes
     ///   suppresses the opening delimiter.
     pub fn new(src: &'a [u8], byte: u8, count: u32, eol: u8, escape: u8) -> Self {
-        let line_end = find_line_end(src, 0, eol);
         Self {
             src,
             byte,
@@ -45,7 +50,6 @@ impl<'a> SymmetricExactIter<'a> {
             eol,
             escape,
             pos: 0,
-            line_end,
         }
     }
 }
@@ -55,18 +59,10 @@ impl Iterator for SymmetricExactIter<'_> {
 
     fn next(&mut self) -> Option<Span> {
         let src = self.src;
+        let len = src.len();
         loop {
-            while self.pos >= self.line_end {
-                let (next, end) = advance_line(src, self.line_end, self.eol)?;
-                self.pos = next;
-                self.line_end = end;
-            }
-
-            let Some(r) = memchr::memchr(self.byte, &src[self.pos..self.line_end]) else {
-                self.pos = self.line_end;
-                continue;
-            };
-            let p = self.pos + r;
+            // Open scan: one streaming pass for the delimiter byte.
+            let p = memchr::memchr(self.byte, &src[self.pos..])? + self.pos;
 
             if count_escape(src, p, self.escape) % 2 == 1 {
                 self.pos = p + 1;
@@ -75,7 +71,7 @@ impl Iterator for SymmetricExactIter<'_> {
 
             let mut c = 0u32;
             let mut end = p;
-            while end < self.line_end && src[end] == self.byte {
+            while end < len && src[end] == self.byte {
                 c += 1;
                 end += 1;
             }
@@ -85,21 +81,31 @@ impl Iterator for SymmetricExactIter<'_> {
                 continue;
             }
 
+            // Close scan, bounded by the end of the paragraph: a single `eol`
+            // is ordinary content, two in a row (an empty line) — or the end
+            // of input — abort the pending opener.
             let cs = end;
             let mut j = cs;
             let close = loop {
-                let Some(r2) = memchr::memchr(self.byte, &src[j..self.line_end]) else {
+                let Some(r) = memchr::memchr2(self.byte, self.eol, &src[j..]) else {
                     break None;
                 };
-                let cp = j + r2;
+                let q = j + r;
+                if src[q] == self.eol {
+                    if q + 1 >= len || src[q + 1] == self.eol {
+                        break None;
+                    }
+                    j = q + 1;
+                    continue;
+                }
                 let mut cc = 0u32;
-                let mut tmp = cp;
-                while tmp < self.line_end && src[tmp] == self.byte {
+                let mut tmp = q;
+                while tmp < len && src[tmp] == self.byte {
                     cc += 1;
                     tmp += 1;
                 }
                 if cc == self.count {
-                    break Some((cp, tmp));
+                    break Some((q, tmp));
                 }
                 j = tmp;
             };
@@ -212,13 +218,15 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // 10. Unclosed marker within a single line (the incomplete line is skipped, subsequent valid lines are processed)
+    // 10. An opener left unclosed on its own line pairs with the next closing
+    //     run past a single newline — matching is paragraph-bounded, not
+    //     line-bounded.
     #[test]
-    fn test_10_unclosed_marker() {
+    fn test_10_pairs_across_single_newline() {
         let src = b"this *is open ended without close\nnext line *valid*";
         let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
 
-        assert_eq!(iter.next(), Some(Span::new(45, 50)));
+        assert_eq!(iter.next(), Some(Span::new(6, 44)));
         assert_eq!(iter.next(), None);
     }
 
@@ -267,6 +275,49 @@ mod tests {
         let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
 
         assert_eq!(iter.next(), Some(Span::new(6, 14)));
+        assert_eq!(iter.next(), None);
+    }
+
+    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+
+    // 16. An empty line (two consecutive eol bytes) aborts a pending opener:
+    //     delimiters in different paragraphs never pair.
+    #[test]
+    fn test_16_empty_line_aborts_pending_open() {
+        let src = b"para one *open\n\nclosed* in para two";
+        let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
+
+        assert_eq!(iter.next(), None);
+    }
+
+    // 17. A pair split across a single newline within one paragraph matches,
+    //     and the span includes the embedded newline.
+    #[test]
+    fn test_17_pair_spans_single_newline() {
+        let src = b"*multi\nline*";
+        let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
+
+        assert_eq!(iter.next(), Some(Span::new(1, 11)));
+        assert_eq!(iter.next(), None);
+    }
+
+    // 18. An opener at the very end of input (nothing after it) never pairs.
+    #[test]
+    fn test_18_open_at_eof_unclosed() {
+        let src = b"tail *";
+        let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
+
+        assert_eq!(iter.next(), None);
+    }
+
+    // 19. After a paragraph break aborts one opener, a fresh pair in the next
+    //     paragraph still matches normally.
+    #[test]
+    fn test_19_fresh_pair_after_paragraph_break() {
+        let src = b"*a\n\n*b*";
+        let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
+
+        assert_eq!(iter.next(), Some(Span::new(5, 6)));
         assert_eq!(iter.next(), None);
     }
 }

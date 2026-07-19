@@ -660,30 +660,44 @@ from `engine/text_parser/standalone/`.
 
 All standalone iterators share the same contract:
 
-- They scan the raw source independently.
-- They carry no cross-element state (no active-block stack, no paragraph
-  tracking, no inline trigger dispatch, and no bounded-nesting stack of any
-  kind — `symmetric`/`asymmetric` standalone rules match only the *exact*
-  count declared, ignoring `balanced`/`parse_inside` entirely).
-- They may match bytes that `parse_text!` would suppress (e.g. a delimiter
-  inside a fenced block).
-- Their output can differ from the full parse by design.
+- They scan the raw source as a **byte stream**: one `memchr`-family search
+  finds the next candidate marker, and only then is its neighbourhood walked.
+  Lines without a marker are never visited; there is no per-line loop.
+- They carry no cross-element state (no paragraph tracking, no inline trigger
+  dispatch) — with one exception: `ContIter` keeps a bounded frame stack so
+  same-type block nesting (`> >` opening two blockquote frames) matches the
+  full parse, capped by the grammar's `max_nest` exactly like `parse_block!`.
+- Inline pair matching is **paragraph-bounded**: a pair may span a single
+  line break; an empty line (two consecutive `eol` bytes) or end of input
+  aborts a pending opener. `symmetric`/`asymmetric` rules match only the
+  *exact* count declared, ignoring `balanced` entirely.
+- They may still match bytes that `parse_text!` would suppress (e.g. a
+  delimiter inside a fenced block); output can differ from the full parse by
+  design. The `find_context_*` variants (below) close most of that gap.
 
 ### Iterator structure
 
 Every iterator stores the parameters passed to its `new` constructor plus a
-`pos` cursor and, for line-bounded iterators, a `line_end` cursor.
+`pos` cursor.
 
-The `next` method loops: advance `line_end` when exhausted, find the next
-candidate using `memchr`, validate the candidate, return `Some(span)` on
-success or continue the loop on failure.
+The `next` method loops: one `memchr`/`memchr2`/`memchr3` search from `pos`
+finds the next candidate marker; an O(1) neighbour check validates its
+position (previous byte for line-start rules, a backward indentation walk
+for block rules); the candidate is then matched in place and `Some(...)`
+returned, or the loop continues.
 
-Iterators use three shared utilities from `standalone/common.rs`:
+Rules whose marker set is an arbitrary predicate (`line_simple`,
+`block (pattern)`, `block num(...)`) probe the predicate over all 256 byte
+values at construction: up to three accepted bytes drive the streaming
+search, more fall back to a line-by-line scan.
+
+Iterators use shared utilities from `standalone/common.rs`:
 
 - `find_line_end(src, from, eol)` — locate end of current line.
-- `advance_line(src, line_end, eol)` — move to next line, return `None` at EOF.
 - `count_escape(src, pos, escape)` — count consecutive escape bytes before
   `pos`, used to detect escaped delimiters.
+- `probe_matcher(matches, buf)` / `find_any_of(needles, n, hay)` — turn a
+  byte predicate into a `memchr`-family streaming search.
 
 ### Iterator types
 
@@ -699,6 +713,33 @@ Iterators use three shared utilities from `standalone/common.rs`:
 | `ContIter`          | `cont`                | `Span`          |
 | `BlockMarkerIter`   | `block (pattern)`     | `(T, Span)`     |
 | `BlockNumberedIter` | `block num(...)`        | `(T, Span)`     |
+| `ContextSymmetricExactIter`  | `symmetric N =>` (transparent)  | `Span` |
+| `ContextAsymmetricExactIter` | `asymmetric N =>` (transparent) | `Span` |
+
+### Context-aware variants — `ParseContext` and `find_context_*`
+
+Rules with `parse_inside = false` (code spans, strings, autolinks) and
+fences are *opaque*: the full parser never matches anything inside them.
+The generated `Parser::context(source)` builds a `ParseContext` — a sorted,
+non-overlapping set of every opaque region — in one streaming pass whose
+needle set unifies the fence bytes and the opaque triggers (one
+`memchr`/`memchr2`/`memchr3` search per iteration up to three distinct
+bytes, `swar::find_any` beyond). The region vector is preallocated from the
+grammar's own `[cap]` divisors. Opaque inline matching inside the builder is
+escape-aware and paragraph-bounded, and a fence-opening line ends the
+paragraph, mirroring the full parser.
+
+Every *transparent* rule additionally generates
+`find_context_*(source, &ctx)`: the same matcher with candidate delimiters
+inside opaque regions skipped. Line/block rules post-filter their
+context-free iterator through a monotone `ContextCursor` (amortized O(1)
+per query); `symmetric`/`asymmetric` rules use the dedicated iterators
+above, whose close search also skips covered candidates and aborts at a
+fence — a block construct ends the paragraph. Opaque rules themselves get
+no `find_context_*`: they are the source of the context, not a consumer.
+The context suppresses **candidate positions**, not enclosing spans, so a
+bold span may still legally contain a code span, exactly as in the full
+parse.
 
 ---
 

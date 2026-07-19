@@ -24,7 +24,7 @@ pub const REPEAT_COUNT: usize = 10000;
 // Criterion knobs, shared with the markdown benches' values.
 pub const WARMUP_TIME: u64 = 3;
 pub const SAMPLE_TIME: u64 = 10;
-pub const SAMPLE_SIZE: usize = 200;
+pub const SAMPLE_SIZE: usize = 20;
 
 pub fn doc_numbers() -> String {
     let mut s = String::with_capacity(REPEAT_COUNT * 30 * 8);

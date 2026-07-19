@@ -34,7 +34,7 @@
 
 ```toml
 [dependencies]
-meon = "0.3"
+meon = "0.3.1"
 ```
 
 ```rust
@@ -68,6 +68,8 @@ let content = MyFormatParser::parse(b"hello world\n");
 **`NameParser`** — unit-структура с методами:
 - `parse(source: &[u8]) -> NameContent<'_>` — полный однопроходной O(n) парс.
 - `find_<field>(source: &[u8]) -> impl Iterator` — standalone-итератор на каждое правило грамматики которое это поддерживает. Контекст-свободный и быстрее полного парса когда нужен только один вид элементов.
+- `context(source: &[u8]) -> ParseContext` — карта непрозрачных регионов (ограждения плюс каждое правило с `parse_inside = false`), построенная за один потоковый проход.
+- `find_context_<field>(source, &ctx) -> impl Iterator` — по одному на непрозрачное правило; тот же матчер, но кандидаты внутри непрозрачных регионов пропускаются.
 
 **Аксессорные методы на `NameContent`:**
 - `str(span) -> Option<&str>` — спан в UTF-8 строку, `None` при невалидном UTF-8.
@@ -107,7 +109,7 @@ let content = MyFormatParser::parse(b"hello world\n");
 `meon-macros` только производит токены — у него нет рантайм-следа.
 
 Подробное описание каждого этапа — в
-[`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline).
+[`ARCHITECTURE_RU.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE_RU.md#4-конвейер-компиляции-грамматики) - *GitHub*.
 
 ---
 
@@ -132,7 +134,7 @@ error: expected literal (fence min)
 независимо от того как `meon` импортирован или переименован в `Cargo.toml`.
 
 Подробное объяснение — в
-[`ARCHITECTURE.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#16-cross-crate-macro-hygiene).
+[`ARCHITECTURE_RU.md §16`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE_RU.md#16-гигиена-макросов-между-крейтами) - *GitHub*.
 
 ---
 

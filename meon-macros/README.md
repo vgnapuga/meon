@@ -37,7 +37,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.3"
+meon = "0.3.1"
 ```
 
 ```rust
@@ -74,6 +74,10 @@ all borrowing from the original source slice via `u32` byte-offset spans.
 - `find_<field>(source: &[u8]) -> impl Iterator` — standalone per-element
   iterators, one per grammar rule that supports it. Context-free and faster
   than a full parse when only one element kind is needed.
+- `context(source: &[u8]) -> ParseContext` — the opaque-region map (fences
+  plus every `parse_inside = false` rule), built in one streaming pass.
+- `find_context_<field>(source, &ctx) -> impl Iterator` — one per non-opaque
+  rule; the same matcher with candidates inside opaque regions skipped.
 
 **Accessor methods on `NameContent`:**
 - `str(span) -> Option<&str>` — span to UTF-8 string, `None` on invalid UTF-8.

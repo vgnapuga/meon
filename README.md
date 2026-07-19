@@ -125,10 +125,24 @@ for link in MarkdownParser::find_links(src) {
 ```
 
 Standalone iterators are faster than a full parse when only one element kind
-is needed — they skip all cross-element bookkeeping. The trade-off is that
-they operate without context: a bold marker inside a fenced code block will be
-matched by `find_bolds` but suppressed by the full parser. This divergence is
-by design and documented.
+is needed — they skip all cross-element bookkeeping. Same-type block nesting
+(`> >` opening two blockquote frames) matches the full parse, capped by the
+grammar's `max_nest`. The remaining trade-off is opacity: a bold marker
+inside a fenced code block will be matched by `find_bolds` but suppressed by
+the full parser. This divergence is by design and documented — and closable:
+
+```rust
+// Build the opaque-region map once (fenced blocks, code spans, autolinks),
+// then run any number of context-aware finders over it.
+let ctx = MarkdownParser::context(src);
+for span in MarkdownParser::find_context_bolds(src, &ctx) {
+    // bold markers inside code spans and fenced blocks are skipped,
+    // matching the full parse
+}
+```
+
+Every rule that is not itself opaque gets a `find_context_*` variant; the
+map is built by one streaming pass and shared across all of them.
 
 ---
 
@@ -171,6 +185,8 @@ define_parser!(MyFormat {
 // MyFormatParser::parse(src) -> MyFormatContent<'_>
 // MyFormatParser::find_bolds(src) -> impl Iterator<Item = Span>
 // MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
+// MyFormatParser::context(src) -> ParseContext
+// MyFormatParser::find_context_bolds(src, &ctx) -> impl Iterator<Item = Span>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>
 // ... and more

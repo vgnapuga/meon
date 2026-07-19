@@ -58,12 +58,22 @@ pub(crate) enum StandaloneRule {
         field: Ident,
         byte: Literal,
         count: Literal,
+        /// `true` when the grammar arm declares `parse_inside = false` —
+        /// the rule is a context *source* and gets no `find_context_*` variant.
+        opaque: bool,
+        /// The field's `[cap]` divisor; opaque rules contribute it to the
+        /// generated `context()`'s preallocation hint.
+        cap: Literal,
     },
     AsymmetricExact {
         field: Ident,
         open: Literal,
         close: Literal,
         count: Literal,
+        /// See [`StandaloneRule::SymmetricExact::opaque`].
+        opaque: bool,
+        /// See [`StandaloneRule::SymmetricExact::cap`].
+        cap: Literal,
     },
     Chained {
         field: Ident,
@@ -106,6 +116,8 @@ pub(crate) enum StandaloneRule {
         field: Ident,
         byte: Literal,
         min: Literal,
+        /// See [`StandaloneRule::SymmetricExact::cap`].
+        cap: Literal,
     },
     Cont {
         field: Ident,
