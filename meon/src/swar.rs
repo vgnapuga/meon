@@ -185,11 +185,11 @@ mod tests {
     fn test_01_dispatch_arms() {
         let hay = b"the quick brown fox jumps over the lazy dog";
         assert_eq!(find_any([], hay), None);
-        assert_eq!(find_any([b'q'], hay), Some(4));
-        assert_eq!(find_any([b'q', b'z'], hay), Some(4));
-        assert_eq!(find_any([b'z', b'q', b'j'], hay), Some(4));
-        assert_eq!(find_any([b'z', b'X', b'Y', b'q'], hay), Some(4));
-        assert_eq!(find_any([b'z', b'X', b'Y', b'W', b'q'], hay), Some(4));
+        assert_eq!(find_any(*b"q", hay), Some(4));
+        assert_eq!(find_any(*b"qz", hay), Some(4));
+        assert_eq!(find_any(*b"zqj", hay), Some(4));
+        assert_eq!(find_any(*b"zXYq", hay), Some(4));
+        assert_eq!(find_any(*b"zXYWq", hay), Some(4));
     }
 
     // 02. Wide path: matches at the very start, inside the 8-byte tail, and
@@ -198,27 +198,27 @@ mod tests {
     fn test_02_wide_boundaries() {
         let mut hay = vec![b'.'; 100];
         hay[0] = b'a';
-        assert_eq!(find_any([b'a', b'b', b'c', b'd'], &hay), Some(0));
+        assert_eq!(find_any(*b"abcd", &hay), Some(0));
         let mut hay = vec![b'.'; 100];
         hay[99] = b'd';
-        assert_eq!(find_any([b'a', b'b', b'c', b'd'], &hay), Some(99));
+        assert_eq!(find_any(*b"abcd", &hay), Some(99));
         let mut hay = vec![b'.'; 13];
         hay[9] = b'b'; // inside the < 8-byte tail after one full word
-        assert_eq!(find_any([b'a', b'b', b'c', b'd'], &hay), Some(9));
+        assert_eq!(find_any(*b"abcd", &hay), Some(9));
     }
 
     // 03. Wide path: no match over a long haystack, and empty input
     #[test]
     fn test_03_wide_no_match() {
         let hay = vec![b'.'; 100];
-        assert_eq!(find_any([b'a', b'b', b'c', b'd'], &hay), None);
-        assert_eq!(find_any([b'a', b'b', b'c', b'd'], b""), None);
+        assert_eq!(find_any(*b"abcd", &hay), None);
+        assert_eq!(find_any(*b"abcd", b""), None);
     }
 
     // 04. Wide path: the earliest of several present needles wins
     #[test]
     fn test_04_wide_earliest_wins() {
         let hay = b"....d..a..";
-        assert_eq!(find_any([b'a', b'b', b'c', b'd'], hay), Some(4));
+        assert_eq!(find_any(*b"abcd", hay), Some(4));
     }
 }
