@@ -7,6 +7,119 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [0.5.0] - 2026-07-19
+
+### Added
+
+- **`meon`, `meon-macros`** — **context-aware standalone extraction.** Every
+  generated parser gains two new method families:
+  - `context(source: &[u8]) -> ParseContext` — the opaque-region map: fenced
+    blocks plus every `parse_inside = false` inline rule, resolved in **one
+    streaming pass**. Fence bytes and opaque triggers share a single
+    deduplicated needle set — one search per iteration (`memchr` / `memchr2` /
+    `memchr3` up to three distinct bytes, SWAR `find_any` beyond) — with the
+    full parser's leftmost-wins semantics: a matched construct covers its full
+    extent, delimiters included, and the scan resumes after it. Close searches
+    are escape-aware and paragraph-bounded (a pair may span one line break; an
+    empty line or a fence-opening line aborts the pending opener). The result
+    is a sorted, non-overlapping span vector, preallocated from the grammar's
+    own `[cap]` divisors.
+  - `find_context_*(source, &ctx)` — one per rule that is not itself opaque:
+    the same streaming matcher as the context-free `find_*`, with candidate
+    delimiters inside opaque regions skipped. A covered candidate jumps the
+    whole region in one step through a monotone, amortised-O(1) cursor, so a
+    fenced block is stepped over without walking its content. The context
+    suppresses **trigger positions**, not enclosing spans — a bold span may
+    still legally contain a code span, exactly as in the full parse.
+    Line-family rules (`line`, `line_simple`, `cont`, `block`, `num`) reuse
+    the context-free iterator and drop items whose span start is covered —
+    candidate-exact for whole-line constructs. Opaque sources and `chained` /
+    `key_value` rules get no variant by construction.
+
+  One map is built per source and shared by any number of context-aware
+  iterators over it. This closes the documented opacity divergence of the
+  context-free `find_*`: in `meon-md`, emphasis markers inside a fenced block
+  or a code span are no longer matched; in `meon-json`, a `{` inside a string
+  value no longer counts as an object open.
+
+- **`meon`** — standalone same-type block nesting. `cont` rules self-nest in
+  the standalone scan exactly as in the full parse: `find_blockquotes` sees
+  `> >` as two nested, correctly-bounded spans, up to the grammar's
+  `max_nest`.
+
+- Nix dev shell — `cargo-llvm-cov`.
+
+### Changed
+
+- **`meon`** — `0.4.0` → `0.5.0`. Standalone `find_*` iterators are reworked
+  from per-line scanning into a **byte-stream scan**: one `memchr`-family
+  search per candidate, so stretches of input without marker bytes are never
+  walked at all. Matching semantics are now explicit — inline pairs are
+  paragraph-bounded (a pair may cross a single line break; an empty line
+  aborts the pending opener), and `symmetric` / `asymmetric` standalone rules
+  match exactly the declared delimiter count, ignoring `balanced`. Standalone
+  output can change for inputs that relied on the old per-line behaviour.
+- **`meon-macros`** — `0.3.0` → `0.3.1`. The compile pipeline additionally
+  emits the `context` / `find_context_*` methods; purely additive, no changes
+  to the grammar DSL or to the existing expansion.
+- **`meon-md`** — `0.3.0` → `0.4.0`, **`meon-json`** — `0.2.0` → `0.3.0`.
+  Recompiled against the `0.5.0` engine: their `find_*` output follows the
+  streaming rework above, and both gain the context-aware surface. In
+  `meon-md` the context sources are code spans, autolinks and fenced blocks;
+  every other element kind gets a `find_context_*` variant. In `meon-json`
+  the opaque rule is the string — `find_context_objects` / `find_context_arrays`
+  skip candidates inside strings, while `find_strings` itself stays
+  context-free (it *is* the context source). The context closes the
+  string-opacity divergence, not the nesting-insensitivity: context-aware
+  scans still match literal delimiters without tracking depth.
+- Documentation overhaul (EN + RU): `ARCHITECTURE.md` §12 rewritten around
+  the streaming scan and the context map, all crate `README.md`s describe the
+  `context` / `find_context_*` surface, the benchmark docs gain context-aware
+  extraction result sections (`small` + `big`, stable + AVX2), `BENCHMARKS.md`
+  gains a microarchitecture section with `perf stat` counters, and the
+  cross-parser docs are reframed around the two different jobs — span vectors
+  on one side, an event stream / AST / tape / owned value on the other.
+
+### Benchmarks
+
+The per-line → byte-stream rework is the headline (stable build, `small`
+corpora, `find_codes` as the representative single-kind scan):
+
+| Corpus  | `0.4.0`      | `0.5.0`      |
+|---------|--------------|--------------|
+| `plain` | 6.2202 GiB/s | 91.398 GiB/s |
+| `hot`   | 2.9992 GiB/s | 9.0383 GiB/s |
+| `heavy` | 2.5367 GiB/s | 7.2167 GiB/s |
+
+Marker-free input is now scanned at memory speed (~15× on `plain`), and dense
+corpora gain ~3× from skipping unmarked stretches. The context machinery
+prices out as: build the map once (162.94 µs on `hot`, shared by all eight
+context-aware iterators), pay ~10% per-candidate overhead on a warm
+`find_context_*` scan (143.73 µs vs 130.86 µs context-free `find_italics`),
+or pay build + scan in one call in the cold single-shot case (300.92 µs).
+Full tables — `small` + `big`, stable + AVX2, both grammars — are in
+`MD_COMPARE.md` and `JSON_COMPARE.md`; the new `BENCHMARKS.md`
+microarchitecture section records IPC 3.9–4.9, branch-misses ≈0.1%, and a
+cache-miss rate that stays flat as the input grows ~100× from `small` to
+`big`.
+
+### Testing
+
+- **Fuzzing — target extended (`v0.5.0` campaign).** The `parse_text` target
+  now also drives (d) the `context()` opaque-region map plus the
+  `find_context_*` iterators — yet another codegen path: the map's own region
+  spans are bounds-checked first, then every context-aware scanner is drained,
+  held to the same no-panic / in-bounds floor as the other three phases.
+  Campaign: `cov` 3529 → 4196, `ft` 22591 → 26488, corpus unchanged at
+  6641/1610 KB, ~120M execs, no crashes. Full log in `FUZZING.md`.
+- New unit tests across the engine: `ParseContext` construction
+  (leftmost-wins, escaped delimiters, paragraph bounds, fence open/close
+  edges, wide needle sets and needle overflow), the context-aware iterators,
+  the streaming standalone paths, `parse_block!`, and the SWAR layer —
+  coverage of the streaming standalones and `parse_block!` raised to ~97%.
+- New integration tests for context-aware standalone parsing in `meon-md`
+  and `meon-json`.
+
 ## [0.4.0] - 2026-07-09
 
 ### Changed
