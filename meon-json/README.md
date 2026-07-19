@@ -38,7 +38,7 @@ hot loop — a caller that never types pays nothing.
 
 ```toml
 [dependencies]
-meon-json = "0.2"
+meon-json = "0.3"
 ```
 
 ```rust
@@ -230,7 +230,19 @@ no knowledge of nesting or surrounding structure. For JSON this matters more
 than for a flat format — `find_objects` / `find_arrays` match only the exact
 declared delimiter and do **not** track nesting the way a full `parse` does.
 Prefer the full parse when you need correct containment; reach for `find_*`
-only for a single, nesting-insensitive sweep (such as `find_strings`). See
+only for a single, nesting-insensitive sweep (such as `find_strings`).
+
+Strings are the grammar's opaque rule, so `JsonParser::context(src)` builds
+a map of every string region in one streaming pass, and the
+`find_context_*` variants skip candidates inside strings — a `{` inside a
+string value no longer counts as an object opener:
+
+```rust
+let ctx = JsonParser::context(src);
+for span in JsonParser::find_context_objects(src, &ctx) { /* ... */ }
+```
+
+See
 [`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*.
 
 ---

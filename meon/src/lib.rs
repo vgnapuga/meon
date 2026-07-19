@@ -16,7 +16,10 @@
 //! - a **`...Parser` type** with a `parse(source: &[u8]) -> ...Content<'_>` method
 //!   for full single-pass parsing,
 //! - **`find_*` standalone iterators** for lazily scanning one element kind
-//!   without parsing the whole document.
+//!   without parsing the whole document,
+//! - a **`context(source)` builder** producing the [`ParseContext`] opaque-region
+//!   map, plus **`find_context_*` iterators** that skip candidates inside
+//!   fenced blocks and `parse_inside = false` constructs.
 //!
 //! All span endpoints are `u32` byte offsets into the original source slice.
 //! Input must not exceed [`span::MAX_INPUT_LEN`] (4 GiB).

@@ -111,7 +111,19 @@ for link in MarkdownParser::find_links(src) {
 }
 ```
 
-Standalone-итераторы быстрее полного парса когда нужен только один вид элементов — они пропускают всё межэлементное bookkeeping. Компромисс в том, что они работают без контекста: маркер жирного текста внутри блока с кодом будет найден `find_bolds`, но подавлен полным парсером. Это расхождение намеренно и задокументировано.
+Standalone-итераторы быстрее полного парса когда нужен только один вид элементов — они пропускают всё межэлементное bookkeeping. Вложенность блоков одного типа (`> >` открывает два фрейма цитаты) совпадает с полным парсом и ограничена `max_nest` грамматики. Оставшийся компромисс — непрозрачность: маркер жирного текста внутри блока с кодом будет найден `find_bolds`, но подавлен полным парсером. Это расхождение намеренно, задокументировано — и закрываемо:
+
+```rust
+// Постройте карту непрозрачных регионов один раз (ограждённые блоки,
+// код-спаны, автоссылки) и гоняйте по ней любое число контекстных файндеров.
+let ctx = MarkdownParser::context(src);
+for span in MarkdownParser::find_context_bolds(src, &ctx) {
+    // маркеры жирного внутри код-спанов и ограждённых блоков пропущены,
+    // как в полном парсе
+}
+```
+
+Каждое правило, не являющееся само непрозрачным, получает вариант `find_context_*`; карта строится одним потоковым проходом и разделяется между всеми.
 
 ---
 
@@ -152,6 +164,8 @@ define_parser!(MyFormat {
 // Сгенерировано:
 // MyFormatParser::parse(src) -> MyFormatContent<'_>
 // MyFormatParser::find_bolds(src) -> impl Iterator<Item = Span>
+// MyFormatParser::context(src) -> ParseContext
+// MyFormatParser::find_context_bolds(src, &ctx) -> impl Iterator<Item = Span>
 // MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>

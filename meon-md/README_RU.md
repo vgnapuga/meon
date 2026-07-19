@@ -35,7 +35,7 @@
 
 ```toml
 [dependencies]
-meon-md = "0.2"
+meon-md = "0.3"
 ```
 
 ```rust
@@ -175,10 +175,26 @@ for (heading, span) in MarkdownParser::find_headings(src) {
 }
 ```
 
-Standalone-итераторы работают без межэлементного контекста. Они могут
+Standalone-итераторы работают без межэлементного контекста: они могут
 возвращать спаны которые полный парсер подавил бы (например, маркеры жирного
-текста внутри блока с кодом). Подробнее —
-[`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators).
+текста внутри блока с кодом). Вложенность цитат, однако, совпадает с полным
+парсом — `find_blockquotes` видит `> >` как два вложенных спана, ограниченных
+грамматическим `max_nest`.
+
+Чтобы закрыть разрыв по непрозрачности, постройте карту контекста один раз и
+используйте варианты `find_context_*`:
+
+```rust
+let ctx = MarkdownParser::context(src);
+// Маркеры жирного внутри кодовых спанов, автоссылок и блоков с кодом пропускаются:
+for span in MarkdownParser::find_context_bolds(src, &ctx) { /* ... */ }
+```
+
+Такой есть у каждого непрозрачного вида элемента (`find_context_bolds`,
+`find_context_headings`, `find_context_blockquotes`, ...); кодовые спаны,
+автоссылки и блоки с кодом — источники контекста и сохраняют только свой
+контекст-свободный `find_*`. Подробнее —
+[`ARCHITECTURE_RU.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE_RU.md#12-standalone-итераторы) - *GitHub*.
 
 ---
 
@@ -237,7 +253,7 @@ assert_eq!(c.italics.len(), 1);
   а не представляется собственным спаном.
 
 Подробнее —
-[`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs)
+[`ARCHITECTURE_RU.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE_RU.md#17-известные-ограничения-и-намеренные-компромиссы) - *GitHub*
 — про оставшиеся компромиссы движка, включая ограничение `max_nest` и
 ограничение одного активного `chained`-правила.
 
@@ -246,4 +262,4 @@ assert_eq!(c.italics.len(), 1);
 ## Лицензия
 
 `meon-md` доступен под
-[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *OR* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.
+[***MIT***](https://github.com/vgnapuga/meon/blob/main/LICENSE-MIT) *ИЛИ* [***APACHE-2.0***](https://github.com/vgnapuga/meon/blob/main/LICENSE-APACHE) лицензией - *GitHub*.

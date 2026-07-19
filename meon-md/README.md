@@ -35,7 +35,7 @@ demonstrating what `meon` can express in a single `define_parser!` invocation.
 
 ```toml
 [dependencies]
-meon-md = "0.2"
+meon-md = "0.3"
 ```
 
 ```rust
@@ -174,9 +174,25 @@ for (heading, span) in MarkdownParser::find_headings(src) {
 }
 ```
 
-Standalone iterators operate without cross-element context. They may yield
+Standalone iterators operate without cross-element context: they may yield
 spans that the full parser would suppress (e.g. bold markers inside a fenced
-code block). See
+code block). Blockquote nesting, however, matches the full parse —
+`find_blockquotes` sees `> >` as two nested spans, capped by the grammar's
+`max_nest`.
+
+To close the opacity gap, build the context map once and use the
+`find_context_*` variants:
+
+```rust
+let ctx = MarkdownParser::context(src);
+// Bold markers inside code spans, autolinks and fenced blocks are skipped:
+for span in MarkdownParser::find_context_bolds(src, &ctx) { /* ... */ }
+```
+
+Every non-opaque element kind has one (`find_context_bolds`,
+`find_context_headings`, `find_context_blockquotes`, ...); code spans,
+autolinks and fenced blocks are the context sources and keep only their
+context-free `find_*`. See
 [`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*
 for details.
 

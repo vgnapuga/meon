@@ -36,7 +36,7 @@ integration test suites, not here.
 
 A single target — `parse_text` (`fuzz/fuzz_targets/parse_text.rs`). It feeds
 arbitrary bytes to a fuzz-only parser, `MdKvFuzzParser`, and holds the engine
-to a **panic / in-bounds floor** across three separate code paths in one run.
+to a **panic / in-bounds floor** across four separate code paths in one run.
 
 ```rust
 fuzz_target!(|data: &[u8]| {
@@ -64,6 +64,11 @@ fuzz_target!(|data: &[u8]| {
     // (c) Standalone `find_*` iterators over `data` — a SEPARATE codegen path;
     //     no cross-comparison with the full parse (they diverge by design),
     //     only the same in-bounds floor.
+
+    // (d) `context(data)` opaque-region map + `find_context_*` iterators —
+    //     yet another codegen path; only transparent rules get a variant. The
+    //     `ParseContext` region spans and every context-aware scan are held to
+    //     the same in-bounds floor.
 });
 ```
 
@@ -91,7 +96,7 @@ carries no obligation to track `meon-md`'s grammar over time.
 
 ### What the target checks
 
-All three phases are the same floor — *no panic, every span in bounds* — and
+All four phases are the same floor — *no panic, every span in bounds* — and
 none asserts anything about *what* the spans should be (that is the unit /
 integration suites' job):
 
@@ -106,18 +111,27 @@ integration suites' job):
    than `parse`, scanned over the raw `data`. They are documented to diverge
    from the full parse on content, so no value comparison is made — only the
    in-bounds floor.
+4. **`context()` map + `find_context_*` iterators** — yet another codegen arm
+   (the context header plus one variant per *transparent* rule). The
+   `ParseContext`'s own opaque-region spans are bounds-checked first, then each
+   context-aware scanner is drained. Opaque sources (`codes`, `autolinks`,
+   `fenced_codes`) and the `chained` / `key_value` rules (`links`, `pairs`)
+   have no context variant by construction, so they are absent here.
 
 ---
 
 ## Invariants checked
 
-For every span produced — by the full parse, by a `_raw`/`_clean` accessor, or
-by a `find_*` iterator:
+For every span produced — by the full parse, by a `_raw`/`_clean` accessor, by
+a `find_*` iterator, by the `context()` region map, or by a `find_context_*`
+iterator:
 
 - `start <= end` — spans are well-formed half-open ranges.
 - `source[start..end]` does not panic — spans never point past the input.
 - Hard-break anchors are zero-length: `start == end`.
 - `key_value` pairs validate both their `key` and `value` spans independently.
+- The `context()` opaque-region map's own spans are bounds-checked before the
+  `find_context_*` scanners consume them.
 - Inputs longer than `MAX_INPUT_LEN` (`u32::MAX`, 4 GiB) are skipped early,
   since `u32` offsets cannot represent them (see
   [`ARCHITECTURE.md §14`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#14-span-representation)).
@@ -201,13 +215,15 @@ cargo fuzz run parse_text fuzz/corpus/parse_text -- -runs=0
 | v0.1.0          | 2026-06-15 | nightly-2026-05-22 | ~104M      | 841  | 4766  | 1758/252Kb  | ~35k   | 629Mb |
 | v0.2.0          | 2026-06-21 | nightly-2026-05-22 | ~111M      | 1114 | 6853  | 2346/440Kb  | ~32k   | 641Mb |
 | v0.3.0          | 2026-06-26 | nightly-2026-05-22 | ~100M      | 3529 | 22591 | 6641/1610Kb | ~6k    | 711Mb |
+| v0.5.0          | 2026-07-18 | nightly-2026-05-22 | ~120M      | 4196 | 26488 | 6641/1610Kb | ~8k    | 650Mb |
 
 **Coverage saturation** at `cov: 3529 ft: 22591 corp: 6641/1610Kb` means
 libFuzzer exhausted reachable branches on random inputs without seeds. Adding
 seed documents from real Markdown files or from the benchmark corpora will
 push coverage higher by guiding the fuzzer into structured code paths. The
-`key_value` / accessor / standalone paths added to the target widen the
-reachable surface, so expect the saturation point to move on the next campaign.
+`key_value` / accessor / standalone / context paths added to the target widen
+the reachable surface, so expect the saturation point to keep moving on future
+campaigns.
 
 ---
 
@@ -217,11 +233,13 @@ reachable surface, so expect the saturation point to move on the next campaign.
   target exercises only the engine and its generated parser, so
   AddressSanitizer is redundant for memory-safety purposes and can be disabled
   with `--sanitizer none` for a 2–4x throughput boost.
-- Standalone `find_*` iterators **are** now exercised by this target (phase (c)
-  above) — a separate codegen path from `parse`, held to the same in-bounds
-  floor. So are the generated `_raw()` / `_clean()` accessors (phase (b)).
-- The target does not cross-check the full parse against the standalone
-  iterators: they diverge by design (a delimiter inside a fence, an escaped
-  close), so only each path's own safety floor is asserted.
+- Standalone `find_*` iterators (phase (c)) and the context-aware
+  `find_context_*` iterators plus the `context()` map (phase (d)) **are** now
+  exercised by this target — each a separate codegen path from `parse`, all
+  held to the same in-bounds floor. So are the generated `_raw()` / `_clean()`
+  accessors (phase (b)).
+- The target does not cross-check the full parse against the standalone or
+  context-aware iterators: they diverge by design (a delimiter inside a fence,
+  an escaped close), so only each path's own safety floor is asserted.
 - `avx512` was not tested during fuzzing — AVX-512 hardware was unavailable.
   The scalar and `avx2` paths are covered.
