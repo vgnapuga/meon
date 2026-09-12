@@ -82,27 +82,6 @@ where
             _t: std::marker::PhantomData,
         }
     }
-
-    /// Paragraph-bounded close search: the position of the next `needle` at
-    /// or after `from`, treating a single `eol` as ordinary content and an
-    /// empty line (or end of input) as the end of the search space.
-    fn para_close(&self, from: usize, needle: u8) -> Option<usize> {
-        let src = self.src;
-        let len = src.len();
-        let mut j = from;
-        loop {
-            let r = memchr::memchr2(needle, self.eol, &src[j..])?;
-            let q = j + r;
-            if src[q] == self.eol {
-                if q + 1 >= len || src[q + 1] == self.eol {
-                    return None;
-                }
-                j = q + 1;
-                continue;
-            }
-            return Some(q);
-        }
-    }
 }
 
 impl<T, F> Iterator for ChainedIter<'_, T, F>
@@ -128,7 +107,7 @@ where
                 && count_escape(src, p - 1, self.escape) % 2 == 0;
 
             let text_start = p + 1;
-            let Some(c1) = self.para_close(text_start, self.close1) else {
+            let Some(c1) = next_in_paragraph(src, text_start, self.close1, self.eol, Some) else {
                 self.pos = p + 1;
                 continue;
             };
@@ -142,7 +121,7 @@ where
             }
 
             let url_start = nxt + 1;
-            let Some(c2) = self.para_close(url_start, self.close2) else {
+            let Some(c2) = next_in_paragraph(src, url_start, self.close2, self.eol, Some) else {
                 self.pos = p + 1;
                 continue;
             };

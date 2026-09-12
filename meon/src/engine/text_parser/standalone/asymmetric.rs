@@ -85,21 +85,7 @@ impl Iterator for AsymmetricExactIter<'_> {
             // is ordinary content, two in a row (an empty line) — or the end
             // of input — abort the pending opener.
             let cs = end;
-            let mut j = cs;
-            let close = loop {
-                let Some(r) = memchr::memchr2(self.close, self.eol, &src[j..]) else {
-                    break None;
-                };
-                let q = j + r;
-                if src[q] == self.eol {
-                    if q + 1 >= len || src[q + 1] == self.eol {
-                        break None;
-                    }
-                    j = q + 1;
-                    continue;
-                }
-                break Some(q);
-            };
+            let close = next_in_paragraph(src, cs, self.close, self.eol, Some);
 
             match close {
                 Some(cp) => {

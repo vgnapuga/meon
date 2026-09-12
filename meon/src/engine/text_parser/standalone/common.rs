@@ -3,6 +3,8 @@
 //! Contains the primitive operations used by every iterator in this module:
 //!
 //! - [`find_line_end`] — locate the end of the current line.
+//! - [`next_in_paragraph`] — the paragraph-bounded close search shared by
+//!   every inline iterator and by the context builder.
 //! - [`count_escape`] — count consecutive escape bytes preceding a position,
 //!   used to determine whether a delimiter is escaped (odd count) or not (even).
 //! - [`probe_matcher`] / [`find_any_of`] — turn an arbitrary byte predicate
@@ -19,6 +21,41 @@ pub fn find_line_end(src: &[u8], from: usize, eol: u8) -> usize {
     memchr::memchr(eol, &src[from..])
         .map(|i| from + i)
         .unwrap_or(src.len())
+}
+
+/// The next `needle` at or after `from` within the current paragraph, or
+/// `None` when the paragraph ends first.
+///
+/// A single `eol` is crossed as ordinary content; an empty line (two
+/// consecutive `eol` bytes) or the end of input ends the paragraph. The
+/// returned position is a candidate only: the caller validates it (escape,
+/// run length, context coverage) and resumes from a position of its choice.
+///
+/// `enter_line` is called with the start of every line the search enters.
+/// `Some(next)` continues the search from `next` — `next == ls` for plain
+/// continuation, or a later position to skip an opaque region leading the
+/// line — and `None` ends the paragraph, e.g. at a line that opens a fence.
+/// Pass `Some` when line starts need no special treatment.
+#[inline(always)]
+pub fn next_in_paragraph(
+    src: &[u8],
+    from: usize,
+    needle: u8,
+    eol: u8,
+    mut enter_line: impl FnMut(usize) -> Option<usize>,
+) -> Option<usize> {
+    let len = src.len();
+    let mut j = from;
+    loop {
+        let q = j + memchr::memchr2(needle, eol, &src[j..])?;
+        if src[q] != eol {
+            return Some(q);
+        }
+        if q + 1 >= len || src[q + 1] == eol {
+            return None;
+        }
+        j = enter_line(q + 1)?;
+    }
 }
 
 /// Probe an arbitrary byte predicate over all 256 values and collect the
@@ -110,6 +147,65 @@ mod tests {
     fn test_05_find_line_end_immediate_match() {
         let src = b"\nabc";
         assert_eq!(find_line_end(src, 0, b'\n'), 0);
+    }
+
+    // --- next_in_paragraph tests ---
+
+    // 16. The needle on the same line is found at its position
+    #[test]
+    fn test_16_next_in_paragraph_same_line() {
+        assert_eq!(next_in_paragraph(b"ab*c", 0, b'*', b'\n', Some), Some(2));
+    }
+
+    // 17. A single eol is crossed and the needle on the next line is found
+    #[test]
+    fn test_17_next_in_paragraph_crosses_single_eol() {
+        assert_eq!(next_in_paragraph(b"ab\nc*", 0, b'*', b'\n', Some), Some(4));
+    }
+
+    // 18. An empty line ends the paragraph before the needle
+    #[test]
+    fn test_18_next_in_paragraph_empty_line_ends() {
+        assert_eq!(next_in_paragraph(b"ab\n\n*", 0, b'*', b'\n', Some), None);
+    }
+
+    // 19. End of input right after an eol, or with no needle, ends the search
+    #[test]
+    fn test_19_next_in_paragraph_eol_at_end() {
+        assert_eq!(next_in_paragraph(b"ab\n", 0, b'*', b'\n', Some), None);
+        assert_eq!(next_in_paragraph(b"ab", 0, b'*', b'\n', Some), None);
+        assert_eq!(next_in_paragraph(b"", 0, b'*', b'\n', Some), None);
+    }
+
+    // 20. A needle at `from` itself is returned
+    #[test]
+    fn test_20_next_in_paragraph_at_from() {
+        assert_eq!(next_in_paragraph(b"*a", 0, b'*', b'\n', Some), Some(0));
+        assert_eq!(next_in_paragraph(b"a*", 1, b'*', b'\n', Some), Some(1));
+    }
+
+    // 21. `enter_line` returning None ends the paragraph at that line
+    #[test]
+    fn test_21_next_in_paragraph_enter_line_ends() {
+        let src = b"a\n```\n*";
+        let r = next_in_paragraph(src, 0, b'*', b'\n', |ls| {
+            if src[ls] == b'`' { None } else { Some(ls) }
+        });
+        assert_eq!(r, None);
+    }
+
+    // 22. `enter_line` may skip forward past an opaque region at the line start
+    #[test]
+    fn test_22_next_in_paragraph_enter_line_skips() {
+        let src = b"a\n`*`*";
+        let r = next_in_paragraph(src, 0, b'*', b'\n', |ls| {
+            if src[ls] == b'`' {
+                Some(ls + 3)
+            } else {
+                Some(ls)
+            }
+        });
+        assert_eq!(r, Some(5));
     }
 
     // --- probe_matcher / find_any_of tests ---

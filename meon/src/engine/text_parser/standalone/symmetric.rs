@@ -87,17 +87,9 @@ impl Iterator for SymmetricExactIter<'_> {
             let cs = end;
             let mut j = cs;
             let close = loop {
-                let Some(r) = memchr::memchr2(self.byte, self.eol, &src[j..]) else {
+                let Some(q) = next_in_paragraph(src, j, self.byte, self.eol, Some) else {
                     break None;
                 };
-                let q = j + r;
-                if src[q] == self.eol {
-                    if q + 1 >= len || src[q + 1] == self.eol {
-                        break None;
-                    }
-                    j = q + 1;
-                    continue;
-                }
                 let mut cc = 0u32;
                 let mut tmp = q;
                 while tmp < len && src[tmp] == self.byte {
