@@ -2497,3 +2497,148 @@ fn kvn_12_two_objects() {
     assert_eq!(st.key_values.len(), 2);
     assert_eq!(st.objects.len(), 2);
 }
+
+// ================================================================
+// held text: stack-mode frames (`balanced = true`) that never close
+// ================================================================
+//
+// `run_inline!` declares `*` with `balanced = false` (the off-stack `pending`
+// slot). The cases below use the stack path instead — `balanced = true` plus a
+// declared `hard_break`, exactly meon-md's configuration — where plain text
+// flushed while a frame is open is *held* in the fallback vector and either
+// rolled back when the frame closes or kept when the frame is discarded.
+
+macro_rules! run_inline_stack {
+    ($src:expr, $merge:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let _ = meon::parse_inline!(
+            st, src, 0, le, texts, $merge, b'\\', b' ', b'\t', b'\n', 4, true;
+            hard_break(b'\\', b' ', 2) => hard_breaks;
+            on_trigger(b'*', b'`', b'<', b'>') {
+                symmetric b'`' {
+                    parse_inside = false;
+                    balanced     = false;
+                    _ => codes
+                }
+                symmetric b'*' {
+                    parse_inside = true;
+                    balanced     = true;
+                    1 => italics, 2 => bolds, _ => bold_italics
+                }
+                asymmetric b'<', b'>' {
+                    balanced     = true;
+                    parse_inside = true;
+                    1 => autolinks
+                }
+            }
+        );
+        st
+    }};
+}
+
+fn all(src: &[u8], v: &[meon::span::Span]) -> Vec<String> {
+    v.iter().map(|s| txt(src, *s).to_string()).collect()
+}
+
+// 01. An unclosed star followed by a newline keeps its text (single line)
+#[test]
+fn held_01_unclosed_star_with_newline_keeps_text() {
+    let src = b"*no close\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.texts), vec!["no close"]);
+    assert!(st.italics.is_empty());
+}
+
+// 02. An unclosed star keeps the text of every following line of the run
+#[test]
+fn held_02_unclosed_star_multi_line_keeps_all_lines() {
+    let src = b"*a\nb\nc\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert!(st.italics.is_empty());
+}
+
+// 03. With merge_simple the held lines coalesce across the newline
+#[test]
+fn held_03_unclosed_star_multi_line_merged() {
+    let src = b"*a\nb\n";
+    let st = run_inline_stack!(src, true);
+    assert_eq!(all(src, &st.texts), vec!["a\nb"]);
+}
+
+// 04. Text inside a frame that does close is not emitted as text
+#[test]
+fn held_04_closed_frame_rolls_back_held_text() {
+    let src = b"x *a\nb* y\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 05. Rollback restores a previous span that push_merge had extended into
+//     the held region
+#[test]
+fn held_05_rollback_restores_merged_previous_span() {
+    let src = b"x*a\nb*\n";
+    let st = run_inline_stack!(src, true);
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x"]);
+}
+
+// 06. Unclosed outer frame, closed inner frame: the inner span is kept, the
+//     outer's text is released as plain text around it
+#[test]
+fn held_06_unclosed_outer_closed_inner() {
+    let src = b"**a *b* c\n";
+    let st = run_inline_stack!(src, false);
+    assert!(st.bolds.is_empty());
+    assert_eq!(all(src, &st.italics), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["a ", " c"]);
+}
+
+// 07. A closed opaque span inside an unclosed frame: text around it survives
+#[test]
+fn held_07_unclosed_frame_with_inner_code_span() {
+    let src = b"*a `c` b\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["a ", " b"]);
+}
+
+// 08. Same rule for a stack-mode asymmetric frame left unclosed
+#[test]
+fn held_08_unclosed_asymmetric_keeps_text() {
+    let src = b"<a\nb\n";
+    let st = run_inline_stack!(src, false);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// 09. A closed asymmetric frame rolls its held text back
+#[test]
+fn held_09_closed_asymmetric_rolls_back() {
+    let src = b"x <a\nb> y\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.autolinks), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 10. Unclosed frame whose text ends with a hard break: the break is still
+//     recorded and the text before it is kept
+#[test]
+fn held_10_unclosed_frame_with_hard_break() {
+    let src = b"*a  \nb\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// 11. Behaviour without a newline is unchanged by the fix
+#[test]
+fn held_11_single_line_no_newline_unchanged() {
+    let src = b"*no close";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.texts), vec!["no close"]);
+}

@@ -1125,3 +1125,49 @@ fn integ_nest_10_nested_blockquote_then_paragraph() {
     assert_eq!(c.blockquotes.len(), 2);
     assert_eq!(c.paragraphs.len(), 1);
 }
+
+// ================================================================
+// unclosed emphasis keeps its text
+// ================================================================
+
+// 01. A lone star in a multi-line paragraph does not drop the paragraph text
+#[test]
+fn integ_unclosed_01_lone_star_multi_line() {
+    let src = b"5 * 3 is fifteen\nand so on\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.italics.is_empty());
+    assert_eq!(c.texts.len(), 1);
+    assert_eq!(txt(src, c.texts[0]), "5 * 3 is fifteen\nand so on");
+}
+
+// 02. An unclosed opener at line start keeps every following line
+#[test]
+fn integ_unclosed_02_opener_at_start() {
+    let src = b"*a\nb\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.italics.is_empty());
+    assert_eq!(c.texts.len(), 1);
+    assert_eq!(txt(src, c.texts[0]), "a\nb");
+}
+
+// 03. An unclosed bold with a trailing newline keeps its text
+#[test]
+fn integ_unclosed_03_bold_with_newline() {
+    let src = b"**unclosed bold\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.bolds.is_empty());
+    assert_eq!(c.texts.len(), 1);
+    assert_eq!(txt(src, c.texts[0]), "unclosed bold");
+}
+
+// 04. Emphasis that does close across a line break is unaffected
+#[test]
+fn integ_unclosed_04_closed_across_newline_unaffected() {
+    let src = b"see **note\nhere** end\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "note\nhere");
+    assert_eq!(c.texts.len(), 2);
+    assert_eq!(txt(src, c.texts[0]), "see ");
+    assert_eq!(txt(src, c.texts[1]), " end");
+}

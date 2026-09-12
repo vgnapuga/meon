@@ -539,6 +539,42 @@ macro_rules! parse_inline {
         // else to live until its frame closes.
         let mut kv_pending: [(u32, u32, u32); $maxn] = [(0u32, 0u32, 0u32); $maxn];
 
+        // Per-frame snapshot of the fallback vector `$tx` taken at the moment
+        // the frame opened: `(len, end-of-last-span)`. While any frame is open,
+        // plain text is still flushed into `$tx` (it is *held* there, in
+        // source order) instead of being dropped. When the frame closes
+        // normally its span covers that text, so `$tx` is rolled back to the
+        // snapshot (`release_held!`). When the frame is instead discarded at
+        // the end of the run — an unclosed `*`, a dangling `{` — the held
+        // text simply stays: everything after an unmatched opener is plain
+        // text (the opener's own bytes are dropped, as before). The second
+        // tuple field restores the previous last span's `end`, because
+        // `push_merge_*` may have extended it into the held region rather
+        // than pushing a new entry.
+        let mut held_base: [(u32, u32); $maxn] = [(0u32, 0u32); $maxn];
+
+        #[allow(unused_macros)]
+        macro_rules! hold_base {
+            () => {
+                (
+                    $state.$tx.len() as u32,
+                    $state.$tx.last().map_or(0u32, |s| s.end),
+                )
+            };
+        }
+        #[allow(unused_macros)]
+        macro_rules! release_held {
+            ($base:expr) => {{
+                let (_hl, _he): (u32, u32) = $base;
+                $state.$tx.truncate(_hl as usize);
+                if _hl > 0 {
+                    if let Some(_last) = $state.$tx.last_mut() {
+                        _last.end = _he;
+                    }
+                }
+            }};
+        }
+
         // `fdepth` is `usize`, not a narrower type, despite being
         // architecturally bounded by `max_nest` (every push site checks
         // `fdepth < $maxn` first, so it provably never exceeds it). That
@@ -717,7 +753,7 @@ macro_rules! parse_inline {
                         }
                     }
                     if text_start < _ep {
-                        if fdepth == 0 && !ch_in_text && !ch_in_url {
+                        if !ch_in_text && !ch_in_url {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, _ep as u32));
                         }
                     }
@@ -770,6 +806,7 @@ macro_rules! parse_inline {
                         $kv_vf: $crate::span::Span::new(_vs, delim_start),
                     });
                     fdepth -= 1;
+                    release_held!(held_base[fdepth]);
                     _kv_seg_start = pos;
                     _kv_hit = true;
                 }
@@ -791,7 +828,7 @@ macro_rules! parse_inline {
                 $(
                     if ($abal || $api) && delim == $ao {
                         if text_start < delim_start as usize {
-                            if fdepth == 0 && !ch_in_text && !ch_in_url {
+                            if !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
                             };
                         }
@@ -807,6 +844,7 @@ macro_rules! parse_inline {
                                         push_il!($af, $crate::span::Span::new(
                                             _content_start, _content_start));
                                         frames[fdepth] = ($ao, 1u8, _vidx);
+                                        held_base[fdepth] = hold_base!();
                                         fdepth += 1;
                                         asym_overflow = 0;
                                         _consumed = true;
@@ -874,6 +912,7 @@ macro_rules! parse_inline {
                                             }
                                         )*
                                         fdepth -= 1;
+                                        release_held!(held_base[fdepth]);
                                     }
                                 }
                             }
@@ -900,6 +939,7 @@ macro_rules! parse_inline {
                                             }
                                         )*
                                         fdepth -= 1;
+                                        release_held!(held_base[fdepth]);
                                         asym_overflow = 0;
                                     }
                                     text_start = (_close_char_pos + 1) as usize;
@@ -943,7 +983,7 @@ macro_rules! parse_inline {
                         delim_start as usize
                     };
                     if text_start < _real_start {
-                        if fdepth == 0 && !ch_in_text && !ch_in_url {
+                        if !ch_in_text && !ch_in_url {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, _real_start as u32));
                         };
                     }
@@ -978,7 +1018,7 @@ macro_rules! parse_inline {
                             _chained_handled = true;
                         } else {
                             if (ch_real_start as usize) < pos {
-                                if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                if !ch_in_text && !ch_in_url {
                                     push_il!($tx, $crate::span::Span::new(ch_real_start, pos as u32));
                                 };
                             }
@@ -997,7 +1037,7 @@ macro_rules! parse_inline {
                         let _cu_end = delim_start;
                         ch_in_url = false;
                         if text_start < ch_real_start as usize {
-                            if fdepth == 0 && !ch_in_text && !ch_in_url {
+                            if !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, ch_real_start));
                             };
                         }
@@ -1096,7 +1136,7 @@ macro_rules! parse_inline {
                                     delim_start as usize
                                 };
                                 if text_start < real_start {
-                                    if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                    if !ch_in_text && !ch_in_url {
                                         push_il!($tx, $crate::span::Span::new(
                                         text_start as u32, real_start as u32));
                                     };
@@ -1137,6 +1177,7 @@ macro_rules! parse_inline {
                                 }
                                 if _closed {
                                     fdepth -= 1;
+                                    release_held!(held_base[fdepth]);
                                     text_start = pos;
                                     continue;
                                 } else {
@@ -1148,7 +1189,7 @@ macro_rules! parse_inline {
                                 match count {
                                     $( $sn => {
                                         if text_start < delim_start as usize {
-                                            if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                            if !ch_in_text && !ch_in_url {
                                                 push_il!($tx, $crate::span::Span::new(
                                                 text_start as u32, delim_start));
                                             };
@@ -1156,6 +1197,7 @@ macro_rules! parse_inline {
                                         let _vidx = $state.$sf.len() as u32;
                                         push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
                                         frames[fdepth] = ($sb, count as u8, _vidx);
+                                        held_base[fdepth] = hold_base!();
                                         _pushed = true;
                                     } )*
                                     _ => {}
@@ -1166,7 +1208,7 @@ macro_rules! parse_inline {
                                     continue;
                                 } else {
                                     if text_start < delim_start as usize {
-                                        if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                        if !ch_in_text && !ch_in_url {
                                             push_il!($tx, $crate::span::Span::new(
                                             text_start as u32, delim_start));
                                         };
@@ -1176,7 +1218,7 @@ macro_rules! parse_inline {
                                 }
                             } else {
                                 if text_start < delim_start as usize {
-                                    if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                    if !ch_in_text && !ch_in_url {
                                         push_il!($tx, $crate::span::Span::new(
                                         text_start as u32, delim_start));
                                     };
@@ -1193,7 +1235,7 @@ macro_rules! parse_inline {
                                         continue;
                                     }
                                     if (text_start as u32) < op {
-                                        if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                        if !ch_in_text && !ch_in_url {
                                             push_il!($tx, $crate::span::Span::new(text_start as u32, op));
                                         };
                                     }
@@ -1262,7 +1304,7 @@ macro_rules! parse_inline {
                         };
                         if let Some((p, end)) = close {
                             if text_start < delim_start as usize {
-                                if fdepth == 0 && !ch_in_text && !ch_in_url {
+                                if !ch_in_text && !ch_in_url {
                                     push_il!($tx, $crate::span::Span::new(
                                     text_start as u32, delim_start));
                                 };
@@ -1317,7 +1359,7 @@ macro_rules! parse_inline {
                     };
                     if let Some(cp) = close_pos {
                         if text_start < delim_start as usize {
-                            if fdepth == 0 && !ch_in_text && !ch_in_url {
+                            if !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(
                                 text_start as u32, delim_start));
                             };
@@ -1362,13 +1404,14 @@ macro_rules! parse_inline {
                             }
                         }
                         if text_start < ks {
-                            if fdepth == 0 && !ch_in_text && !ch_in_url {
+                            if !ch_in_text && !ch_in_url {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, ks as u32));
                             };
                         }
                         if fdepth < $maxn {
                             kv_pending[fdepth] = (ks as u32, key_end as u32, val_start as u32);
                             frames[fdepth] = ($kv_end, 0u8, 0u32);
+                            held_base[fdepth] = hold_base!();
                             fdepth += 1;
                         }
                         // else: depth cap reached — pair untracked, `eq`
@@ -1416,6 +1459,7 @@ macro_rules! parse_inline {
             )*
 
             if _matched_kv {
+                release_held!(held_base[fdepth]);
                 if parse_end > text_start {
                     text_start = parse_end;
                 }
