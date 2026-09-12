@@ -208,7 +208,9 @@ macro_rules! parse_block {
         cont($cb:literal) => $field:ident $($rest:tt)*
     ) => {
         if $disc == 1u8 && $byte == $cb {
-            $st.$field.push($crate::span::Span::new($start, $endpos));
+            $crate::paste::paste! {
+                $st.[<push_ $field>]($crate::span::Span::new($start, $endpos));
+            }
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $endpos, $disc, $byte, $start ; $($rest)*)
     };
@@ -216,7 +218,9 @@ macro_rules! parse_block {
         fence($pat:pat, min = $min:literal) => $field:ident $($rest:tt)*
     ) => {
         if $disc == 0u8 && matches!($byte, $pat) {
-            $st.$field.push($crate::span::Span::new($start, $endpos));
+            $crate::paste::paste! {
+                $st.[<push_ $field>]($crate::span::Span::new($start, $endpos));
+            }
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $endpos, $disc, $byte, $start ; $($rest)*)
     };
@@ -296,7 +300,9 @@ macro_rules! parse_block {
                     let cs    = next + 1;
                     let $b    = $src[_p];
                     let _meta = $meta;
-                    $st.$field.push((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                    $crate::paste::paste! {
+                        $st.[<push_ $field>]((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                    }
                     $res = Some((true, cs));
                 }
             }
@@ -327,7 +333,9 @@ macro_rules! parse_block {
                         let $n    = _num;
                         let $k    = _end;
                         let _meta = $meta;
-                        $st.$field.push((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                        $crate::paste::paste! {
+                            $st.[<push_ $field>]((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                        }
                         $res = Some((true, cs));
                     }
                 }

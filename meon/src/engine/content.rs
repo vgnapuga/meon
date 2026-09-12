@@ -133,6 +133,8 @@ macro_rules! define_content {
     }) => {
         $crate::paste::paste! {
             pub(crate) struct [<$name State>] {
+                #[allow(dead_code)]
+                src_len: usize,
                 $( pub(crate) $inline_field:        Vec<$inline_ty>, )*
                 $( pub(crate) $inline_simple_field: Vec<$crate::span::Span>, )*
                 $( pub(crate) $line_field:          Vec<($line_ty, $crate::span::Span)>, )*
@@ -143,13 +145,64 @@ macro_rules! define_content {
             impl [<$name State>] {
                 pub(crate) fn new(n: usize) -> Self {
                     Self {
-                        $( $inline_field:        Vec::with_capacity(n / $inline_div), )*
-                        $( $inline_simple_field: Vec::with_capacity(n / $inline_simple_div), )*
-                        $( $line_field:          Vec::with_capacity(n / $line_div), )*
-                        $( $block_field:         Vec::with_capacity(n / $block_div), )*
-                        $( $block_simple_field:  Vec::with_capacity(n / $simple_div), )*
+                        src_len: n,
+                        $( $inline_field:        Vec::new(), )*
+                        $( $inline_simple_field: Vec::new(), )*
+                        $( $line_field:          Vec::new(), )*
+                        $( $block_field:         Vec::new(), )*
+                        $( $block_simple_field:  Vec::new(), )*
                     }
                 }
+
+                $(
+                    #[allow(dead_code)]
+                    #[inline(always)]
+                    pub(crate) fn [<push_ $inline_field>](&mut self, v: $inline_ty) {
+                        if self.$inline_field.capacity() == 0 {
+                            self.$inline_field.reserve_exact(self.src_len / $inline_div);
+                        }
+                        self.$inline_field.push(v);
+                    }
+                )*
+
+                $(
+                    #[allow(dead_code)]
+                    #[inline(always)]
+                    pub(crate) fn [<push_ $line_field>](
+                        &mut self, v: ($line_ty, $crate::span::Span),
+                    ) {
+                        if self.$line_field.capacity() == 0 {
+                            self.$line_field.reserve_exact(self.src_len / $line_div);
+                        }
+                        self.$line_field.push(v);
+                    }
+                )*
+
+                $(
+                    #[allow(dead_code)]
+                    #[inline(always)]
+                    pub(crate) fn [<push_ $block_field>](
+                        &mut self, v: ($block_ty, $crate::span::Span),
+                    ) {
+                        if self.$block_field.capacity() == 0 {
+                            self.$block_field.reserve_exact(self.src_len / $block_div);
+                        }
+                        self.$block_field.push(v);
+                    }
+                )*
+
+                $(
+                    #[allow(dead_code)]
+                    #[inline(always)]
+                    pub(crate) fn [<push_ $block_simple_field>](
+                        &mut self, s: $crate::span::Span,
+                    ) {
+                        if self.$block_simple_field.capacity() == 0 {
+                            self.$block_simple_field.reserve_exact(self.src_len / $simple_div);
+                        }
+                        self.$block_simple_field.push(s);
+                    }
+                )*
 
                 $(
                     #[allow(dead_code)]
@@ -157,6 +210,10 @@ macro_rules! define_content {
                     pub(crate) fn [<push_ $inline_simple_field>](
                         &mut self, s: $crate::span::Span,
                     ) {
+                        if self.$inline_simple_field.capacity() == 0 {
+                            self.$inline_simple_field
+                                .reserve_exact(self.src_len / $inline_simple_div);
+                        }
                         self.$inline_simple_field.push(s);
                     }
 
@@ -164,6 +221,10 @@ macro_rules! define_content {
                     pub(crate) fn [<push_merge_ $inline_simple_field>](
                         &mut self, s: $crate::span::Span,
                     ) {
+                        if self.$inline_simple_field.capacity() == 0 {
+                            self.$inline_simple_field
+                                .reserve_exact(self.src_len / $inline_simple_div);
+                        }
                         let vec = &mut self.$inline_simple_field;
                         if let Some(last) = vec.last_mut() {
                             if last.start != last.end && s.start != s.end {

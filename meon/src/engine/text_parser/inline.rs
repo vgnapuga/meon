@@ -488,7 +488,9 @@ macro_rules! parse_inline {
                         }
                     }
                     if _ehb {
-                        $state.$hb.push($crate::span::Span::new(_ep as u32, _ep as u32));
+                        $crate::paste::paste! {
+                            $state.[<push_ $hb>]($crate::span::Span::new(_ep as u32, _ep as u32));
+                        }
                     }
                     pos += 1;
                     text_start = pos;
@@ -523,10 +525,12 @@ macro_rules! parse_inline {
                     && frames[fdepth - 1].0 == $kv_end
                 {
                     let (_ks, _ke, _vs) = kv_pending[fdepth - 1];
-                    $state.$kv_f.push($kv_ty {
-                        $kv_kf: $crate::span::Span::new(_ks, _ke),
-                        $kv_vf: $crate::span::Span::new(_vs, delim_start),
-                    });
+                    $crate::paste::paste! {
+                        $state.[<push_ $kv_f>]($kv_ty {
+                            $kv_kf: $crate::span::Span::new(_ks, _ke),
+                            $kv_vf: $crate::span::Span::new(_vs, delim_start),
+                        });
+                    }
                     fdepth -= 1;
                     release_held!(held_base[fdepth]);
                     _kv_seg_start = pos;
@@ -616,10 +620,12 @@ macro_rules! parse_inline {
                                         let (_ks, _ke, _vs) = kv_pending[fdepth - 1];
                                         $(
                                             if _top_b == $kv_end {
-                                                $state.$kv_f.push($kv_ty {
-                                                    $kv_kf: $crate::span::Span::new(_ks, _ke),
-                                                    $kv_vf: $crate::span::Span::new(_vs, _close_char_pos),
-                                                });
+                                                $crate::paste::paste! {
+                                                    $state.[<push_ $kv_f>]($kv_ty {
+                                                        $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                                        $kv_vf: $crate::span::Span::new(_vs, _close_char_pos),
+                                                    });
+                                                }
                                             }
                                         )*
                                         fdepth -= 1;
@@ -752,11 +758,13 @@ macro_rules! parse_inline {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, ch_real_start));
                             };
                         }
-                        $state.$cf.push($ch_ty {
-                            $cpi: ch_is_prefix,
-                            $ct: $crate::span::Span::new(ch_text_start, ch_saved_text_end),
-                            $cu: $crate::span::Span::new(ch_url_start, _cu_end),
-                        });
+                        $crate::paste::paste! {
+                            $state.[<push_ $cf>]($ch_ty {
+                                $cpi: ch_is_prefix,
+                                $ct: $crate::span::Span::new(ch_text_start, ch_saved_text_end),
+                                $cu: $crate::span::Span::new(ch_url_start, _cu_end),
+                            });
+                        }
                     }
                     text_start = pos;
                     _chained_handled = true;
@@ -862,11 +870,13 @@ macro_rules! parse_inline {
                                         text_start as u32, real_start as u32));
                                     };
                                 }
-                                $state.$cf.push($ch_ty {
-                                    $cpi: is_prefix,
-                                    $ct:  $crate::span::Span::new(pos as u32, ct_end as u32),
-                                    $cu:  $crate::span::Span::new((next + 1) as u32, cu_end as u32),
-                                });
+                                $crate::paste::paste! {
+                                    $state.[<push_ $cf>]($ch_ty {
+                                        $cpi: is_prefix,
+                                        $ct:  $crate::span::Span::new(pos as u32, ct_end as u32),
+                                        $cu:  $crate::span::Span::new((next + 1) as u32, cu_end as u32),
+                                    });
+                                }
                                 pos = cu_end + 1;
                                 text_start = pos;
                                 continue;
@@ -1163,10 +1173,12 @@ macro_rules! parse_inline {
             $(
                 if _fb == $kv_end {
                     let (_ks, _ke, _vs) = kv_pending[fdepth];
-                    $state.$kv_f.push($kv_ty {
-                        $kv_kf: $crate::span::Span::new(_ks, _ke),
-                        $kv_vf: $crate::span::Span::new(_vs, parse_end as u32),
-                    });
+                    $crate::paste::paste! {
+                        $state.[<push_ $kv_f>]($kv_ty {
+                            $kv_kf: $crate::span::Span::new(_ks, _ke),
+                            $kv_vf: $crate::span::Span::new(_vs, parse_end as u32),
+                        });
+                    }
                     _matched_kv = true;
                 }
             )*
@@ -1206,7 +1218,9 @@ macro_rules! parse_inline {
         }
         // Emit hard-break marker if detected.
         $( if _hb {
-            $state.$hb.push($crate::span::Span::new(parse_end as u32, parse_end as u32));
+            $crate::paste::paste! {
+                $state.[<push_ $hb>]($crate::span::Span::new(parse_end as u32, parse_end as u32));
+            }
         } )*
 
         // Returns `$le` unchanged. The single-line call site resumes at `$le + 1`

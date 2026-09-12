@@ -336,7 +336,9 @@ macro_rules! parse_text {
             macro_rules! close_para {
                 () => {
                     if let Some(s) = para_start.take() {
-                        state.$para.push($crate::span::Span::new(s, pos as u32));
+                        $crate::paste::paste! {
+                            state.[<push_ $para>]($crate::span::Span::new(s, pos as u32));
+                        }
                     }
                 };
             }
@@ -479,7 +481,9 @@ macro_rules! parse_text {
             flush_para_inline!(len);
             flush_text!(len);
             if let Some(s) = para_start {
-                state.$para.push($crate::span::Span::new(s, len as u32));
+                $crate::paste::paste! {
+                    state.[<push_ $para>]($crate::span::Span::new(s, len as u32));
+                }
             }
             $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
                 block_simple { $($sr)* } block { $($br)* });
@@ -514,7 +518,9 @@ macro_rules! parse_text {
         [$hb_esc:literal, $sp:literal, $sp_min:literal => $hb_fld:ident]
     ) => {
         if $hb {
-            $st.$hb_fld.push($crate::span::Span::new($le as u32, $le as u32));
+            $crate::paste::paste! {
+                $st.[<push_ $hb_fld>]($crate::span::Span::new($le as u32, $le as u32));
+            }
         }
     };
 

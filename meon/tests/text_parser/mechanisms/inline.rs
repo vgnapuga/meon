@@ -2756,3 +2756,54 @@ fn pending_02_same_count_closes_then_reopens() {
     assert_eq!(txt(src, st.italics[0]), "a");
     assert_eq!(txt(src, st.italics[1]), "b");
 }
+
+// ================================================================
+// output vectors allocate on first push, not up front
+// ================================================================
+
+// 01. A field whose rule never fires holds no allocation at all
+#[test]
+fn alloc_01_unused_fields_stay_unallocated() {
+    let src = b"plain words with no delimiters anywhere in this run of text";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.bolds.capacity(), 0);
+    assert_eq!(st.italics.capacity(), 0);
+    assert_eq!(st.bold_italics.capacity(), 0);
+    assert_eq!(st.codes.capacity(), 0);
+    assert_eq!(st.autolinks.capacity(), 0);
+    assert_eq!(st.links.capacity(), 0);
+    assert_eq!(st.key_values.capacity(), 0);
+    assert_eq!(st.hard_breaks.capacity(), 0);
+}
+
+// 02. A field that does fire reserves its grammar hint on the first push,
+//     rather than growing from nothing by doubling
+#[test]
+fn alloc_02_used_field_reserves_its_hint() {
+    let src = &b"one *emphasised* word, then filler to make the source long enough \
+                 that the capacity hint is clearly larger than a doubling growth \
+                 would ever reach on a single push."[..];
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.italics.len(), 1);
+    assert!(
+        st.italics.capacity() >= src.len() / 40,
+        "italics capacity {} < hint {}",
+        st.italics.capacity(),
+        src.len() / 40
+    );
+    assert!(st.texts.capacity() >= src.len() / 10);
+}
+
+// 03. A user-typed inline field (`chained`) follows the same rule
+#[test]
+fn alloc_03_chained_field_allocates_only_when_it_fires() {
+    let plain = &b"no link here, just a long enough stretch of ordinary words"[..];
+    let (st, _) = run_inline!(plain);
+    assert_eq!(st.links.capacity(), 0);
+
+    let linked = &b"a [text](url) here, with enough trailing words to give the \
+                    capacity hint a value above one"[..];
+    let (st, _) = run_inline!(linked);
+    assert_eq!(st.links.len(), 1);
+    assert!(st.links.capacity() >= linked.len() / 100);
+}
