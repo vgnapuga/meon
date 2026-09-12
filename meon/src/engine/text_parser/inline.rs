@@ -637,6 +637,31 @@ macro_rules! parse_inline {
         let mut ch_url_start: u32 = 0;
         let mut ch_saved_text_end: u32 = 0;
 
+        // Close bytes known to be absent (unescaped) from the rest of the
+        // run. The self-contained forward searches below — the legacy
+        // `balanced = false` asymmetric path and the both-opaque `chained`
+        // path with `balanced = false` components — scan from the current
+        // position to `parse_end` for their close byte. `pos` only ever
+        // moves forward and `parse_end` is fixed for the whole call, so once
+        // such a search has failed for a byte, every later search for the
+        // same byte in this run must fail too. Without this, a run full of
+        // unclosed openers (`[a[a[a...`, `<a<a<a...`) rescans the remainder
+        // once per opener: quadratic in the run length. One bit per byte
+        // value; a set bit means "no unescaped occurrence ahead".
+        let mut _dead_close: [u64; 4] = [0u64; 4];
+        #[allow(unused_macros)]
+        macro_rules! dead_close_has {
+            ($b:expr) => {
+                (_dead_close[($b as usize) >> 6] >> (($b as usize) & 63)) & 1 == 1
+            };
+        }
+        #[allow(unused_macros)]
+        macro_rules! dead_close_set {
+            ($b:expr) => {
+                _dead_close[($b as usize) >> 6] |= 1u64 << (($b as usize) & 63)
+            };
+        }
+
         loop {
             // ---- Single unified trigger search -------------------------- //
             //
@@ -1085,6 +1110,8 @@ macro_rules! parse_inline {
                             _i += 1;
                         }
                         _found
+                    } else if dead_close_has!($cc) {
+                        None
                     } else {
                         let mut _found: Option<usize> = None;
                         while _i < parse_end {
@@ -1095,6 +1122,9 @@ macro_rules! parse_inline {
                                 break;
                             }
                             _i += 1;
+                        }
+                        if _found.is_none() {
+                            dead_close_set!($cc);
                         }
                         _found
                     };
@@ -1116,6 +1146,8 @@ macro_rules! parse_inline {
                                     _j += 1;
                                 }
                                 _found
+                            } else if dead_close_has!($uc) {
+                                None
                             } else {
                                 let mut _found: Option<usize> = None;
                                 while _j < parse_end {
@@ -1126,6 +1158,9 @@ macro_rules! parse_inline {
                                         break;
                                     }
                                     _j += 1;
+                                }
+                                if _found.is_none() {
+                                    dead_close_set!($uc);
                                 }
                                 _found
                             };
@@ -1338,6 +1373,8 @@ macro_rules! parse_inline {
                             _i += 1;
                         }
                         found
+                    } else if dead_close_has!($ac) {
+                        None
                     } else {
                         let mut _i = pos;
                         let mut _found: Option<usize> = None;
@@ -1354,6 +1391,9 @@ macro_rules! parse_inline {
                                     }
                                 }
                             }
+                        }
+                        if _found.is_none() {
+                            dead_close_set!($ac);
                         }
                         _found
                     };

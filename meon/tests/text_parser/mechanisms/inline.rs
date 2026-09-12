@@ -2642,3 +2642,94 @@ fn held_11_single_line_no_newline_unchanged() {
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.texts), vec!["no close"]);
 }
+
+// ================================================================
+// dead close bytes: failed forward searches are not repeated
+// ================================================================
+//
+// The legacy `balanced = false` asymmetric path and the both-opaque
+// `chained` path search forward to the run's end for their close byte. A
+// failed search marks that byte as absent for the rest of the run, so a
+// later opener of the same kind is rejected without rescanning. These cases
+// pin the observable contract: output is identical to a full rescan, and
+// openers of a *different* kind are unaffected by another kind's failure.
+
+// 01. A failed `>` search does not affect a later `[..](..)` link
+#[test]
+fn dead_01_asym_failure_leaves_chained_alone() {
+    let src = b"<a [b](c)";
+    let (st, _) = run_inline!(src);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+}
+
+// 02. A failed `]` search does not affect a later `<..>` autolink
+#[test]
+fn dead_02_chained_failure_leaves_asym_alone() {
+    let src = b"[a (b) <c>";
+    let (st, _) = run_inline!(src);
+    assert!(st.links.is_empty());
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), "c");
+}
+
+// 03. Two unclosed `<` openers: both rejected, text intact
+#[test]
+fn dead_03_repeated_unclosed_asym_openers() {
+    let src = b"<a <b <c";
+    let (st, _) = run_inline!(src);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "<a <b <c");
+}
+
+// 04. Two `[` openers whose `(..)` never closes: both rejected, text intact
+#[test]
+fn dead_04_repeated_unclosed_url_component() {
+    let src = b"[a](b [c](d";
+    let (st, _) = run_inline!(src);
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "[a](b [c](d");
+}
+
+// 05. An escaped close byte counts as absent, and a later unescaped one
+//     is still found by a later opener's search
+#[test]
+fn dead_05_escaped_close_then_real_close() {
+    let src = b"<a\\> <b>";
+    let (st, _) = run_inline!(src);
+    // The first `<` finds the unescaped `>` at the end: its span runs over
+    // the escaped one and the second `<`. Unchanged behaviour, pinned here.
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), "a\\> <b");
+}
+
+// 06. A failed search for one chained component does not poison the other:
+//     `]` present but `)` absent, then a later link with both
+#[test]
+fn dead_06_url_failure_does_not_poison_text_close() {
+    let src = b"[a](b [c]";
+    let (st, _) = run_inline!(src);
+    // `)` is absent from the whole run, so no link can form; `]` stays live.
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "[a](b [c]");
+}
+
+// 07. A run of many unclosed `[` openers completes in linear time: a full
+//     rescan per opener would take tens of seconds at this size
+#[test]
+fn dead_07_many_unclosed_openers_linear() {
+    let src: Vec<u8> = b"[a".repeat(100_000);
+    let started = std::time::Instant::now();
+    let (st, _) = run_inline!(&src);
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "unclosed-opener scan is not linear"
+    );
+}

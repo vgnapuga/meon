@@ -1171,3 +1171,38 @@ fn integ_unclosed_04_closed_across_newline_unaffected() {
     assert_eq!(txt(src, c.texts[0]), "see ");
     assert_eq!(txt(src, c.texts[1]), " end");
 }
+
+// ================================================================
+// unclosed openers do not rescan the paragraph
+// ================================================================
+
+// 01. Many unclosed `[` in one paragraph parse in linear time
+#[test]
+fn integ_dead_01_many_unclosed_brackets_linear() {
+    let src: Vec<u8> = b"[a".repeat(200_000);
+    let started = std::time::Instant::now();
+    let c = MarkdownParser::parse(&src);
+    assert!(c.links.is_empty());
+    assert_eq!(c.paragraphs.len(), 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+// 02. Many unclosed `<` in one paragraph parse in linear time
+#[test]
+fn integ_dead_02_many_unclosed_autolinks_linear() {
+    let src: Vec<u8> = b"<a".repeat(200_000);
+    let started = std::time::Instant::now();
+    let c = MarkdownParser::parse(&src);
+    assert!(c.autolinks.is_empty());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+// 03. A failed autolink earlier in the paragraph does not hide a later link
+#[test]
+fn integ_dead_03_failed_autolink_then_link() {
+    let src = b"x < y then [t](u) end\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.autolinks.is_empty());
+    assert_eq!(c.links.len(), 1);
+    assert_eq!(txt(src, c.links[0].url), "u");
+}
