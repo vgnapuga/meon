@@ -1712,8 +1712,8 @@ fn chained_tbal_12_multiple_links_sequence() {
 //
 // All of these use `run_inline_balanced_nested!`, the same grammar as
 // `run_inline_balanced!` above with a caller-supplied `max_nest`. The
-// `balanced_*` tests above already cover `max_nest = 1` (the collapsing,
-// pre-nesting-equivalent behaviour) — these specifically exercise depth > 1.
+// `balanced_*` tests above already cover `max_nest = 1` (the collapsing
+// behaviour) — these specifically exercise depth > 1.
 
 // 01. At depth 2, a single level of nesting is split into two spans,
 // sorted by start: outer first, inner second.
@@ -1824,16 +1824,14 @@ fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
 //
 // All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
 // true; balanced = true; ... }` fixture with its own `n_italics` / `n_bolds`
-// fields, separate from the pre-existing `italics` / `bolds` fixtures
-// above (which stay `balanced = false`, exercising the original single
-// pending-slot mechanism, untouched).
+// fields, separate from the `italics` / `bolds` fixtures above, which use
+// `balanced = false` and the single pending slot.
 
-// 01. The bug this fixes: with a single pending slot, a different-count
-// occurrence of the same byte used to silently overwrite the still-pending
-// outer delimiter, so the outer pair never closed. With the bounded stack
-// (depth >= 2), both levels resolve.
+// 01. With the bounded stack (depth >= 2) a different-count occurrence of the
+// same byte opens an inner frame instead of replacing the outer one, so both
+// levels resolve.
 #[test]
-fn sym_nested_01_different_key_nesting_fix() {
+fn sym_nested_01_different_key_nests() {
     let src = b"**bold *italic* still-bold**";
     let (st, _) = run_inline_sym_nested!(src, 2);
     assert_eq!(st.n_bolds.len(), 1);
@@ -1842,11 +1840,8 @@ fn sym_nested_01_different_key_nesting_fix() {
     assert_eq!(txt(src, st.n_italics[0]), "italic");
 }
 
-// 02. At depth 1 (the boundary, not just the default), the different-key
-// case is deliberately *not* fixed: there is no room to track the inner
-// frame, so it is left as literal content inside the (still correctly
-// closing, thanks to the stack rather than an overwritable slot) outer
-// span.
+// 02. At depth 1 there is no room for the inner frame: it is left as literal
+// content inside the outer span, which still closes.
 #[test]
 fn sym_nested_02_depth1_outer_still_closes_inner_untracked() {
     let src = b"**bold *italic* still-bold**";
@@ -2017,9 +2012,8 @@ fn balanced_nested_18_innermost_empty_content() {
 
 // 19. Text between an outer pair's open and a same-type inner pair's open
 // is not a separate top-level text span — same principle as the
-// symmetric tests above, applied to asymmetric. Confirms the existing
-// `balanced_nested_01` shape (`objects` content is unchanged) while also
-// locking in that `texts` stays empty.
+// symmetric tests above, applied to asymmetric. Same `objects` content as
+// `balanced_nested_01`, and `texts` stays empty.
 #[test]
 fn balanced_nested_19_filler_between_nested_opens_not_a_separate_text_span() {
     let src = b"{a {b} c}";
@@ -2234,9 +2228,9 @@ fn shared_close_07_nested_different_open_bytes_shared_close() {
 //
 //   - symmetric greedy mode (`parse_inside = false`), both `balanced`
 //     settings — used for code spans and balanced quote-like rules;
-//   - the legacy asymmetric memchr search (`balanced = false,
+//   - the asymmetric memchr search (`balanced = false,
 //     parse_inside = false`) — used for autolinks;
-//   - the legacy chained two-phase search (both components
+//   - the chained two-phase search (both components
 //     `parse_inside = false`) — used for `[text](url)`-style links.
 //
 // Opacity (`parse_inside`) is unaffected in every case below — none of
@@ -2294,8 +2288,8 @@ fn escape_close_04_balanced_symmetric_escaped_quote() {
     assert_eq!(txt(src, st.codes[0]), "a\\\"b");
 }
 
-// 05. An escaped closing `>` on an autolink (the legacy asymmetric memchr
-//     path) is skipped; the real, unescaped `>` closes it instead.
+// 05. An escaped closing `>` on an autolink (the asymmetric memchr path) is
+//     skipped; the real, unescaped `>` closes it instead.
 #[test]
 fn escape_close_05_autolink_escaped_close() {
     let src = br"<http://example.com\>more>";
@@ -2635,9 +2629,9 @@ fn held_10_unclosed_frame_with_hard_break() {
     assert_eq!(all(src, &st.texts), vec!["a", "b"]);
 }
 
-// 11. Behaviour without a newline is unchanged by the fix
+// 11. A run without any newline: the final flush alone releases the text
 #[test]
-fn held_11_single_line_no_newline_unchanged() {
+fn held_11_single_line_without_newline() {
     let src = b"*no close";
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.texts), vec!["no close"]);
@@ -2647,12 +2641,12 @@ fn held_11_single_line_no_newline_unchanged() {
 // dead close bytes: failed forward searches are not repeated
 // ================================================================
 //
-// The legacy `balanced = false` asymmetric path and the both-opaque
+// The `balanced = false` asymmetric path and the both-opaque
 // `chained` path search forward to the run's end for their close byte. A
 // failed search marks that byte as absent for the rest of the run, so a
 // later opener of the same kind is rejected without rescanning. These cases
-// pin the observable contract: output is identical to a full rescan, and
-// openers of a *different* kind are unaffected by another kind's failure.
+// pin the contract: a failed search for one close byte never affects
+// openers whose close byte differs, and escaped close bytes do not count.
 
 // 01. A failed `>` search does not affect a later `[..](..)` link
 #[test]
@@ -2695,14 +2689,12 @@ fn dead_04_repeated_unclosed_url_component() {
     assert_eq!(txt(src, st.texts[0]), "[a](b [c](d");
 }
 
-// 05. An escaped close byte counts as absent, and a later unescaped one
-//     is still found by a later opener's search
+// 05. An escaped close byte does not count: the first opener pairs with the
+//     next unescaped one, running over the escaped byte and the second opener
 #[test]
 fn dead_05_escaped_close_then_real_close() {
     let src = b"<a\\> <b>";
     let (st, _) = run_inline!(src);
-    // The first `<` finds the unescaped `>` at the end: its span runs over
-    // the escaped one and the second `<`. Unchanged behaviour, pinned here.
     assert_eq!(st.autolinks.len(), 1);
     assert_eq!(txt(src, st.autolinks[0]), "a\\> <b");
 }
@@ -2719,8 +2711,7 @@ fn dead_06_url_failure_does_not_poison_text_close() {
     assert_eq!(txt(src, st.texts[0]), "[a](b [c]");
 }
 
-// 07. A run of many unclosed `[` openers completes in linear time: a full
-//     rescan per opener would take tens of seconds at this size
+// 07. A run of many unclosed `[` openers completes in linear time
 #[test]
 fn dead_07_many_unclosed_openers_linear() {
     let src: Vec<u8> = b"[a".repeat(100_000);
@@ -2732,4 +2723,36 @@ fn dead_07_many_unclosed_openers_linear() {
         started.elapsed() < std::time::Duration::from_secs(5),
         "unclosed-opener scan is not linear"
     );
+}
+
+// ================================================================
+// pending slot (`parse_inside = true`, `balanced = false`): contract
+// ================================================================
+//
+// The off-stack pending slot tracks one symmetric opener at a time and never
+// nests. These pin that contract directly, since the slot's own code path is
+// the one the `run_inline!` grammar exercises for `*`.
+
+// 01. A different-count opener while one is pending replaces the slot:
+//     `**a *b* c**` yields the inner italic only, never the outer bold
+#[test]
+fn pending_01_different_count_replaces_slot() {
+    let src = b"**a *b* c**";
+    let (st, _) = run_inline!(src);
+    assert!(st.bolds.is_empty());
+    assert_eq!(st.italics.len(), 1);
+    assert_eq!(txt(src, st.italics[0]), "b");
+    assert_eq!(st.texts.len(), 2);
+    assert_eq!(txt(src, st.texts[0]), "**a ");
+    assert_eq!(txt(src, st.texts[1]), " c**");
+}
+
+// 02. A same-count occurrence closes the slot; the next one opens afresh
+#[test]
+fn pending_02_same_count_closes_then_reopens() {
+    let src = b"*a* *b*";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.italics.len(), 2);
+    assert_eq!(txt(src, st.italics[0]), "a");
+    assert_eq!(txt(src, st.italics[1]), "b");
 }

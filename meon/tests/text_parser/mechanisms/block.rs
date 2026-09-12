@@ -657,8 +657,8 @@ fn nest_14_max_nest_limits_cont_depth() {
 
 // 15. At max_nest = 1, a bullet does NOT open inside a freshly-opened continuation.
 //     The `>` opens one cont frame (depth 1 == max_nest); the leaf is then gated
-//     out and `- item` is left for inline. This is exactly the pre-nesting
-//     behaviour and is what the `@open_block` depth gate guarantees.
+//     out and `- item` is left for inline. The `@open_block` depth gate
+//     guarantees this.
 #[test]
 fn nest_15_no_bullet_inside_cont_max_nest_1() {
     let src = b"> - item";

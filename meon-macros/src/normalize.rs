@@ -18,7 +18,7 @@
 //!
 //! It runs on the stripped stream (no `[N]` capacities) and only after the
 //! front-end has validated the grammar, so every keyword and setting can be
-//! assumed present. Anything unrecognised is passed through untouched, after
+//! assumed present. Anything unrecognised is passed through as is, after
 //! the recognised statements of its block.
 
 use proc_macro2::{
@@ -269,7 +269,7 @@ fn canonicalize_kv_body(ts: TS2) -> TS2 {
 /// Split a flat token list into statements, each starting at a keyword
 /// identifier (per `is_kw`) and running up to the next keyword. Trailing `,`
 /// and `;` separators are trimmed from every statement. Tokens before the
-/// first keyword are returned separately, untouched.
+/// first keyword are returned separately, as is.
 fn split_by_keyword(
     tokens: &[TT],
     is_kw: impl Fn(&Ident) -> bool,

@@ -27,17 +27,9 @@
 //!
 //! ## Scalar typing is a *post-pass*, not part of the engine
 //!
-//! Earlier versions routed each member value and array element to a typed
-//! field (`trues` / `falses` / `nulls` / `nums`) *inside* the engine's hot
-//! loop, via a `scalar { ... }` grammar rule. That cost a push per value on
-//! the critical path for a feature most callers do not need on every parse —
-//! and it baked a JSON-specific concern (first-byte type tagging) into the
-//! generic engine.
-//!
-//! Typing now lives entirely outside the engine, as methods on
-//! [`JsonContent`]. The engine emits only structure (`objects`, `arrays`,
-//! `strings`, `members`, `scalars`); the caller asks for typing when — and
-//! only when — it wants it:
+//! The engine emits only structure (`objects`, `arrays`, `strings`,
+//! `members`, `scalars`). Typing lives outside it, as methods on
+//! [`JsonContent`]; the caller asks for it when it wants it:
 //!
 //! ```ignore
 //! let c = JsonParser::parse(input);

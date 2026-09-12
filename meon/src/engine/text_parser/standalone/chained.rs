@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+    // ---- Paragraph-bounded behaviour ------------------------------------ //
 
     // 16. An empty line aborts an unclosed first component: components never
     //     pair across paragraphs

@@ -9,12 +9,8 @@
 //! Internally the implementation is split by the number of target bytes:
 //!
 //! - **N = 0**: no target byte can ever match — returns `None` immediately
-//!   without touching `src`. This case did not arise from any call site
-//!   before the `parse_text!` dispatcher stopped folding `eol` into the
-//!   inline trigger set (see `text_parser::mod` for why): a grammar with no
-//!   `on_trigger` blocks at all now reaches `find_any` with an empty target
-//!   array. Guarding it here, rather than at every call site, is what keeps
-//!   this function safe to call with any const array size.
+//!   without touching `src`. A grammar with no `on_trigger` blocks reaches
+//!   `find_any` with an empty target array.
 //! - **N = 1 – 3**: delegates to the [`memchr`] crate (`memchr`, `memchr2`,
 //!   `memchr3`). These routines are hand-tuned with platform SIMD and are the
 //!   fastest available option for small sets.

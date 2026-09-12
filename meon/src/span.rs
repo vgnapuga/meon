@@ -31,10 +31,7 @@ pub struct Span {
 impl Span {
     /// Construct a span from explicit `start` and `end` byte offsets.
     ///
-    /// # Panics
-    ///
-    /// Does not panic — it is the caller's responsibility to ensure
-    /// `start <= end <= source.len()`.
+    /// The caller is responsible for `start <= end <= source.len()`.
     pub fn new(start: u32, end: u32) -> Self {
         Self { start, end }
     }

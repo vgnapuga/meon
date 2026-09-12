@@ -18,10 +18,8 @@
 //! [`crate::normalize`]. Two rules follow from that:
 //!
 //! - **Unknown keywords are errors.** An identifier in statement position that
-//!   this module does not recognise (`memchr` for `on_trigger`, a typo, a
-//!   keyword from the wrong section) is reported here, located, with the list
-//!   of what was expected — never passed on to fail inside a runtime macro
-//!   with `no rules expected this token`.
+//!   this module does not recognise (a typo, a keyword from the wrong section)
+//!   is reported here, located, with the list of what was expected.
 //! - **Everything the runtime needs is required.** A `symmetric` /
 //!   `asymmetric` body and every `chained` component must state both
 //!   `parse_inside` and `balanced`; a `chained` rule needs its two components
@@ -175,7 +173,7 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
 }
 
 /// Read the boolean value of a `name = true|false;` flag inside a rule body.
-/// Returns `None` when the flag is absent (callers pick the rule's default).
+/// Returns `None` when the flag is absent or its value is not `true` / `false`.
 fn flag_value(ts: TS2, name: &str) -> Option<bool> {
     let mut c = Cursor::new(ts);
     while let Some(tt) = c.peek().cloned() {

@@ -11,16 +11,16 @@
 //!
 //! Internally the macro is a small three-stage pipeline:
 //!
-//! * [`cursor`] — a hand-rolled token-stream reader used by every stage;
-//! * [`collect`] — the front-end: walks the grammar tokens and fills a
-//!   [`model::CF`] plus a list of [`model::StandaloneRule`]s; the only place
+//! * `cursor` — a hand-rolled token-stream reader used by every stage;
+//! * `collect` — the front-end: walks the grammar tokens and fills a
+//!   `model::CF` plus a list of `model::StandaloneRule`s; the only place
 //!   that reports grammar errors;
-//! * [`strip`] / [`normalize`] — token surgery on the sections handed to the
+//! * `strip` / `normalize` — token surgery on the sections handed to the
 //!   runtime macros: capacities removed, the `inline` section rewritten into
 //!   the one shape those macros pattern-match;
-//! * [`codegen`] / [`methods`] — the back-end: turns that data into tokens.
+//! * `codegen` / `methods` — the back-end: turns that data into tokens.
 //!
-//! The front-end returns [`error::Result`]; a malformed grammar surfaces as a
+//! The front-end returns `error::Result`; a malformed grammar surfaces as a
 //! located `compile_error!` instead of a proc-macro panic. Only [`define_parser`]
 //! lives here because `#[proc_macro]` entry points must reside in the crate root.
 
@@ -81,28 +81,12 @@ use crate::strip::strip;
 /// | `eol`       | Line terminator (typically `\n`)                               |
 /// | `tab`       | Tab character                                                  |
 /// | `escape`    | Escape prefix that suppresses the next byte                    |
-/// | `max_nest`  | Optional. Bounded nesting depth cap forwarded to               |
-/// |             | `parse_inline!`'s two stacks — `symmetric` with                |
-/// |             | `parse_inside = true; balanced = true;` and                    |
-/// |             | `asymmetric` with `balanced = true` and/or                     |
-/// |             | `parse_inside = true`. A grammar-wide setting,                 |
-/// |             | declared alongside the other context bytes — not               |
-/// |             | inside `inline { ... }`.                                       |
-/// |             |                                                                |
-/// |             | **Absent => `1`**, which reproduces pre-nesting behaviour      |
-/// |             | exactly (single pending slot / single outer span, no           |
-/// |             | self-nesting). This is the default and is also the fast        |
-/// |             | path: at `max_nest = 1`, every grammar rule whose own          |
-/// |             | `balanced` and `parse_inside` flags are both `false` skips     |
-/// |             | the bounded-stack machinery entirely and runs the original,    |
-/// |             | unmodified single-pass scan — there is no per-iteration cost   |
-/// |             | from the nesting feature unless a rule actually opts into it.  |
-/// |             |                                                                |
-/// |             | To opt in to deeper, type-aware nesting (e.g. for `{ [ ] }`    |
-/// |             | style structures, or `**bold *italic* bold**`), set it         |
-/// |             | explicitly to the deepest level your grammar needs, alongside  |
-/// |             | the other context bytes, e.g.:                                 |
-/// |             | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
+/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline      |
+/// |             | stack (`symmetric` with `balanced = true`, `asymmetric`        |
+/// |             | with `balanced = true` or `parse_inside = true`,               |
+/// |             | `key_value`) and the block stack (`cont` / `fence`). At `1`    |
+/// |             | nothing self-nests. Declared alongside the other context       |
+/// |             | bytes: `sep = ..., escape = ..., max_nest = 4;`                |
 ///
 /// ## `inline { ... }` section
 ///
@@ -242,11 +226,8 @@ fn expand(input: TS2) -> Result<TS2> {
     bc.skip(',');
     let esc = bc.named_lit("escape")?;
 
-    // `max_nest` is an optional fifth context setting, alongside
-    // sep/eol/tab/escape — a grammar-wide value, not specific to `inline`,
-    // even though it currently only bounds `parse_inline!`'s two stacks.
-    // `, max_nest = N` after `escape`, before the header's closing `;`.
-    // Absent ⇒ `1`, which reproduces pre-nesting behaviour exactly.
+    // `max_nest` is an optional fifth context setting: `, max_nest = N` after
+    // `escape`, before the header's closing `;`. Absent ⇒ `1`.
     let max_nest: Literal = if matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ',') {
         bc.advance();
         bc.named_lit("max_nest")?

@@ -21,17 +21,14 @@ const MAX_DEPTH: usize = 32;
 /// This mirrors [`crate::parse_block!`]'s peel/open/close machinery restricted
 /// to a single `cont` rule — including its `max_nest` cap: markers past the
 /// `max_nest`-th on a line are ordinary content, exactly as in the full parse.
-/// So — unlike the old flat grouper — `find_*` now sees the same nesting the
-/// full parse does: `> > a` yields two spans, not one.
+/// `find_*` therefore sees the same nesting as the full parse: `> > a` yields
+/// two spans, not one.
 ///
 /// Frames closing at the same point are emitted **innermost-first**, matching
 /// the full parser's close order.
 ///
-/// This is the one standalone family that carries genuine cross-line state (a
-/// small bounded frame stack). Line rules can never nest, and inline rules
-/// already nest via the shared engine stack; only same-type block continuation
-/// needed this. Everything else in this module remains a stateless forward
-/// scan.
+/// The only standalone iterator with cross-line state (a small bounded frame
+/// stack); every other iterator in this module is a stateless forward scan.
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -69,7 +66,7 @@ impl<'a> ContIter<'a> {
     ///   itself, so `"> > x"` reads as depth 2 rather than one marker plus
     ///   content. Same convention as [`crate::parse_block!`].
     /// - `max_nest` — the grammar's bounded-nesting cap. At most this many
-    ///   frames open per line (clamped to the physical [`MAX_DEPTH`] storage
+    ///   frames open per line (clamped to the physical `MAX_DEPTH` storage
     ///   ceiling); markers beyond it are content, matching the full parse.
     pub fn new(src: &'a [u8], byte: u8, eol: u8, sep: u8, tab: u8, max_nest: usize) -> Self {
         Self {
@@ -328,7 +325,7 @@ mod tests {
         assert_eq!(it.next(), None);
     }
 
-    // ---- Nesting-aware behaviour (the new contract) -------------------- //
+    // ---- Nesting-aware behaviour ---------------------------------------- //
 
     // 16. `> >` on one line opens two frames: inner then outer, both to run end
     #[test]

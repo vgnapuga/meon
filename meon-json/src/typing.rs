@@ -30,10 +30,10 @@ pub enum ScalarKind {
     Null,
 }
 
-/// Classify a scalar by its first byte, exactly as the old in-engine `scalar`
-/// table did: digits and a leading `-` are numbers, `t`/`f`/`n` the three
-/// keyword constants. A first byte of `"`, `{`, `[` (a string or container) —
-/// or anything else — yields `None`, so such values are never mis-typed.
+/// Classify a scalar by its first byte: digits and a leading `-` are numbers,
+/// `t`/`f`/`n` the three keyword constants. A first byte of `"`, `{`, `[` (a
+/// string or container) — or anything else — yields `None`, so such values
+/// are never mis-typed.
 #[inline]
 fn classify(first: u8) -> Option<ScalarKind> {
     match first {
@@ -50,13 +50,9 @@ fn classify(first: u8) -> Option<ScalarKind> {
 ///
 /// # Safety invariant relied on by every `get_unchecked` in this file
 ///
-/// Every index used here comes from a [`Span`] produced by the parser, and
-/// the engine bounds every span it emits by the source length throughout
-/// parsing — a span's `end` is therefore never greater than `src.len()`.
-/// Every `get_unchecked` call below is additionally guarded by the same
-/// `< end` / `> start` condition a safe `src[i]` would have checked at
-/// runtime; removing the check only removes a redundant re-verification of
-/// a bound the adjacent loop condition already enforces.
+/// Every index used here comes from a [`Span`] produced by the parser, whose
+/// `end` never exceeds `src.len()`, and every access is additionally guarded
+/// by the same `< end` / `> start` condition a checked index would test.
 #[inline]
 fn trim_end(src: &[u8], start: usize, mut end: usize) -> usize {
     while end > start {
@@ -116,18 +112,7 @@ impl JsonContent<'_> {
     }
 
     /// Trim and classify one segment, visiting it if its first byte types.
-    /// Unifies member values, top-level scalars, and array elements into a
-    /// single inlineable path.
-    ///
-    /// An `#[inline(always)]` variant was tried here to test whether the
-    /// regression measured on `wide_strings` (member/scalar/array-element
-    /// classification consolidated into this one shared function, instead
-    /// of duplicated separately) was the inlining heuristic declining to
-    /// inline this at all three call sites. Measured, not assumed: forcing
-    /// it made `wide_strings` *worse*, not better — ruling out "not enough
-    /// inlining" as the cause, since more of it moved further in the wrong
-    /// direction. Left at plain `#[inline]`; the actual mechanism for the
-    /// `wide_strings`-specific regression is not confirmed.
+    /// Shared by member values, top-level scalars and array elements.
     #[inline]
     fn process_scalar(
         src: &[u8],

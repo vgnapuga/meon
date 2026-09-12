@@ -218,8 +218,8 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // 11. A close marker on the next line of the same paragraph now completes
-    //     the pair — a single newline no longer separates open from close.
+    // 11. A close marker on the next line of the same paragraph completes the
+    //     pair: a single newline does not separate open from close.
     #[test]
     fn test_11_close_marker_across_single_newline() {
         let src = b"<<a\n>";
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+    // ---- Paragraph-bounded behaviour ------------------------------------ //
 
     // 16. An empty line (two consecutive eol bytes) aborts a pending opener:
     //     delimiters in different paragraphs never pair.

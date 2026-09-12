@@ -1080,9 +1080,8 @@ fn integ_nest_06_fence_inside_blockquote_no_inline() {
 }
 
 // 07. Nested emphasis: a different-count inner delimiter inside an outer
-//     bold now resolves both levels — the inner `*` opens its own frame on
-//     the bounded stack instead of overwriting the single pending slot the
-//     pre-nesting engine used, which used to lose the outer `**` entirely.
+//     bold resolves both levels; the inner `*` opens its own frame on the
+//     bounded stack.
 #[test]
 fn integ_nest_07_nested_emphasis_bold_then_italic() {
     let src = b"**bold *italic* still-bold**\n";
@@ -1160,9 +1159,10 @@ fn integ_unclosed_03_bold_with_newline() {
     assert_eq!(txt(src, c.texts[0]), "unclosed bold");
 }
 
-// 04. Emphasis that does close across a line break is unaffected
+// 04. Emphasis that closes across a line break keeps its span and the
+//     text on either side
 #[test]
-fn integ_unclosed_04_closed_across_newline_unaffected() {
+fn integ_unclosed_04_closed_across_newline() {
     let src = b"see **note\nhere** end\n";
     let c = MarkdownParser::parse(src);
     assert_eq!(c.bolds.len(), 1);

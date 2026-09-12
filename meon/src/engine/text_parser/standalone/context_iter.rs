@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(spans, vec![Span::new(18, 19)]);
     }
 
-    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+    // ---- Paragraph-bounded behaviour ------------------------------------ //
 
     // 09. A pair spanning a single newline closes, with a covered close
     //     candidate on the first line skipped

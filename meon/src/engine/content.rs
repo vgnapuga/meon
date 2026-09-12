@@ -21,7 +21,7 @@
 //!
 //! ## `inline { field: Type [div] }`
 //!
-//! Stores `Vec<Type>` — a user-defined struct carrying multiple [`Span`] fields.
+//! Stores `Vec<Type>` — a user-defined struct carrying multiple [`Span`](crate::span::Span) fields.
 //! Used for inline constructs that have *more than one* span component, such as
 //! a link (`text` span + `url` span) or a key-value pair (`key` span +
 //! `value` span). The type must be defined by the grammar author.

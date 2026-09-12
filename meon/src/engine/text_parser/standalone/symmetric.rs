@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(iter.next(), None);
     }
 
-    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+    // ---- Paragraph-bounded behaviour ------------------------------------ //
 
     // 16. An empty line (two consecutive eol bytes) aborts a pending opener:
     //     delimiters in different paragraphs never pair.
