@@ -10,26 +10,33 @@
 //! All three return [`Result`] so a malformed grammar surfaces as a located
 //! `compile_error!` rather than a panic.
 //!
-//! # `on_trigger` keyword
+//! # Single authority on grammar shape
 //!
-//! Inside `inline { ... }`, byte-triggered inline blocks are introduced with
-//! `on_trigger(b1, b2, ...) { ... }`.  This keyword replaced the old `memchr(...)`
-//! alias and better reflects the declarative intent: "when any of these bytes
-//! is encountered, apply the following rules".
+//! This front-end is the only parser of the DSL that reports errors. The
+//! runtime `parse_*!` macros pattern-match the same tokens again, but they
+//! only ever see a stream that passed here and was then canonicalised by
+//! [`crate::normalize`]. Two rules follow from that:
 //!
-//! The front-end accepts **both** spellings for backward compatibility during
-//! migration, but `memchr` is considered deprecated and may be removed in a
-//! future version.
+//! - **Unknown keywords are errors.** An identifier in statement position that
+//!   this module does not recognise (`memchr` for `on_trigger`, a typo, a
+//!   keyword from the wrong section) is reported here, located, with the list
+//!   of what was expected — never passed on to fail inside a runtime macro
+//!   with `no rules expected this token`.
+//! - **Everything the runtime needs is required.** A `symmetric` /
+//!   `asymmetric` body and every `chained` component must state both
+//!   `parse_inside` and `balanced`; a `chained` rule needs its two components
+//!   and its `prefix`; a `key_value` rule needs `eq`, `allow_sep`, `end`,
+//!   `key` and `value`. A missing one is a located error, not a silently
+//!   skipped standalone rule.
 //!
-//! # Optional tokens
-//!
-//! Genuinely optional fields (e.g. `eq`/`end` of a `key_value` block) stay
-//! lenient and are guarded by the final `if let` rather than a hard error.
+//! Order and separators, on the other hand, are *not* enforced here: settings
+//! and sub-rules may come in any order, with or without `;` / `,`, and the
+//! canonicalisation pass rewrites them into the shape the runtime expects.
 
 use proc_macro2::{Delimiter, Ident, Literal, Span as PS, TokenStream as TS2, TokenTree as TT};
 
 use crate::cursor::Cursor;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::model::{CF, StandaloneRule};
 
 /// Walk the `inline { ... }` section.
@@ -57,16 +64,18 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
                     c.skip(';');
                     cf.inline_simple.push((f, cap));
                 }
-                // `on_trigger` is the canonical keyword.
-                // `memchr` is accepted as a deprecated alias.
-                "on_trigger" | "memchr" => {
+                "on_trigger" => {
                     c.advance();
                     c.next_group(Delimiter::Parenthesis, "on_trigger bytes")?;
                     let body = c.next_group(Delimiter::Brace, "on_trigger body")?;
                     collect_on_trigger(body.stream(), cf)?;
                 }
                 _ => {
-                    c.advance();
+                    return Err(unknown_keyword(
+                        &id,
+                        "inline",
+                        "`merge_simple`, `hard_break`, `on_trigger` or `fallback`",
+                    ));
                 }
             }
         } else {
@@ -74,6 +83,26 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Located error for an identifier in statement position that the section
+/// does not recognise.
+fn unknown_keyword(id: &Ident, section: &str, expected: &str) -> Error {
+    Error::new(
+        id.span(),
+        format!("unknown keyword `{id}` in `{section}`; expected {expected}"),
+    )
+}
+
+/// Read a required `name = true|false;` flag from a rule body, or error at
+/// `span` naming the rule kind.
+fn require_flag(ts: TS2, name: &str, span: PS, ctx: &str) -> Result<bool> {
+    flag_value(ts, name).ok_or_else(|| {
+        Error::new(
+            span,
+            format!("`{ctx}` body is missing `{name} = true|false;`"),
+        )
+    })
 }
 
 /// Walk an `on_trigger(..) { ... }` body.
@@ -89,8 +118,10 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     let byte_lit = c.expect_lit("symmetric byte")?;
                     let body = c.next_group(Delimiter::Brace, "symmetric body")?;
                     collect_match_arms(body.stream(), &["parse_inside", "balanced"], cf)?;
-                    let opaque = !flag_value(body.stream(), "parse_inside").unwrap_or(true);
-                    collect_symmetric_standalone(body.stream(), byte_lit, opaque, cf)?;
+                    let parse_inside =
+                        require_flag(body.stream(), "parse_inside", body.span(), "symmetric")?;
+                    require_flag(body.stream(), "balanced", body.span(), "symmetric")?;
+                    collect_symmetric_standalone(body.stream(), byte_lit, !parse_inside, cf)?;
                 }
                 "asymmetric" => {
                     c.advance();
@@ -99,8 +130,16 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     let close_lit = c.expect_lit("asymmetric close")?;
                     let body = c.next_group(Delimiter::Brace, "asymmetric body")?;
                     collect_match_arms(body.stream(), &["balanced", "parse_inside"], cf)?;
-                    let opaque = !flag_value(body.stream(), "parse_inside").unwrap_or(true);
-                    collect_asymmetric_standalone(body.stream(), open_lit, close_lit, opaque, cf)?;
+                    let parse_inside =
+                        require_flag(body.stream(), "parse_inside", body.span(), "asymmetric")?;
+                    require_flag(body.stream(), "balanced", body.span(), "asymmetric")?;
+                    collect_asymmetric_standalone(
+                        body.stream(),
+                        open_lit,
+                        close_lit,
+                        !parse_inside,
+                        cf,
+                    )?;
                 }
                 "chained" => {
                     c.advance();
@@ -121,7 +160,11 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     collect_kv_standalone(inner.stream(), ty, f, cf)?;
                 }
                 _ => {
-                    c.advance();
+                    return Err(unknown_keyword(
+                        &id,
+                        "on_trigger",
+                        "`symmetric`, `asymmetric`, `chained` or `key_value`",
+                    ));
                 }
             }
         } else {
@@ -140,10 +183,11 @@ fn flag_value(ts: TS2, name: &str) -> Option<bool> {
             if id == name {
                 c.advance();
                 c.skip_eq_alone();
-                if let Some(TT::Ident(v)) = c.peek() {
-                    return Some(v == "true");
-                }
-                return None;
+                return match c.peek() {
+                    Some(TT::Ident(v)) if v == "true" => Some(true),
+                    Some(TT::Ident(v)) if v == "false" => Some(false),
+                    _ => None,
+                };
             }
         }
         c.advance();
@@ -276,7 +320,19 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                         c.advance();
                     }
                 }
-                c.next_group(Delimiter::Brace, "chained settings")?;
+                let settings = c.next_group(Delimiter::Brace, "chained settings")?;
+                require_flag(
+                    settings.stream(),
+                    "parse_inside",
+                    settings.span(),
+                    "chained component",
+                )?;
+                require_flag(
+                    settings.stream(),
+                    "balanced",
+                    settings.span(),
+                    "chained component",
+                )?;
                 if c.is_fat_arrow() {
                     c.pos += 2;
                     let fi = c.next_ident("chained field")?;
@@ -319,23 +375,28 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
         }
     }
 
-    if let (Some(o1), Some(c1), Some(o2), Some(c2), Some(p), Some(pfi), Some(ffi), Some(sfi)) =
-        (open1, close1, open2, close2, prefix_lit, pf, ff, sf)
-    {
-        cf.standalone.push(StandaloneRule::Chained {
-            field: outer_field,
-            open1: o1,
-            close1: c1,
-            open2: o2,
-            close2: c2,
-            prefix: p,
-            ty,
-            pf: pfi,
-            ff: ffi,
-            sf: sfi,
-        });
+    match (open1, close1, open2, close2, prefix_lit, pf, ff, sf) {
+        (Some(o1), Some(c1), Some(o2), Some(c2), Some(p), Some(pfi), Some(ffi), Some(sfi)) => {
+            cf.standalone.push(StandaloneRule::Chained {
+                field: outer_field,
+                open1: o1,
+                close1: c1,
+                open2: o2,
+                close2: c2,
+                prefix: p,
+                ty,
+                pf: pfi,
+                ff: ffi,
+                sf: sfi,
+            });
+            Ok(())
+        }
+        _ => Err(Error::new(
+            outer_field.span(),
+            "`chained` rule needs two `| open, close | { ... } => field` components \
+             and a `prefix | byte | => field`",
+        )),
     }
-    Ok(())
 }
 
 /// Extract the settings of a `key_value` block.
@@ -343,7 +404,7 @@ fn collect_kv_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF) -> R
     let mut c = Cursor::new(ts);
     let mut eq_lit: Option<Literal> = None;
     let mut end_lit: Option<Literal> = None;
-    let mut allow_sep = false;
+    let mut allow_sep: Option<bool> = None;
     let mut kf: Option<Ident> = None;
     let mut vf: Option<Ident> = None;
 
@@ -359,9 +420,11 @@ fn collect_kv_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF) -> R
                 "allow_sep" => {
                     c.advance();
                     c.skip_eq_alone();
-                    if let Some(TT::Ident(v)) = c.next_tt() {
-                        allow_sep = v == "true";
-                    }
+                    allow_sep = match c.next_tt() {
+                        Some(TT::Ident(v)) if v == "true" => Some(true),
+                        Some(TT::Ident(v)) if v == "false" => Some(false),
+                        _ => None,
+                    };
                     c.skip(';');
                 }
                 "end" => {
@@ -396,18 +459,25 @@ fn collect_kv_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF) -> R
         }
     }
 
-    if let (Some(eq), Some(end), Some(k), Some(v)) = (eq_lit, end_lit, kf, vf) {
-        cf.standalone.push(StandaloneRule::KeyValue {
-            field: outer_field,
-            eq,
-            end,
-            allow_sep,
-            ty,
-            kf: k,
-            vf: v,
-        });
+    match (eq_lit, allow_sep, end_lit, kf, vf) {
+        (Some(eq), Some(allow_sep), Some(end), Some(k), Some(v)) => {
+            cf.standalone.push(StandaloneRule::KeyValue {
+                field: outer_field,
+                eq,
+                end,
+                allow_sep,
+                ty,
+                kf: k,
+                vf: v,
+            });
+            Ok(())
+        }
+        _ => Err(Error::new(
+            outer_field.span(),
+            "`key_value` rule needs `eq = byte;`, `allow_sep = true|false;`, `end = byte;`, \
+             `key => field,` and `value => field,`",
+        )),
     }
-    Ok(())
 }
 
 /// Collect the `... => field [N]` arms of a symmetric/asymmetric block.
@@ -451,8 +521,7 @@ pub(crate) fn collect_lines(ts: TS2, cf: &mut CF) -> Result<()> {
                 "line" => false,
                 "line_simple" => true,
                 _ => {
-                    c.advance();
-                    continue;
+                    return Err(unknown_keyword(&id, "lines", "`line` or `line_simple`"));
                 }
             };
             c.advance();
@@ -521,7 +590,11 @@ pub(crate) fn collect_blocks(ts: TS2, cf: &mut CF) -> Result<()> {
                     cf.block_simple.push((f, cap));
                 }
                 _ => {
-                    c.advance();
+                    return Err(unknown_keyword(
+                        &id,
+                        "blocks",
+                        "`block_simple`, `block` or `fallback`",
+                    ));
                 }
             },
             _ => {
@@ -557,7 +630,7 @@ fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
                     cf.standalone.push(StandaloneRule::Cont { field: f, byte });
                 }
             } else {
-                c.advance();
+                return Err(unknown_keyword(&id, "block_simple", "`fence` or `cont`"));
             }
         } else {
             c.advance();
@@ -620,6 +693,13 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                     kind_var,
                     body: body_group.stream(),
                 });
+            }
+            Some(TT::Ident(id)) => {
+                return Err(unknown_keyword(
+                    &id,
+                    "block",
+                    "`num` or a `(pattern)` marker",
+                ));
             }
             _ => {
                 c.advance();
@@ -788,16 +868,154 @@ mod tests {
         assert_eq!(cf.inline_simple.len(), 1);
     }
 
-    // 08. Deprecated `memchr` alias is still accepted
+    // 08. The old `memchr` spelling is an unknown keyword, reported here
     #[test]
-    fn test_08_memchr_alias_accepted() {
-        let cf = ci(quote! {
+    fn test_08_memchr_is_unknown_keyword() {
+        let e = err_inline(quote! {
             memchr(b'*') {
                 symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], }
             }
         });
-        assert_eq!(cf.standalone.len(), 1);
-        assert_eq!(standalone_field(&cf.standalone[0]).to_string(), "italics");
+        assert!(e.contains("unknown keyword `memchr` in `inline`"), "{e}");
+        assert!(e.contains("on_trigger"), "{e}");
+    }
+
+    fn err_inline(ts: TS2) -> String {
+        let mut cf = CF::default();
+        collect_inline(ts, &mut cf)
+            .unwrap_err()
+            .to_compile_error()
+            .to_string()
+    }
+
+    // 16. Unknown keywords in every section are located errors
+    #[test]
+    fn test_16_unknown_keywords_per_section() {
+        let e = err_inline(
+            quote! { on_trigger(b'*') { symetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], } } },
+        );
+        assert!(
+            e.contains("unknown keyword `symetric` in `on_trigger`"),
+            "{e}"
+        );
+
+        let mut cf = CF::default();
+        let e = collect_lines(
+            quote! { lines(b'#', max = 6) |n|: H { level: n } => headings [200]; },
+            &mut cf,
+        )
+        .unwrap_err()
+        .to_compile_error()
+        .to_string();
+        assert!(e.contains("unknown keyword `lines` in `lines`"), "{e}");
+
+        let mut cf = CF::default();
+        let e = collect_blocks(
+            quote! { fence(b'`', min = 3) => fenced_codes [400]; },
+            &mut cf,
+        )
+        .unwrap_err()
+        .to_compile_error()
+        .to_string();
+        assert!(e.contains("unknown keyword `fence` in `blocks`"), "{e}");
+
+        let mut cf = CF::default();
+        let e = collect_blocks(
+            quote! { block_simple { fences(b'`', min = 3) => fenced_codes [400]; } },
+            &mut cf,
+        )
+        .unwrap_err()
+        .to_compile_error()
+        .to_string();
+        assert!(
+            e.contains("unknown keyword `fences` in `block_simple`"),
+            "{e}"
+        );
+
+        let mut cf = CF::default();
+        let e = collect_blocks(
+            quote! { block { number(b'0'..=b'9', end = b'.') |n, k|: O { k, n } => items [80]; } },
+            &mut cf,
+        )
+        .unwrap_err()
+        .to_compile_error()
+        .to_string();
+        assert!(e.contains("unknown keyword `number` in `block`"), "{e}");
+    }
+
+    // 17. A symmetric / asymmetric body must state both flags, as true|false
+    #[test]
+    fn test_17_missing_or_invalid_flags() {
+        let e = err_inline(
+            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } },
+        );
+        assert!(
+            e.contains("`symmetric` body is missing `balanced = true|false;`"),
+            "{e}"
+        );
+
+        let e = err_inline(
+            quote! { on_trigger(b'<') { asymmetric b'<', b'>' { balanced = false; 1 => autolinks [100], } } },
+        );
+        assert!(
+            e.contains("`asymmetric` body is missing `parse_inside = true|false;`"),
+            "{e}"
+        );
+
+        let e = err_inline(
+            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = maybe; balanced = false; 1 => italics [40], } } },
+        );
+        assert!(e.contains("missing `parse_inside = true|false;`"), "{e}");
+    }
+
+    // 18. Flags may come in any order and the opacity is read correctly
+    #[test]
+    fn test_18_flags_any_order() {
+        let cf = ci(quote! {
+            on_trigger(b'`') {
+                symmetric b'`' { balanced = false; parse_inside = false; 1 => codes [80], }
+            }
+        });
+        assert!(matches!(
+            cf.standalone[0],
+            StandaloneRule::SymmetricExact { opaque: true, .. }
+        ));
+    }
+
+    // 19. A chained rule without its prefix, and a key_value rule without
+    //     `end`, are errors instead of silently emitting no finder
+    #[test]
+    fn test_19_incomplete_chained_and_kv() {
+        let e = err_inline(quote! {
+            on_trigger(b'[') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                } => links [100]
+            }
+        });
+        assert!(e.contains("`chained` rule needs"), "{e}");
+
+        let e = err_inline(quote! {
+            on_trigger(b'=') {
+                key_value: Pair { eq = b'='; allow_sep = true; key => key, value => value, } => pairs [20]
+            }
+        });
+        assert!(e.contains("`key_value` rule needs"), "{e}");
+
+        let e = err_inline(quote! {
+            on_trigger(b'[') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = false; } => text,
+                    | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links [100]
+            }
+        });
+        assert!(
+            e.contains("`chained component` body is missing `balanced"),
+            "{e}"
+        );
     }
 
     // 09. A line marker produces a LineMarker rule and a cf.line entry

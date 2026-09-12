@@ -1,0 +1,5 @@
+error: `symmetric` body is missing `balanced = true|false;`
+ --> tests/ui/fail/symmetric_missing_flag.rs:7:28
+  |
+7 |             symmetric b'*' { parse_inside = true; 1 => italics [40], }
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -229,23 +229,8 @@ pub use crate::parse_block;
 ///   order, not by a precedence table.
 #[macro_export]
 macro_rules! parse_text {
-    // No `max_nest` given — default to `1`, which reproduces the pre-nesting
-    // behaviour exactly. Existing call sites — in particular
-    // `define_parser!`'s expansion before it was updated to pass
-    // `max_nest` itself — keep compiling unchanged.
-    (
-        $src:expr ;
-        sep = $sep:literal, eol = $eol:literal,
-        tab = $tab:literal, escape = $esc:literal ;
-        $($sections:tt)*
-    ) => {
-        $crate::parse_text!(
-            $src ;
-            sep = $sep, eol = $eol, tab = $tab, escape = $esc, max_nest = 1 ;
-            $($sections)*
-        )
-    };
-
+    // `max_nest` is always present: `define_parser!` defaults it to `1`
+    // before emitting this call.
     (
         $src:expr ;
         sep = $sep:literal, eol = $eol:literal,
@@ -319,7 +304,7 @@ macro_rules! parse_text {
             rem=[$($rest)*])
     };
 
-    // Collect on_trigger(...) { ... } blocks — the renamed form of memchr(...) { ... }.
+    // Collect on_trigger(...) { ... } blocks.
     (@ci ctx=$ctx:tt ln=$ln:tt bl=$bl:tt
         ms=$ms:tt ftx=$ftx:tt ilt=[$($ilt:tt)*] hb=$hb:tt finders=[$($f:tt)*]
         rem = [on_trigger($($fn_b:literal),+) { $($inner:tt)* } $($rest:tt)*]

@@ -84,8 +84,8 @@ mod tests {
     #[test]
     fn test_03_nested_in_group() {
         eq(
-            quote! { memchr(b'*') { 1 => italics [40] } },
-            quote! { memchr(b'*') { 1 => italics } },
+            quote! { on_trigger(b'*') { 1 => italics [40] } },
+            quote! { on_trigger(b'*') { 1 => italics } },
         );
     }
 

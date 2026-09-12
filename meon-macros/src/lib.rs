@@ -13,7 +13,11 @@
 //!
 //! * [`cursor`] — a hand-rolled token-stream reader used by every stage;
 //! * [`collect`] — the front-end: walks the grammar tokens and fills a
-//!   [`model::CF`] plus a list of [`model::StandaloneRule`]s;
+//!   [`model::CF`] plus a list of [`model::StandaloneRule`]s; the only place
+//!   that reports grammar errors;
+//! * [`strip`] / [`normalize`] — token surgery on the sections handed to the
+//!   runtime macros: capacities removed, the `inline` section rewritten into
+//!   the one shape those macros pattern-match;
 //! * [`codegen`] / [`methods`] — the back-end: turns that data into tokens.
 //!
 //! The front-end returns [`error::Result`]; a malformed grammar surfaces as a
@@ -26,6 +30,7 @@ mod cursor;
 mod error;
 mod methods;
 mod model;
+mod normalize;
 mod strip;
 
 use proc_macro::TokenStream;
@@ -38,6 +43,7 @@ use crate::cursor::Cursor;
 use crate::error::Result;
 use crate::methods::build_content_methods;
 use crate::model::{CF, crate_path};
+use crate::normalize::canonicalize_inline;
 use crate::strip::strip;
 
 /// Generate a parser from a declarative grammar.
@@ -276,7 +282,7 @@ fn expand(input: TS2) -> Result<TS2> {
     collect_lines(lines_ts.clone(), &mut cf)?;
     collect_blocks(blocks_ts.clone(), &mut cf)?;
 
-    let pt_inline: Vec<_> = strip(inline_ts).into_iter().collect();
+    let pt_inline: Vec<_> = canonicalize_inline(strip(inline_ts)).into_iter().collect();
     let pt_lines: Vec<_> = strip(lines_ts).into_iter().collect();
     let pt_blocks: Vec<_> = strip(blocks_ts).into_iter().collect();
 
@@ -326,7 +332,7 @@ mod tests {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
                 inline {
                     merge_simple = true;
-                    memchr(b'*', b'`') {
+                    on_trigger(b'*', b'`') {
                         symmetric b'`' {
                             parse_inside = false;
                             balanced = false;
@@ -465,7 +471,7 @@ mod tests {
         let e = expand_err(quote! {
             Demo {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
-                inline { memchr(b'*') { symmetric { 1 => bolds [40], } } }
+                inline { on_trigger(b'*') { symmetric { 1 => bolds [40], } } }
             }
         });
         assert!(e.contains("symmetric byte"));
@@ -510,6 +516,63 @@ mod tests {
         let idx = s.find("max_nest").expect("max_nest missing");
         // The literal 4 must appear shortly after the max_nest keyword.
         assert!(s[idx..idx + 30].contains('4'));
+    }
+
+    // 18. Sub-rules declared out of order are emitted in the runtime's order
+    #[test]
+    fn test_18_out_of_order_sub_rules_are_canonicalised() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                inline {
+                    on_trigger(b'*', b'<') {
+                        asymmetric b'<', b'>' { parse_inside = false; balanced = false; 1 => autolinks [100], }
+                        symmetric b'*' { balanced = false; parse_inside = true; 1 => italics [40], }
+                    }
+                    fallback => texts [10];
+                }
+            }
+        };
+        let s = expand_str(g);
+        let sym = s.find("symmetric b'*'").expect("symmetric missing");
+        let asym = s.find("asymmetric b'<'").expect("asymmetric missing");
+        assert!(
+            sym < asym,
+            "symmetric must precede asymmetric in the expansion"
+        );
+        // Flag order follows the runtime pattern per kind.
+        assert!(
+            s.contains("symmetric b'*' { parse_inside = true ; balanced = false ;"),
+            "{s}"
+        );
+        assert!(
+            s.contains("asymmetric b'<' , b'>' { balanced = false ; parse_inside = false ;"),
+            "{s}"
+        );
+    }
+
+    // 19. An unknown keyword inside `inline` is a located front-end error
+    #[test]
+    fn test_19_unknown_inline_keyword_err() {
+        let e = expand_err(quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                inline { memchr(b'*') { symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], } } }
+            }
+        });
+        assert!(e.contains("unknown keyword `memchr`"), "{e}");
+    }
+
+    // 20. A symmetric body without `balanced` is a located front-end error
+    #[test]
+    fn test_20_symmetric_missing_flag_err() {
+        let e = expand_err(quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                inline { on_trigger(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } }
+            }
+        });
+        assert!(e.contains("missing `balanced = true|false;`"), "{e}");
     }
 
     // 17. max_nest, when absent, still appears in the expansion with the

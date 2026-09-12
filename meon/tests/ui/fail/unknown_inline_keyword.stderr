@@ -1,0 +1,5 @@
+error: unknown keyword `memchr` in `inline`; expected `merge_simple`, `hard_break`, `on_trigger` or `fallback`
+ --> tests/ui/fail/unknown_inline_keyword.rs:6:9
+  |
+6 |         memchr(b'*') {
+  |         ^^^^^^
