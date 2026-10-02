@@ -1,14 +1,14 @@
-//! Content struct generator — the `define_content!` macro.
+//! Content struct generator - the `define_content!` macro.
 //!
 //! # Purpose
 //!
 //! `define_content!` is the bridge between the grammar DSL and the runtime
 //! output. It generates two paired types from a single grammar description:
 //!
-//! - `<Name>State` — a mutable accumulator used *during* parsing. All fields
-//!   are `pub(crate)` and pre-allocated with capacity hints derived from the
-//!   source length divided by a per-field divisor.
-//! - `<Name>` (the content struct) — the immutable output handed to the caller
+//! - `<Name>State` - a mutable accumulator used *during* parsing. All fields
+//!   are `pub(crate)`; each starts unallocated and reserves capacity derived
+//!   from the source length and a per-field divisor on its first element.
+//! - `<Name>` (the content struct) - the immutable output handed to the caller
 //!   after parsing completes. All fields are `pub`.
 //!
 //! The two types share identical field names and element types; the state is
@@ -21,14 +21,14 @@
 //!
 //! ## `inline { field: Type [div] }`
 //!
-//! Stores `Vec<Type>` — a user-defined struct carrying multiple [`Span`](crate::span::Span) fields.
+//! Stores `Vec<Type>` - a user-defined struct carrying multiple [`Span`](crate::span::Span) fields.
 //! Used for inline constructs that have *more than one* span component, such as
 //! a link (`text` span + `url` span) or a key-value pair (`key` span +
 //! `value` span). The type must be defined by the grammar author.
 //!
 //! ## `inline_simple { field [div] }`
 //!
-//! Stores `Vec<Span>` — a plain byte-range with no additional metadata.
+//! Stores `Vec<Span>` - a plain byte-range with no additional metadata.
 //! Used for single-span inline constructs such as bold, italic, code, autolinks,
 //! and plain text runs. These fields support optional *merge* behaviour: adjacent
 //! spans separated by at most one byte are coalesced into a single span via
@@ -36,7 +36,7 @@
 //!
 //! ## `line { field: Type [div] }`
 //!
-//! Stores `Vec<(Type, Span)>` — metadata paired with a content span.
+//! Stores `Vec<(Type, Span)>` - metadata paired with a content span.
 //! Used for whole-line constructs that carry per-element metadata in addition to
 //! a content range. The distinction from `block` is purely in parsing rules:
 //! line rules (`parse_line!`) match in a single pass at the start of a line
@@ -45,7 +45,7 @@
 //!
 //! ## `block { field: Type [div] }`
 //!
-//! Stores `Vec<(Type, Span)>` — same layout as `line`.
+//! Stores `Vec<(Type, Span)>` - same layout as `line`.
 //! Used for constructs where per-line metadata is needed but the parsing rule
 //! lives in `parse_block!`. Block rules can interact with the active-block slot
 //! and are tried after line rules. Examples: bullet list items (marker kind +
@@ -53,26 +53,40 @@
 //!
 //! ## `block_simple { field [div] }`
 //!
-//! Stores `Vec<Span>` — same layout as `inline_simple`.
+//! Stores `Vec<Span>` - same layout as `inline_simple`.
 //! Used for multi-line block constructs that need only a span with no per-line
 //! metadata. Examples: fenced code blocks (entire block as one span),
 //! blockquote runs (entire continuation as one span), paragraphs, hard breaks.
 //!
 //! # Capacity divisors
 //!
-//! Each field carries a `[div]` literal. The initial `Vec` capacity is
-//! `source.len() / div`. This is a heuristic — a divisor of `10` means
-//! "expect roughly one element per 10 bytes of source". Tune based on the
-//! expected density of each element in real inputs. Over-allocating wastes
-//! memory; under-allocating causes reallocation during parsing.
+//! Each field carries a `[div]` literal. A field's `Vec` starts with no
+//! allocation and reserves `source.len() / div` elements when its first
+//! element arrives, so a rule that never matches costs nothing at all. The
+//! divisor is a heuristic - `10` means "expect roughly one element per 10
+//! bytes of source". Tune it to the expected density in real inputs:
+//! over-allocating wastes memory, under-allocating causes reallocation
+//! during parsing.
 //!
 //! # Generated API surface
 //!
-//! For every `inline_simple` field `f` the macro also emits:
+//! For every field `f` the macro emits `push_f` - the single append entry
+//! point. Its parameter follows the storage layout: `Span` for the `*_simple`
+//! categories, `Type` for `inline`, `(Type, Span)` for `line` and `block`.
 //!
-//! - `push_f(&mut self, Span)` — plain append.
-//! - `push_merge_f(&mut self, Span)` — append with coalescing: if the last span
-//!   is non-empty, the new span is non-empty, and they are adjacent (gap ≤ 1
+//! `push_f` makes the one test `Vec::push` makes anyway, `len == capacity`.
+//! While there is room it pushes directly, and the compiler drops the
+//! second, identical test inside `Vec::push`. A full vector - which includes
+//! one that was never allocated - goes to `push_cold_f`, an out-of-line
+//! `#[cold]` function that reserves the `[div]` hint when the capacity is
+//! still zero and then pushes, letting `Vec` grow as usual otherwise. The
+//! lazy reservation therefore adds no instruction to the path a push takes
+//! almost every time.
+//!
+//! Every `inline_simple` field gets one more:
+//!
+//! - `push_merge_f(&mut self, Span)` - append with coalescing: if the last span
+//!   is non-empty, the new span is non-empty, and they are adjacent (gap <= 1
 //!   byte), the last span's end is extended instead of pushing a new entry.
 //!
 //! The merge variant is selected by `parse_text!` when `merge_simple = true` is
@@ -158,6 +172,17 @@ macro_rules! define_content {
                     #[allow(dead_code)]
                     #[inline(always)]
                     pub(crate) fn [<push_ $inline_field>](&mut self, v: $inline_ty) {
+                        if self.$inline_field.len() == self.$inline_field.capacity() {
+                            self.[<push_cold_ $inline_field>](v);
+                        } else {
+                            self.$inline_field.push(v);
+                        }
+                    }
+
+                    #[allow(dead_code)]
+                    #[cold]
+                    #[inline(never)]
+                    fn [<push_cold_ $inline_field>](&mut self, v: $inline_ty) {
                         if self.$inline_field.capacity() == 0 {
                             self.$inline_field.reserve_exact(self.src_len / $inline_div);
                         }
@@ -169,6 +194,19 @@ macro_rules! define_content {
                     #[allow(dead_code)]
                     #[inline(always)]
                     pub(crate) fn [<push_ $line_field>](
+                        &mut self, v: ($line_ty, $crate::span::Span),
+                    ) {
+                        if self.$line_field.len() == self.$line_field.capacity() {
+                            self.[<push_cold_ $line_field>](v);
+                        } else {
+                            self.$line_field.push(v);
+                        }
+                    }
+
+                    #[allow(dead_code)]
+                    #[cold]
+                    #[inline(never)]
+                    fn [<push_cold_ $line_field>](
                         &mut self, v: ($line_ty, $crate::span::Span),
                     ) {
                         if self.$line_field.capacity() == 0 {
@@ -184,6 +222,19 @@ macro_rules! define_content {
                     pub(crate) fn [<push_ $block_field>](
                         &mut self, v: ($block_ty, $crate::span::Span),
                     ) {
+                        if self.$block_field.len() == self.$block_field.capacity() {
+                            self.[<push_cold_ $block_field>](v);
+                        } else {
+                            self.$block_field.push(v);
+                        }
+                    }
+
+                    #[allow(dead_code)]
+                    #[cold]
+                    #[inline(never)]
+                    fn [<push_cold_ $block_field>](
+                        &mut self, v: ($block_ty, $crate::span::Span),
+                    ) {
                         if self.$block_field.capacity() == 0 {
                             self.$block_field.reserve_exact(self.src_len / $block_div);
                         }
@@ -195,6 +246,21 @@ macro_rules! define_content {
                     #[allow(dead_code)]
                     #[inline(always)]
                     pub(crate) fn [<push_ $block_simple_field>](
+                        &mut self, s: $crate::span::Span,
+                    ) {
+                        if self.$block_simple_field.len()
+                            == self.$block_simple_field.capacity()
+                        {
+                            self.[<push_cold_ $block_simple_field>](s);
+                        } else {
+                            self.$block_simple_field.push(s);
+                        }
+                    }
+
+                    #[allow(dead_code)]
+                    #[cold]
+                    #[inline(never)]
+                    fn [<push_cold_ $block_simple_field>](
                         &mut self, s: $crate::span::Span,
                     ) {
                         if self.$block_simple_field.capacity() == 0 {
@@ -210,6 +276,21 @@ macro_rules! define_content {
                     pub(crate) fn [<push_ $inline_simple_field>](
                         &mut self, s: $crate::span::Span,
                     ) {
+                        if self.$inline_simple_field.len()
+                            == self.$inline_simple_field.capacity()
+                        {
+                            self.[<push_cold_ $inline_simple_field>](s);
+                        } else {
+                            self.$inline_simple_field.push(s);
+                        }
+                    }
+
+                    #[allow(dead_code)]
+                    #[cold]
+                    #[inline(never)]
+                    fn [<push_cold_ $inline_simple_field>](
+                        &mut self, s: $crate::span::Span,
+                    ) {
                         if self.$inline_simple_field.capacity() == 0 {
                             self.$inline_simple_field
                                 .reserve_exact(self.src_len / $inline_simple_div);
@@ -221,12 +302,7 @@ macro_rules! define_content {
                     pub(crate) fn [<push_merge_ $inline_simple_field>](
                         &mut self, s: $crate::span::Span,
                     ) {
-                        if self.$inline_simple_field.capacity() == 0 {
-                            self.$inline_simple_field
-                                .reserve_exact(self.src_len / $inline_simple_div);
-                        }
-                        let vec = &mut self.$inline_simple_field;
-                        if let Some(last) = vec.last_mut() {
+                        if let Some(last) = self.$inline_simple_field.last_mut() {
                             if last.start != last.end && s.start != s.end {
                                 if s.start.saturating_sub(last.end) <= 1 {
                                     last.end = s.end;
@@ -234,7 +310,7 @@ macro_rules! define_content {
                                 }
                             }
                         }
-                        vec.push(s);
+                        self.[<push_ $inline_simple_field>](s);
                     }
                 )*
 
