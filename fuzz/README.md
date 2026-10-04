@@ -21,6 +21,7 @@ integration test suites, not here.
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
   * [***crates.io***](https://crates.io/crates/meon-json)
 
+* [***FAQ.md***](https://github.com/vgnapuga/meon/blob/main/FAQ.md)
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md)
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md)
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md)
