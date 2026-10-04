@@ -20,6 +20,7 @@ demonstrating what `meon` can express in a single `define_parser!` invocation.
   * [***GitHub***](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
   * [***crates.io***](https://crates.io/crates/meon-json)
 
+* [***FAQ.md***](https://github.com/vgnapuga/meon/blob/main/FAQ.md) - *GitHub*
 * [***CHANGELOG.md***](https://github.com/vgnapuga/meon/blob/main/CHANGELOG.md) - *GitHub*
 * [***ARCHITECTURE.md***](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md) - *GitHub*
 * [***BENCHMARKS.md***](https://github.com/vgnapuga/meon/blob/main/benches/README.md) - *GitHub*
