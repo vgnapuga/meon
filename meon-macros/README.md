@@ -1,7 +1,5 @@
 # meon-macros
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/meon-macros/README_RU.md) - *GitHub* 
-
 Procedural macro crate for the `meon` parsing engine.
 
 This crate exposes a single public entry point — `define_parser!` — which
@@ -37,7 +35,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.3.1"
+meon = "0.6"
 ```
 
 ```rust
@@ -89,8 +87,8 @@ all borrowing from the original source slice via `u32` byte-offset spans.
 
 ## Internal pipeline
 
-`define_parser!` is a thin wrapper around a three-stage compile-time pipeline
-implemented entirely in `meon-macros`:
+`define_parser!` is a thin wrapper around a compile-time pipeline implemented
+entirely in `meon-macros`:
 
 ```
 Grammar DSL tokens
@@ -101,9 +99,13 @@ Grammar DSL tokens
     ▼
 [collect.rs]  grammar front-end
     │          fills CF (collected fields) + Vec<StandaloneRule>
+    │          the only stage that reports grammar errors
     ▼
 [strip.rs]    removes => field [N] annotations
     │          so the cleaned tokens pass to runtime macros
+    ▼
+[normalize.rs] canonicalises the inline section into the one
+    │          token shape the runtime macro_rules! patterns match
     ▼
 [codegen.rs]  emits define_content!(...) call
 [methods.rs]  emits _clean / _raw accessor impl
@@ -116,6 +118,12 @@ Final token stream → rustc
 All runtime behaviour lives in `meon` (the `parse_text!`, `parse_inline!`,
 `parse_line!`, `parse_block!`, and `define_standalone_fns!` declarative
 macros). `meon-macros` only produces tokens; it has no runtime footprint.
+
+The front-end is the single authority on the shape a grammar may take. It
+reads the grammar by keyword, so sub-rules and settings can be written in any
+order and a trailing `;` or `,` is optional; the normalize pass then rewrites
+what it accepted into the fixed shape the runtime patterns require. Whatever
+`define_parser!` accepts, the runtime macros accept.
 
 For a detailed description of each stage see
 [`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
@@ -134,6 +142,18 @@ error: expected literal (fence min)
 7 |     blocks { block_simple { fence(b'`') => fenced_codes [400]; } }
   |                                   ^^^^
 ```
+
+What the front-end rejects:
+
+- An unknown keyword in a section — the error names the section and lists the
+  keywords it does accept.
+- A missing `parse_inside` or `balanced` in a `symmetric`, `asymmetric`, or
+  `chained` component body, or a value for either that is not `true` / `false`.
+- An incomplete `chained` (fewer than two components, or no `prefix`) or
+  `key_value` (a missing `eq`, `allow_sep`, `end`, `key`, or `value`).
+- A missing `[div]` capacity, a missing rule body, and a missing literal in
+  any position that requires one (`fence` min, `line` max, `symmetric` byte,
+  the context bytes).
 
 ---
 

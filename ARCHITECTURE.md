@@ -1,7 +1,5 @@
 # meon — Architecture
 
-EN | [**RU**](./ARCHITECTURE_RU.md)
-
 This document describes the internal design of the `meon` parsing engine: how
 the grammar DSL is compiled, how the runtime executes, how data flows from
 source bytes to output spans, and where the known trade-offs live.
@@ -75,6 +73,8 @@ meon/                          ← workspace root
 │   │           └── standalone/
 │   │               ├── mod.rs            ← define_standalone_fns! + module docs
 │   │               ├── common.rs         ← shared iterator utilities
+│   │               ├── context.rs        ← ParseContext, ContextCursor
+│   │               ├── context_iter.rs   ← context-aware inline iterators
 │   │               ├── symmetric.rs
 │   │               ├── asymmetric.rs
 │   │               ├── chained.rs
@@ -99,7 +99,8 @@ meon/                          ← workspace root
 │       ├── methods.rs         ← back-end (CF → accessor impl)
 │       ├── model.rs           ← CF, StandaloneRule, crate_path()
 │       ├── error.rs           ← located error type
-│       └── strip.rs           ← token surgery (remove [N] annotations)
+│       ├── strip.rs           ← token surgery (remove [N] annotations)
+│       └── normalize.rs       ← canonicalise inline for the runtime macros
 │
 ├── meon-md/                   ← Markdown grammar built on meon
 ├── meon-json/                 ← JSON reader grammar built on meon
@@ -180,10 +181,15 @@ Source tokens (grammar DSL)
         ▼
   [collect.rs] grammar front-end
         │  fills CF (collected fields) and Vec<StandaloneRule>
+        │  the only stage that reports grammar errors
         ▼
   [strip.rs] token surgery
         │  removes => field [N] annotations from grammar sections
         │  so the cleaned tokens can be passed to runtime macros
+        ▼
+  [normalize.rs] canonicalisation of the inline section
+        │  rewrites what the front-end accepted into the one token shape
+        │  the runtime macro_rules! patterns match
         ▼
   [codegen.rs] back-end: content struct emission
         │  emits: define_content!(Name { ... })
@@ -197,9 +203,26 @@ Source tokens (grammar DSL)
   Final token stream handed back to rustc
 ```
 
+The front-end reads the grammar by keyword, so sub-rules and settings may be
+declared in any order and a trailing `;` or `,` is optional. The runtime macros
+are `macro_rules!` patterns and match exactly one token shape: inside an
+`on_trigger { ... }` block the sub-rules in the order `symmetric`,
+`asymmetric`, `chained`, `key_value`; `parse_inside` before `balanced` in a
+`symmetric` body and after it in an `asymmetric` one; `prefix` last in a
+`chained` body; `eq`, `allow_sep`, `end`, `key`, `value` in that order in a
+`key_value` body; every setting closed by `;` and every arm by `,`.
+
+`normalize.rs` rewrites the former into the latter, which makes the front-end
+the single authority on the shape a grammar may take: whatever
+`define_parser!` accepts, the runtime macros accept. The rewrite is
+semantically neutral — the runtime buckets sub-rules by kind and dispatches the
+kinds in a fixed order, and the relative order *within* a kind is preserved.
+It runs on the stripped stream and only after the front-end has validated the
+grammar, so every keyword it needs can be assumed present.
+
 The proc-macro itself (`expand` in `lib.rs`) is thin: it drives the cursor,
-calls the three collect functions, calls strip, and assembles the output from
-the three back-end builders.
+calls the three collect functions, calls strip and then normalize on the
+`inline` tokens, and assembles the output from the three back-end builders.
 
 ---
 
@@ -411,10 +434,24 @@ layout that directly reflects parsing semantics:
 `Vec<Span>` — single byte range, no extra metadata.
 `Vec<(T, Span)>` — per-element metadata paired with a content span.
 
-The `NameState` accumulator is pre-allocated with `source.len() / div`
-capacity per field. At the end of the parse, `into_content(source)` moves all
-vecs into the public struct and attaches the source reference. There is no
-copying of span data.
+The `NameState` accumulator holds the source length and one `Vec` per field,
+all starting unallocated. `define_content!` generates a `push_<field>` method
+per field — the only append path the runtime macros use — which reserves
+`source.len() / div` elements the first time that field receives one. A rule
+that never matches therefore never allocates: a grammar with a dozen element
+kinds costs what the document actually contains, not what the grammar could
+describe.
+
+The reservation adds nothing to the common push. `push_<field>` makes the
+same `len == capacity` test `Vec::push` makes; with room left it calls
+`Vec::push` in the branch where the compiler already knows the vector is not
+full, so the second test is dropped and the path is a plain store. A full
+vector — including one never allocated — takes an out-of-line `#[cold]`
+function that reserves the hint if the capacity is still zero and then
+pushes, so `Vec` grows as usual past the hint.
+
+At the end of the parse, `into_content(source)` moves all vecs into the public
+struct and attaches the source reference. There is no copying of span data.
 
 ---
 
@@ -442,15 +479,15 @@ Then it transitions to `@body` with all buckets flattened into tt fragments.
 
 ### The unified nesting stack
 
-Before nesting existed, symmetric used one pending slot and asymmetric one
-forward search. The engine now hosts **every stack-eligible construct —
-symmetric, asymmetric, AND key_value — on one shared stack**, bounded by the
-grammar-wide `max_nest` (forwarded from `parse_text!`; default `1`):
+**Every stack-eligible construct — symmetric, asymmetric, AND key_value — lives
+on one shared stack**, bounded by the grammar-wide `max_nest` (forwarded from
+`parse_text!`; default `1`):
 
 ```
 frames:        [(u8, u8, u32); max_nest]   // (byte, count, vidx)
 fdepth:        usize                        // single budget for ALL kinds
 kv_pending:    [(u32, u32, u32); max_nest]  // (key_start, key_end, value_start)
+held_base:     [(u32, u32); max_nest]       // fallback-vector snapshot per frame
 asym_overflow: u32                          // one-shot counter for balanced opens past the cap
 ```
 
@@ -479,20 +516,36 @@ stack-eligible rules of an `on_trigger` block.
 `fdepth` is the single budget for all three kinds combined; every "is anything
 open" check is `fdepth == 0` regardless of which kinds are on the stack.
 
-### Off-stack constructs (original pre-nesting paths, intact)
+### Off-stack constructs
 
-These never touch the unified stack and run their original code:
+These never touch the unified stack:
 
-- **symmetric `parse_inside = true, balanced = false`** — the single `pending`
-  slot.
-- **symmetric `parse_inside = false`** (greedy, code spans) — forward search;
-  gained escape-awareness only.
-- **asymmetric `balanced = false, parse_inside = false`** (autolinks) — the
-  `memchr`/depth forward search; its close byte is NOT required in `on_trigger`.
-- **chained** — a two-phase transparent state machine (or the original opaque
-  two-phase forward search). Its phases are strictly sequential — phase 2 only
-  starts once phase 1 has fully closed — so one slot per phase suffices: no
-  stack, no `max_nest` consumed.
+- **symmetric `parse_inside = true, balanced = false`** — a single `pending`
+  slot holding `(byte, open offset, count)`. A trigger of the same byte closes
+  the slot when the counts match and replaces it when they do not.
+- **symmetric `parse_inside = false`** (greedy, code spans) — escape-aware
+  forward search.
+- **asymmetric `balanced = false, parse_inside = false`** (autolinks) — a
+  `memchr` forward search; its close byte is NOT required in `on_trigger`.
+- **chained** — a two-phase transparent state machine, or a two-phase forward
+  search where a component is opaque. Its phases are strictly sequential —
+  phase 2 only starts once phase 1 has fully closed — so one slot per phase
+  suffices: no stack, no `max_nest` consumed.
+
+### Close bytes known to be absent
+
+The off-stack asymmetric search and each `chained` component scan from the
+opener to the end of the run when that component is declared
+`balanced = false`. Such a failure is monotone: a byte absent after position
+*i* is absent after every later position too. A per-run bitset
+of 256 bits (`[u64; 4]`) records the close bytes whose search has already come
+back empty, and a later opener of the same kind is then rejected without
+scanning at all. This turns *k* unmatched openers in one run from *O(k·n)*
+into *O(n)* — `[a[a[a…` never rescans the tail per bracket.
+
+Depth-counting components (`balanced = true`) are deliberately excluded: their
+failure is not monotone, since an opener that comes later can be balanced by a
+close that an earlier scan already consumed.
 
 ### Closing — one unified pass with a key_value drain
 
@@ -526,6 +579,21 @@ stored byte:
 - **symmetric** — discarded via `truncate(vidx)` (an identical `(byte, count)`
   never self-nests, so each field has at most one live placeholder, always
   last).
+
+### Plain text of a frame that never closes
+
+A frame discarded at the end of the run loses its own delimiter bytes, not the
+plain text it held. Text flushes are not gated on `fdepth`: plain-text runs are
+appended to the fallback vector as they are scanned, even while frames are
+open. Every push site snapshots the fallback vector — its length and the end
+offset of its last span — into `held_base[fdepth]`, and a normal close rolls
+the vector back to that snapshot, so text that belongs to a construct which
+*did* close is not also emitted as fallback. A run that ends with the frame
+still open performs no rollback, and the held text stays.
+
+With `*` declared as a stack-eligible symmetric rule, `*a\nb\n` therefore
+yields the fallback span `a\nb` rather than dropping the line; the unclosed
+`*` itself is still discarded.
 
 ### Bounded-cap overflow
 
@@ -609,9 +677,8 @@ bounded by `max_nest`.
 
 The active block state is a bounded stack `[(u8, u8, u8, u32); max_nest]`
 plus a depth counter, sharing the grammar-wide `max_nest` cap with the inline
-engine (§9). `max_nest = 1` reduces it to a single slot and reproduces the
-original, single-active-block behaviour exactly: at most one block open at a
-time, no block opening inside another.
+engine (§9). `max_nest = 1` reduces it to a single slot: at most one block
+open at a time, no block opening inside another.
 
 | Discriminant (field 0) | Meaning            | Field 1  | Field 2 | Field 3  |
 |-------------------------|---------------------|----------|---------|----------|
@@ -698,6 +765,12 @@ Iterators use shared utilities from `standalone/common.rs`:
   `pos`, used to detect escaped delimiters.
 - `probe_matcher(matches, buf)` / `find_any_of(needles, n, hay)` — turn a
   byte predicate into a `memchr`-family streaming search.
+- `next_in_paragraph(src, from, needle, eol, enter_line)` — the paragraph-bounded
+  close search shared by every inline rule: one `memchr2(needle, eol)` per step,
+  a blank line ends the paragraph, and the `enter_line` callback decides at each
+  new line start whether to continue, to jump over a region, or to give up. The
+  context-aware iterators pass a callback that skips opaque regions; the
+  context-free ones pass the identity.
 
 ### Iterator types
 
@@ -939,13 +1012,13 @@ inside the macros. Grammar crates only need to depend on `meon`; `paste` and
 
 Both the block-level active-block stack (§11) and the inline-level unified
 nesting stack — shared by symmetric, asymmetric AND key_value rules (§9) —
-share one grammar-wide `max_nest` setting. Its default, `1`, reproduces the
-original single-slot/single-pending behaviour exactly: at most one block active
-at a time, no self-nesting for `balanced` rules. Setting it higher resolves
-what used to be hard limitations — a blockquote containing a fenced code block,
-or a blockquote nested inside another, used to leak content into the wrong
-span; a different-count inner emphasis delimiter used to silently overwrite the
-single pending slot and lose the outer pair entirely.
+share one grammar-wide `max_nest` setting. Its default, `1`, degenerates both
+stacks to a single slot: at most one block active at a time, no self-nesting
+for `balanced` rules. That default is what a grammar wants when its format has
+no nesting, and it costs the same as a plain slot; raising it is what makes a
+blockquote containing a fenced code block, a blockquote inside another, or
+`**bold *italic* bold**` resolve into their own separate spans instead of the
+inner construct leaking into — or overwriting — the outer one.
 
 `max_nest` is a hard cap, not an unbounded stack — constructs nested deeper
 than `max_nest` are not specially tracked:
@@ -961,12 +1034,11 @@ than `max_nest` are not specially tracked:
   isn't mistaken early. A `key_value` `eq` past the cap is absorbed (the pair
   untracked).
 
-The trade-off is the same in spirit as the original single-slot design: a
-small, fixed-size, stack-allocated array — sized by the grammar's own
-`max_nest`, not by input length — avoids heap allocation entirely and keeps
-the common case (`max_nest = 1`, the default) at the same cost as before,
-while letting a grammar opt into deeper nesting only where it actually needs
-it.
+The trade-off is deliberate: a small, fixed-size, stack-allocated array —
+sized by the grammar's own `max_nest`, not by input length — avoids heap
+allocation entirely and keeps the common case (`max_nest = 1`, the default) at
+single-slot cost, while letting a grammar opt into deeper nesting only where it
+actually needs it.
 
 ### `chained` rules are scoped to one active match per grammar
 
@@ -999,9 +1071,22 @@ where a `line`/`block` rule matches, or by end of input. Consequences:
 
 - A blank line *inside* an open construct closes the run and discards that
   construct: a JSON-shaped grammar (empty `lines`/`blocks`) must not contain
-  blank lines mid-value.
+  blank lines mid-value. What is discarded is the construct, not its content —
+  the delimiter bytes are dropped and the plain text they enclosed is emitted
+  as fallback (§9).
 - Precedence between overlapping inline rules still follows declaration order,
   not a precedence table.
+
+### Close bytes of stack-eligible rules must be declared in `on_trigger`
+
+Closes are located by the same `find_any` scan as opens (§9), so a rule that
+goes on the unified stack only ever sees its close byte if that byte is in the
+same `on_trigger` set. A `key_value`'s `end` byte is added to the set
+automatically; an `asymmetric` close byte has to be listed by hand, and a
+grammar that omits it gets a rule that opens and never closes. The front-end
+does not reject it, because the byte may legitimately belong to another
+`on_trigger` block. Off-stack rules are unaffected — they find their close with
+their own forward search.
 
 ### Standalone vs full-parse divergence
 

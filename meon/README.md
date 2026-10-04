@@ -1,7 +1,5 @@
 # meon
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/meon/README_RU.md) - *GitHub*
-
 A declarative flat parsing engine for text formats.
 
 You describe a grammar once with `define_parser!` and get back a fully working
@@ -10,7 +8,7 @@ iterators for lazily extracting one element kind at a time.
 
 ```toml
 [dependencies]
-meon = "0.5"
+meon = "0.6"
 ```
 
 * **meon**    <--
@@ -97,8 +95,7 @@ Four context bytes are required and apply to every rule. A fifth,
 | `max_nest` | Optional. Bounded self-nesting depth cap, shared by            |
 |            | `balanced` symmetric/asymmetric rules and `key_value`          |
 |            | values (below) and by block-level `cont`/`fence` nesting.      |
-|            | Default `1`, which reproduces the original, non-nesting        |
-|            | behaviour exactly: no self-nesting, at most one block active.  |
+|            | Default `1`: no self-nesting, at most one block active.        |
 |            | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
 
 ---
@@ -154,14 +151,13 @@ on_trigger(b'*') {
 - `balanced`'s meaning depends on `parse_inside`:
   - With `parse_inside = true`: `balanced = false` means a different-count
     occurrence of the same byte, while one is already pending, overwrites
-    the pending slot — no nesting, matching the original single-slot
-    behaviour exactly. `balanced = true` instead opens a *bounded stack* of
-    pending frames (sized by the grammar's `max_nest`), so a different-count
-    occurrence opens its own frame instead of overwriting the outer one —
-    both levels resolve and are emitted to their own fields, separately. An
-    *identical* `(byte, count)` pair still cannot self-nest, since open and
-    close look the same for a symmetric delimiter (`**a **b** c**` resolves
-    as two adjacent runs, not as nesting).
+    the pending slot — no nesting. `balanced = true` instead opens a
+    *bounded stack* of pending frames (sized by the grammar's `max_nest`), so
+    a different-count occurrence opens its own frame instead of overwriting
+    the outer one — both levels resolve and are emitted to their own fields,
+    separately. An *identical* `(byte, count)` pair still cannot self-nest,
+    since open and close look the same for a symmetric delimiter
+    (`**a **b** c**` resolves as two adjacent runs, not as nesting).
   - With `parse_inside = false` (greedy mode): `balanced = true` instead
     means a *doubled* run of the same delimiter found while searching forward
     is treated as escaped/literal content rather than the close, and the
@@ -189,7 +185,7 @@ on_trigger(b'{', b'}') {
   - `balanced` sets this *type's* own effective depth cap: `max_nest` if
     `true` (so `{ { } }` self-nests), or a hard `1` if `false` — a second
     open of the same type while one is already pending is then simply
-    literal, matching the original behaviour for that type exactly.
+    literal.
   - `parse_inside` controls *opacity*: `false` keeps the content between
     open and close invisible to every other rule (used for autolinks, so a
     URL's own `(`/`)` aren't mistaken for something else); `true` makes it
@@ -230,8 +226,8 @@ Matches the pattern `[prefix]open1...close1 open2...close2`.
   that sets a boolean field (`is_image` in the example).
 - `parse_inside = true` on either component makes that component
   transparent — other rules can fire on the bytes scanned over for it —
-  instead of the original, fully-opaque self-contained forward search. This
-  is scoped to a single active `chained` rule per grammar; a grammar
+  instead of the self-contained forward search an opaque component uses.
+  This is scoped to a single active `chained` rule per grammar; a grammar
   declaring two such rules with overlapping in-progress matches is not
   supported.
 - The output type `T` must be defined by the grammar author with fields named
@@ -278,6 +274,12 @@ fallback => texts [10];
 
 Adjacent spans can be merged (gap ≤ 1 byte) by setting `merge_simple = true`
 at the top of the `inline` section.
+
+`fallback` also catches the content of a construct that never closes: when a
+run ends with an open frame still on the stack, the frame's own delimiter
+bytes are dropped but the text between them stays. With `*` as a `balanced`
+symmetric rule, `*a\nb\n` yields no italic span and one `fallback` span
+`a\nb`.
 
 ---
 
@@ -413,17 +415,18 @@ line where a `line`/`block` rule matches, or at end of input. A grammar with
 empty `lines {}` / `blocks {}` sections (e.g. a JSON-shaped grammar)
 therefore gets one run covering the whole input, blank lines aside, so its
 nesting survives every internal `\n` at no extra cost. A grammar with real
-`lines`/`blocks` rules keeps its old per-paragraph bounding: multi-line
-inline spanning only happens within what would already have been one
-paragraph.
+`lines`/`blocks` rules is bounded by them: multi-line inline spanning
+happens only inside a single paragraph.
 
 ---
 
 ## Capacity divisors
 
-Every field carries `[div]`. The initial `Vec` capacity is
-`source.len() / div`. A divisor of `10` means roughly one element per 10 bytes.
-Tune based on expected element density in real inputs.
+Every field carries `[div]`. The field's `Vec` starts unallocated and
+reserves `source.len() / div` elements when it receives its first element, so
+a rule that never matches a given document costs nothing. A divisor of `10`
+means roughly one element per 10 bytes. Tune based on expected element
+density in real inputs.
 
 ---
 
@@ -490,10 +493,10 @@ Without either flag the crate compiles on stable Rust using a SWAR
 - Inline scanning runs over a multi-line run (see "Inline runs span multiple
   lines"), not a single line: the unified stack persists across internal
   `eol` bytes. A run is still bounded by a blank line, so a blank line
-  *inside* an open construct closes the run and discards that construct — a
-  JSON-shaped grammar must not contain blank lines mid-value. Precedence
-  between overlapping inline rules is resolved by declaration order, not a
-  precedence table.
+  *inside* an open construct closes the run and discards that construct (its
+  text is kept as `fallback`) — a JSON-shaped grammar must not contain blank
+  lines mid-value. Precedence between overlapping inline rules is resolved by
+  declaration order, not a precedence table.
 - Only one `key_value` rule per grammar is supported; its key-segment anchor
   is shared, so a second `key_value` rule is not tracked independently.
 

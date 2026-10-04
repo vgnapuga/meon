@@ -1,7 +1,5 @@
 # meon — Fuzzing
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/fuzz/README_RU.md)
-
 Coverage-guided fuzzing of the [`meon`](https://github.com/vgnapuga/meon/blob/main/meon/README.md)
 engine with [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) (libFuzzer).
 The single target drives the engine through a **fuzz-only grammar** built from
@@ -80,7 +78,7 @@ same `on_trigger` block as `*` / `` ` `` / `<` / `[`, with `:` as its `eq`
 trigger (the `,` `end` byte is auto-added by the engine).
 
 The reason is coverage, not realism. `meon-md` declares no `key_value` rule, so
-the most intricate new machinery in the engine — `key_value` frames sharing the
+the most intricate machinery in the engine — `key_value` frames sharing the
 **unified `frames` / `fdepth` stack** with `balanced = true` symmetric (`*`)
 and asymmetric (`<`,`>`) frames, the close cascade's kv-drain-before-pop, the
 end-of-run drain — gets **zero** fuzz coverage from the production grammar. This
@@ -210,12 +208,13 @@ cargo fuzz run parse_text fuzz/corpus/parse_text -- -runs=0
 
 ## Campaign log
 
-| realese version | date       | toolchain          | total exec | cov  | ft    | corp        | exec/s | rss   |
+| release version | date       | toolchain          | total exec | cov  | ft    | corp        | exec/s | rss   |
 |-----------------|------------|--------------------|------------|------|-------|-------------|--------|-------|
 | v0.1.0          | 2026-06-15 | nightly-2026-05-22 | ~104M      | 841  | 4766  | 1758/252Kb  | ~35k   | 629Mb |
 | v0.2.0          | 2026-06-21 | nightly-2026-05-22 | ~111M      | 1114 | 6853  | 2346/440Kb  | ~32k   | 641Mb |
 | v0.3.0          | 2026-06-26 | nightly-2026-05-22 | ~100M      | 3529 | 22591 | 6641/1610Kb | ~6k    | 711Mb |
 | v0.5.0          | 2026-07-18 | nightly-2026-05-22 | ~120M      | 4196 | 26488 | 6641/1610Kb | ~8k    | 650Mb |
+| v0.6.0          | 2026-10-02 | nightly-2026-05-22 | ~200M      | 4497 | 28312 | 7282/1793Kb | ~6k    | 638Mb |
 
 **Coverage saturation** at `cov: 3529 ft: 22591 corp: 6641/1610Kb` means
 libFuzzer exhausted reachable branches on random inputs without seeds. Adding
@@ -234,7 +233,7 @@ campaigns.
   AddressSanitizer is redundant for memory-safety purposes and can be disabled
   with `--sanitizer none` for a 2–4x throughput boost.
 - Standalone `find_*` iterators (phase (c)) and the context-aware
-  `find_context_*` iterators plus the `context()` map (phase (d)) **are** now
+  `find_context_*` iterators plus the `context()` map (phase (d)) **are**
   exercised by this target — each a separate codegen path from `parse`, all
   held to the same in-bounds floor. So are the generated `_raw()` / `_clean()`
   accessors (phase (b)).

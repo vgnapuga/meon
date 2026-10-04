@@ -1,7 +1,5 @@
 # meon
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/README_RU.md)
-
 > Declarative flat parsing engine for text formats.
 
 * **meon**

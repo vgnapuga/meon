@@ -1,7 +1,5 @@
 # meon-json — Cross-parser comparison
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/benches/JSON_COMPARE_RU.md)
-
 Throughput of [`meon-json`](https://github.com/vgnapuga/meon/blob/main/meon-json/README.md)
 (built on the [`meon`](https://github.com/vgnapuga/meon/blob/main/meon/README.md)
 engine) next to two validating JSON parsers, on the same corpora as the
