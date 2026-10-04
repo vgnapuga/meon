@@ -43,19 +43,17 @@
 //! - **Bold and italic** (`symmetric b'*' { parse_inside = true; balanced =
 //!   true; ... }`) share the inline bounded stack. `"**bold *italic*
 //!   still-bold**"` resolves both the outer bold and the inner italic as
-//!   separate, correctly-bounded spans — a different-count inner delimiter
-//!   no longer overwrites the engine's single pending slot and silently
-//!   loses the outer pair.
+//!   separate, correctly-bounded spans.
 //!
 //! `max_nest = 4` means up to four such levels self-nest correctly per
 //! family; a fifth level of the same construct collapses via the engine's
 //! overflow counter (see [`meon::parse_inline!`] and [`meon::parse_block!`]
 //! for the exact behaviour at the cap).
 //!
-//! Autolinks and the `[text](url)` / `![alt](url)` link/image syntax remain
-//! `balanced = false, parse_inside = false` by design — they use the
-//! original single-pass forward search and do not participate in nesting
-//! (e.g. `[a [b] c](url)` does not nest its own brackets).
+//! Autolinks and the `[text](url)` / `![alt](url)` link/image syntax are
+//! `balanced = false, parse_inside = false` by design — a self-contained
+//! forward search that does not participate in nesting (e.g. `[a [b] c](url)`
+//! does not nest its own brackets).
 //!
 //! # Known limitations
 //!

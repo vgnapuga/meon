@@ -20,232 +20,116 @@ pub use crate::parse_block;
 
 /// Full single-pass text parser — the `parse_text!` macro.
 ///
-/// # Architecture: three rule families
+/// # Three rule families
 ///
-/// Every element in the grammar belongs to exactly one of three families.
-/// The distinction is structural — it reflects where in the source an element
-/// can begin and end, and whether it requires a trigger byte to be detected.
+/// Every grammar element belongs to one family, chosen by where it can begin
+/// and end in the source.
 ///
-/// ## Inline rules
+/// **Inline** elements live inside a run of text and are found by scanning for
+/// trigger bytes. `inline` fields hold a user type with several spans
+/// (`Vec<T>`, e.g. a link); `inline_simple` fields hold one span each
+/// (`Vec<Span>`, e.g. bold, or the `fallback` plain text, optionally merged
+/// with `merge_simple = true`).
 ///
-/// Inline elements live *inside* a logical line. They are detected by scanning
-/// for trigger bytes within the line content and are further divided:
+/// **Line** elements cover exactly one line: they start at its first byte and
+/// consume it, so no inline scan runs on the line itself. `line(byte, max)`
+/// and `line_simple(bytes, min)` both produce `Vec<(Type, Span)>`, matched by
+/// [`crate::parse_line!`].
 ///
-/// - **`inline`** — elements that carry user-defined structured types with
-///   multiple span fields (e.g. a link with separate `text` and `url` spans).
-///   Each occurrence is represented as a value of the user-defined type `T`,
-///   stored as `Vec<T>`. Triggered by specific bytes declared in `on_trigger`.
+/// **Block** elements start on one line and end on a later one, tracked by the
+/// active block stack. `block` items (`(pattern)`, `num(...)`) are per-line
+/// leaves with metadata, `Vec<(Type, Span)>`. `block_simple` covers `fence`
+/// (open fence line through close fence line, inline scanning suppressed
+/// inside), `cont` (consecutive lines starting with the marker) and the
+/// `fallback` paragraph run, all `Vec<Span>`. Matched by [`crate::parse_block!`].
 ///
-/// - **`inline_simple`** — elements represented by a single [`Span`] with no
-///   additional metadata (e.g. bold, italic, code, plain text runs). Triggered
-///   by specific bytes in `on_trigger`, or collected as the `fallback` when no
-///   trigger fires. Adjacent spans can be coalesced via `merge_simple = true`.
-///
-/// Both inline families are context-free within a line: each line is scanned
-/// independently, with no state carried between lines.
-///
-/// ## Line rules
-///
-/// Line elements span exactly one logical line — they begin at the first byte
-/// of a line and consume it entirely. If a line rule matches, inline scanning
-/// is skipped for that line.
-///
-/// - **`line`** — whole-line elements with per-occurrence metadata (e.g. a
-///   heading carries its level). Stored as `Vec<(Type, Span)>` where `Span`
-///   covers the content portion after the marker. Matched by `parse_line!`
-///   via `line(byte, max = N)` rules.
-///
-/// - There is no `line_simple` family: whole-line elements without metadata
-///   are expressed as `line_simple(bytes, min = N)` rules that still produce
-///   a `Vec<(Type, Span)>` entry, where the type carries the matched delimiter
-///   byte.
-///
-/// ## Block rules
-///
-/// Block elements begin on one line and end on a different (later) line. They
-/// maintain state across lines via the active-block stack.
-///
-/// - **`block`** — per-line elements with metadata that open a new logical
-///   item on each matching line (e.g. a bullet list item: marker kind + content
-///   span). Each line that matches opens a new item. Stored as `Vec<(Type, Span)>`.
-///   Matched by `parse_block!` via `(pattern) |var|` and `num(...)` rules.
-///
-/// - **`block_simple`** — multi-line constructs with no per-line metadata.
-///   Two sub-kinds:
-///   - `fence(byte, min)` — opens on a fence line, closes on a matching
-///     fence line; the entire range (open fence through close fence) is one
-///     `Span`. While a fence is active, inline scanning is suppressed.
-///   - `cont(byte)` — groups consecutive lines that begin with `byte` into
-///     a single `Span`. Closes when a line does not start with `byte`.
-///   - `fallback` — collects runs of lines that match no other block rule
-///     into paragraph spans (`Vec<Span>`).
-///
-/// # Dispatch order per line
-///
-/// At the start of each new line `parse_text!` runs the following sequence:
+/// # Per-line dispatch
 ///
 /// ```text
-/// 1. Blank line?  → flush paragraph, close active continuation blocks, advance.
-/// 2. parse_block! active arm  → if a fence or cont block is open, handle it.
-/// 3. parse_block! open arm    → try to open a new block (bullet, ordered, fence, cont).
-/// 4. parse_line!              → try to match a whole-line rule (headings, thematic breaks).
-/// 5. Inline scanning (parse_inline!) → scan for trigger bytes; emit inline spans.
-/// 6. Fallback                 → plain text collected into inline_simple fallback field.
+/// 1. Blank line          → flush the run, close open `cont` frames, advance.
+/// 2. parse_block! peel   → continue or close the frames already open.
+/// 3. parse_block! open   → open new fence / cont / block items.
+/// 4. parse_line!         → match a whole-line rule.
+/// 5. Inline scan         → trailing content after a matched marker, or a
+///                          deferred multi-line run (below).
 /// ```
 ///
-/// Steps 2–4 short-circuit: the first match wins and inline scanning is skipped.
-/// When a fence is active (discriminant `0`), step 5 is also suppressed.
+/// Steps 2–4 short-circuit on the first match. While a fence is the innermost
+/// open frame the line is consumed whole and step 5 does not run. If an outer
+/// continuation closes mid-line, the line is reprocessed from its start
+/// against the shallower stack.
 ///
-/// # Inline scanning spans multiple lines (the unified stream model)
+/// # Multi-line runs
 ///
-/// Step 5 above is, since the multi-line rework, not a per-line operation.
-/// A line that falls through every line-start dispatch (steps 1–4 all decline,
-/// and no block is currently active) does **not** get its own `parse_inline!`
-/// call. Instead `parse_text!` defers: it records the run's start in
-/// `para_start` (the same offset already used to build the paragraph-fallback
-/// `Vec<Span>`) and advances straight to the next line, re-running the full
-/// line-start dispatch there. The run keeps growing, line after line, for as
-/// long as each subsequent line *also* falls through and is non-blank.
+/// A line that matches no rule while no block is open is not scanned at once.
+/// Its start is recorded in `para_start` and the loop moves to the next line;
+/// the run grows while the following lines also fall through. The run is
+/// flushed as **one** `parse_inline!` call — and its paragraph span recorded —
+/// at a blank line, at a line where a line or block rule matches, or at the
+/// end of input. Inside the run every `eol` is ordinary content, so the
+/// inline stack survives it: a grammar with empty `lines {}` / `blocks {}`
+/// sections (JSON) gets one run over the whole input, blank lines aside.
 ///
-/// The run closes — and is flushed as a **single** `parse_inline!` call over
-/// its whole multi-line extent — at exactly the points where `close_para!()`
-/// already fires: a blank line, a line where `parse_block!` or `parse_line!`
-/// actually matches (the lazy-continuation-ends case), or end of input. The
-/// `flush_para_inline!` macro performs this flush; it is a pure addition next
-/// to the existing paragraph-span bookkeeping, which is otherwise untouched.
-///
-/// Because the whole run is handed to `parse_inline!` as one span, the
-/// *unified inline stack* (`frames`/`fdepth`, see [`crate::parse_inline!`])
-/// now genuinely persists across the `\n` bytes inside that run — a
-/// `key_value` value, an open container, or a pending symmetric delimiter can
-/// span a line break without being discarded. A grammar with empty `lines {}`
-/// and `blocks { fallback => ... }` sections (e.g. JSON) therefore gets one
-/// run covering the *entire* buffer (blank lines aside): every `\n` inside it
-/// is ordinary content, never specially recognised, at zero extra runtime
-/// cost — see [`crate::parse_inline!`]'s docs for why.
-///
-/// A grammar with real `lines {}` / `blocks {}` rules (Markdown) keeps that
-/// dispatch exactly as before: a run is bounded by whichever line first
-/// triggers a real match, so multi-line inline spanning only ever happens
-/// *within* what would already have been one paragraph.
-///
-/// One case is deliberately **not** touched by this: a line whose line-start
-/// dispatch *did* match but left trailing content on the same line (e.g. a
-/// heading's text after its `#` marker, or a bullet item's text after its
-/// marker) is still inline-scanned by a single-line-bounded `parse_inline!`
-/// call, exactly as before — that content cannot itself continue onto a
-/// further line, so there is nothing to unify there.
+/// Trailing content after a matched line or block marker is scanned by a
+/// single-line `parse_inline!` call; it cannot continue onto another line.
 ///
 /// # Standalone iterators
 ///
-/// The generated `find_*` methods (via [`define_standalone_fns!`]) operate
-/// **outside** the `parse_text!` context entirely. Each standalone iterator
-/// scans the raw source independently, with no knowledge of surrounding
-/// elements, active blocks, or paragraph state. This means:
+/// The generated `find_*` methods (see [`crate::define_standalone_fns!`]) scan
+/// the source independently of this macro. They carry no cross-element state,
+/// so they may match bytes the full parse suppresses (a delimiter inside a
+/// fence); counts can differ by design.
 ///
-/// - A standalone iterator may match bytes that `parse_text!` would have
-///   suppressed (e.g. content inside a fence, or an escaped delimiter).
-/// - Counts from standalone iterators and from full-parse fields can differ
-///   by design — the standalone path trades context-sensitivity for speed.
-/// - Use standalone iterators when you need only one element kind from a large
-///   source and do not need cross-element consistency.
-///
-/// # Expansion pipeline
-///
-/// The macro body is a multi-stage token accumulator driven by `@`-prefixed
-/// internal arms. Each stage transforms the grammar token soup into typed
-/// buckets before the final `@body` arm emits the parsing loop:
+/// # Expansion
 ///
 /// ```text
-/// parse_text!(src; sep=..., eol=..., tab=..., escape=...[, max_nest=...]; <sections>)
-///    │
-///    ├─ @cs  — split raw sections into [inline], [lines], [blocks] buckets
-///    ├─ @ci  — extract inline settings: merge_simple flag, fallback field,
-///    │         hard_break rule, on_trigger byte sets → finders list
-///    ├─ @cb  — extract block settings: block_simple rules, block rules,
-///    │         fallback paragraph field
-///    └─ @body — emit the actual O(n) parsing loop with all resolved buckets
+/// parse_text!(src; sep=…, eol=…, tab=…, escape=…, max_nest=…; <sections>)
+///    ├─ @cs   — split the sections into [inline], [lines], [blocks]
+///    ├─ @ci   — inline settings: merge_simple, fallback, hard_break, the
+///    │          on_trigger byte sets
+///    ├─ @cb   — block settings: block_simple rules, block rules, fallback
+///    └─ @body — the parsing loop
 /// ```
 ///
-/// # Main loop invariants
+/// # Loop state
 ///
-/// - `pos` always advances; the loop terminates in O(n) in source length.
-/// - `at_line_start` is `true` whenever `pos` points at the first byte of a
-///   new logical line.
-/// - `active` — single `Option<(u8, u8, u8, u32)>` slot encoding the open
-///   block (see [`parse_block!`] for the encoding). Only one block can be
-///   active at a time.
-/// - `para_start` — start offset of the current fallthrough run; `None` when
-///   no run is open. Doubles as the run's inline-scan start (see above).
-///   Flushed (both as the inline run and as the paragraph span) on block
-///   transitions and blank lines.
-/// - `text_start` — start offset of the pending plain-text run for the
-///   *single-line-bounded* inline calls only (line/block trailing content).
-///   Kept in sync with `pos` whenever a fallthrough run is deferred, so the
-///   pre-existing `flush_text!` calls at the run's close points stay
-///   harmless no-ops; the deferred run's own text is flushed entirely by the
-///   `parse_inline!` call inside `flush_para_inline!`, not by `flush_text!`.
+/// - `pos` always advances; the loop is O(n) in the source length.
+/// - `_active_stack: [(u8, u8, u8, u32); max_nest]` and `_active_depth` —
+///   the open block frames (see [`crate::parse_block!`] for the encoding).
+/// - `para_start` — start of the current fallthrough run, `None` when no run
+///   is open. Also the run's inline-scan start.
+/// - `text_start` — start of pending plain text for the single-line inline
+///   calls. Kept equal to `pos` while a run is deferred, so the flushes at the
+///   run's close points are no-ops; the run's text is emitted by its own
+///   `parse_inline!` call.
 ///
 /// # Context bytes
 ///
-/// | Parameter   | Meaning                                            | Typical value |
-/// |-------------|-----------------------------------------------------|---------------|
-/// | `sep`       | Word separator                                       | `b' '`        |
-/// | `eol`       | Line terminator                                      | `b'\n'`       |
-/// | `tab`       | Tab character                                        | `b'\t'`       |
-/// | `escape`    | Escape prefix                                        | `b'\\'`       |
-/// | `max_nest`  | Bounded nesting depth cap, shared by                 | `1` (default) |
-/// |             | `parse_inline!` and `parse_block!` (optional)        |               |
+/// | Parameter  | Meaning                                          | Typical value |
+/// |------------|--------------------------------------------------|---------------|
+/// | `sep`      | Word separator                                   | `b' '`        |
+/// | `eol`      | Line terminator                                  | `b'\n'`       |
+/// | `tab`      | Tab character                                    | `b'\t'`       |
+/// | `escape`   | Escape prefix                                    | `b'\\'`       |
+/// | `max_nest` | Nesting cap shared by the inline and block stacks | `1`           |
 ///
-/// `max_nest` is the single nesting cap shared by the inline engine and the
-/// block engine. For inline it bounds the two *stacks* `parse_inline!` uses —
-/// one for `symmetric { parse_inside = true; balanced = true; ... }` rules, one
-/// for `asymmetric` rules with `balanced = true` and/or `parse_inside = true`
-/// (a third transparent construct, `chained` with a `parse_inside = true`
-/// component, is activated alongside these but tracks only sequential
-/// two-phase state, so it consumes no depth). For blocks it bounds the active
-/// block stack `[(u8, u8, u8, u32); max_nest]`: how deeply `cont` / `fence`
-/// frames may nest, and whether a leaf `block` item (bullet / ordered) may
-/// open inside an open block. See each macro's own docs for the full
-/// mechanism.
-///
-/// Omitting `max_nest` defaults it to `1`, which reproduces the pre-nesting
-/// single-pending-slot / single-outer-span / single-active-block behaviour
-/// exactly; existing grammars are unaffected until they opt in. This default
-/// is also the fast path: any rule whose own `balanced` and `parse_inside`
-/// flags are both `false` never touches the bounded-stack machinery at all,
-/// regardless of the grammar-wide `max_nest` value — the original,
-/// unmodified single-pass scan is the only code that ever runs for it. The
-/// per-iteration stack bookkeeping (`asym_frames`, `sym_frames`, the chained
-/// transparent-phase state) only has observable cost for rules that
-/// themselves opt into `balanced = true` and/or `parse_inside = true`; a
-/// grammar that declares none of those pays nothing extra for the feature
-/// existing.
+/// `max_nest` is always supplied by `define_parser!`. It bounds the unified
+/// inline stack of [`crate::parse_inline!`] (symmetric with `balanced = true`,
+/// asymmetric with `balanced = true` or `parse_inside = true`, key_value) and
+/// the block stack of [`crate::parse_block!`] (how deep `cont` / `fence`
+/// frames nest, and whether a `block` item opens inside an open block). At
+/// `max_nest = 1` nothing self-nests and at most one block is open at a time.
+/// Rules whose `balanced` and `parse_inside` flags are both `false` never
+/// touch the stack.
 ///
 /// # Known limitations
 ///
-/// - Inline scanning is context-free within a run; precedence between
-///   overlapping inline rules is grammar-defined and resolved by declaration
-///   order, not by a precedence table.
+/// - Precedence between overlapping inline rules follows declaration order;
+///   there is no precedence table.
 #[macro_export]
 macro_rules! parse_text {
-    // No `max_nest` given — default to `1`, which reproduces the pre-nesting
-    // behaviour exactly. Existing call sites — in particular
-    // `define_parser!`'s expansion before it was updated to pass
-    // `max_nest` itself — keep compiling unchanged.
-    (
-        $src:expr ;
-        sep = $sep:literal, eol = $eol:literal,
-        tab = $tab:literal, escape = $esc:literal ;
-        $($sections:tt)*
-    ) => {
-        $crate::parse_text!(
-            $src ;
-            sep = $sep, eol = $eol, tab = $tab, escape = $esc, max_nest = 1 ;
-            $($sections)*
-        )
-    };
-
+    // `max_nest` is always present: `define_parser!` defaults it to `1`
+    // before emitting this call.
     (
         $src:expr ;
         sep = $sep:literal, eol = $eol:literal,
@@ -319,7 +203,7 @@ macro_rules! parse_text {
             rem=[$($rest)*])
     };
 
-    // Collect on_trigger(...) { ... } blocks — the renamed form of memchr(...) { ... }.
+    // Collect on_trigger(...) { ... } blocks.
     (@ci ctx=$ctx:tt ln=$ln:tt bl=$bl:tt
         ms=$ms:tt ftx=$ftx:tt ilt=[$($ilt:tt)*] hb=$hb:tt finders=[$($f:tt)*]
         rem = [on_trigger($($fn_b:literal),+) { $($inner:tt)* } $($rest:tt)*]
@@ -452,7 +336,9 @@ macro_rules! parse_text {
             macro_rules! close_para {
                 () => {
                     if let Some(s) = para_start.take() {
-                        state.$para.push($crate::span::Span::new(s, pos as u32));
+                        $crate::paste::paste! {
+                            state.[<push_ $para>]($crate::span::Span::new(s, pos as u32));
+                        }
                     }
                 };
             }
@@ -595,7 +481,9 @@ macro_rules! parse_text {
             flush_para_inline!(len);
             flush_text!(len);
             if let Some(s) = para_start {
-                state.$para.push($crate::span::Span::new(s, len as u32));
+                $crate::paste::paste! {
+                    state.[<push_ $para>]($crate::span::Span::new(s, len as u32));
+                }
             }
             $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
                 block_simple { $($sr)* } block { $($br)* });
@@ -630,7 +518,9 @@ macro_rules! parse_text {
         [$hb_esc:literal, $sp:literal, $sp_min:literal => $hb_fld:ident]
     ) => {
         if $hb {
-            $st.$hb_fld.push($crate::span::Span::new($le as u32, $le as u32));
+            $crate::paste::paste! {
+                $st.[<push_ $hb_fld>]($crate::span::Span::new($le as u32, $le as u32));
+            }
         }
     };
 

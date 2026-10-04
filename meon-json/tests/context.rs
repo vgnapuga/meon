@@ -14,7 +14,7 @@ fn test_01_context_is_strings() {
     assert_eq!(got, vec![(1, 4), (6, 9), (11, 14)]);
 }
 
-// 02. Braces/brackets inside a string no longer corrupt object matching
+// 02. Braces/brackets inside a string do not affect object matching
 #[test]
 fn test_02_brace_inside_string() {
     let src = br#"{"note": "u{se} [it]"}"#;

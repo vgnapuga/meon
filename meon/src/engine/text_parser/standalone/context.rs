@@ -48,7 +48,7 @@
 //! - This construction's own closing search is escape-aware (matching the
 //!   full parser); the context-free `find_*` close search is not.
 
-use super::common::{Span, count_escape, find_line_end};
+use super::common::{Span, count_escape, find_line_end, next_in_paragraph};
 
 /// One opaque symmetric rule: `(delimiter byte, exact run count)`.
 pub type SymSpec = (u8, u32);
@@ -185,7 +185,7 @@ impl ParseContext {
                     pos = run_end;
                     continue;
                 }
-                match asym_close(source, run_end, len, close, escape, eol, fences) {
+                match asym_close(source, run_end, close, escape, eol, fences) {
                     Some(cp) => {
                         spans.push(Span::new(p as u32, (cp + 1) as u32));
                         pos = cp + 1;
@@ -395,17 +395,10 @@ fn sym_close(
     eol: u8,
     fences: &[FenceSpec],
 ) -> Option<usize> {
+    let enter_line = |ls: usize| (!fence_opens_line(src, ls, eol, fences)).then_some(ls);
     let mut j = from;
     loop {
-        let r = memchr::memchr2(byte, eol, &src[j..])?;
-        let q = j + r;
-        if src[q] == eol {
-            if q + 1 >= len || src[q + 1] == eol || fence_opens_line(src, q + 1, eol, fences) {
-                return None;
-            }
-            j = q + 1;
-            continue;
-        }
+        let q = next_in_paragraph(src, j, byte, eol, enter_line)?;
         if count_escape(src, q, escape) % 2 == 1 {
             j = q + 1;
             continue;
@@ -429,23 +422,15 @@ fn sym_close(
 fn asym_close(
     src: &[u8],
     from: usize,
-    len: usize,
     close: u8,
     escape: u8,
     eol: u8,
     fences: &[FenceSpec],
 ) -> Option<usize> {
+    let enter_line = |ls: usize| (!fence_opens_line(src, ls, eol, fences)).then_some(ls);
     let mut j = from;
     loop {
-        let r = memchr::memchr2(close, eol, &src[j..])?;
-        let q = j + r;
-        if src[q] == eol {
-            if q + 1 >= len || src[q + 1] == eol || fence_opens_line(src, q + 1, eol, fences) {
-                return None;
-            }
-            j = q + 1;
-            continue;
-        }
+        let q = next_in_paragraph(src, j, close, eol, enter_line)?;
         if count_escape(src, q, escape) % 2 == 1 {
             j = q + 1;
             continue;

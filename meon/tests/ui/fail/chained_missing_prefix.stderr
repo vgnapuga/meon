@@ -1,0 +1,5 @@
+error: `chained` rule needs two `| open, close | { ... } => field` components and a `prefix | byte | => field`
+  --> tests/ui/fail/chained_missing_prefix.rs:16:18
+   |
+16 |             } => links [100]
+   |                  ^^^^^

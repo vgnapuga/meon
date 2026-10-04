@@ -1080,9 +1080,8 @@ fn integ_nest_06_fence_inside_blockquote_no_inline() {
 }
 
 // 07. Nested emphasis: a different-count inner delimiter inside an outer
-//     bold now resolves both levels — the inner `*` opens its own frame on
-//     the bounded stack instead of overwriting the single pending slot the
-//     pre-nesting engine used, which used to lose the outer `**` entirely.
+//     bold resolves both levels; the inner `*` opens its own frame on the
+//     bounded stack.
 #[test]
 fn integ_nest_07_nested_emphasis_bold_then_italic() {
     let src = b"**bold *italic* still-bold**\n";
@@ -1124,4 +1123,149 @@ fn integ_nest_10_nested_blockquote_then_paragraph() {
     let c = MarkdownParser::parse(src);
     assert_eq!(c.blockquotes.len(), 2);
     assert_eq!(c.paragraphs.len(), 1);
+}
+
+// ================================================================
+// unclosed emphasis keeps its text
+// ================================================================
+
+// 01. A lone star in a multi-line paragraph does not drop the paragraph text
+#[test]
+fn integ_unclosed_01_lone_star_multi_line() {
+    let src = b"5 * 3 is fifteen\nand so on\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.italics.is_empty());
+    assert_eq!(c.texts.len(), 1);
+    assert_eq!(txt(src, c.texts[0]), "5 * 3 is fifteen\nand so on");
+}
+
+// 02. An unclosed opener at line start keeps every following line
+#[test]
+fn integ_unclosed_02_opener_at_start() {
+    let src = b"*a\nb\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.italics.is_empty());
+    assert_eq!(c.texts.len(), 1);
+    assert_eq!(txt(src, c.texts[0]), "a\nb");
+}
+
+// 03. An unclosed bold with a trailing newline keeps its text
+#[test]
+fn integ_unclosed_03_bold_with_newline() {
+    let src = b"**unclosed bold\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.bolds.is_empty());
+    assert_eq!(c.texts.len(), 1);
+    assert_eq!(txt(src, c.texts[0]), "unclosed bold");
+}
+
+// 04. Emphasis that closes across a line break keeps its span and the
+//     text on either side
+#[test]
+fn integ_unclosed_04_closed_across_newline() {
+    let src = b"see **note\nhere** end\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "note\nhere");
+    assert_eq!(c.texts.len(), 2);
+    assert_eq!(txt(src, c.texts[0]), "see ");
+    assert_eq!(txt(src, c.texts[1]), " end");
+}
+
+// ================================================================
+// unclosed openers do not rescan the paragraph
+// ================================================================
+
+// 01. Many unclosed `[` in one paragraph parse in linear time
+#[test]
+fn integ_dead_01_many_unclosed_brackets_linear() {
+    let src: Vec<u8> = b"[a".repeat(200_000);
+    let started = std::time::Instant::now();
+    let c = MarkdownParser::parse(&src);
+    assert!(c.links.is_empty());
+    assert_eq!(c.paragraphs.len(), 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+// 02. Many unclosed `<` in one paragraph parse in linear time
+#[test]
+fn integ_dead_02_many_unclosed_autolinks_linear() {
+    let src: Vec<u8> = b"<a".repeat(200_000);
+    let started = std::time::Instant::now();
+    let c = MarkdownParser::parse(&src);
+    assert!(c.autolinks.is_empty());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+// 03. A failed autolink earlier in the paragraph does not hide a later link
+#[test]
+fn integ_dead_03_failed_autolink_then_link() {
+    let src = b"x < y then [t](u) end\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.autolinks.is_empty());
+    assert_eq!(c.links.len(), 1);
+    assert_eq!(txt(src, c.links[0].url), "u");
+}
+
+// ================================================================
+// allocation of the output vectors
+// ================================================================
+
+// 01. Parsing prose leaves every element kind it does not produce unallocated
+#[test]
+fn integ_alloc_01_unused_fields_do_not_allocate() {
+    let src = b"Just a paragraph of prose, and a second line of it.\nNothing else.\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.capacity(), 0);
+    assert_eq!(c.italics.capacity(), 0);
+    assert_eq!(c.bold_italics.capacity(), 0);
+    assert_eq!(c.codes.capacity(), 0);
+    assert_eq!(c.autolinks.capacity(), 0);
+    assert_eq!(c.links.capacity(), 0);
+    assert_eq!(c.hard_breaks.capacity(), 0);
+    assert_eq!(c.headings.capacity(), 0);
+    assert_eq!(c.thematic_breaks.capacity(), 0);
+    assert_eq!(c.fenced_codes.capacity(), 0);
+    assert_eq!(c.blockquotes.capacity(), 0);
+    assert_eq!(c.bullet_items.capacity(), 0);
+    assert_eq!(c.ordered_items.capacity(), 0);
+    // The two kinds this input does produce are allocated.
+    assert!(c.texts.capacity() > 0);
+    assert!(c.paragraphs.capacity() > 0);
+}
+
+// 02. Each of the five field categories reserves its own grammar hint once
+//     its rule fires: inline, inline_simple, line, block and block_simple
+#[test]
+fn integ_alloc_02_each_category_reserves_its_hint() {
+    let mut doc = String::from("# Title\n\n- item\n\n**bold** and [text](url) here\n\n");
+    while doc.len() < 4000 {
+        doc.push_str("filler prose line to grow the source\n");
+    }
+    let src = doc.as_bytes();
+    let c = MarkdownParser::parse(src);
+
+    assert!(c.headings.capacity() >= src.len() / 200);
+    assert!(c.bullet_items.capacity() >= src.len() / 80);
+    assert!(c.bolds.capacity() >= src.len() / 40);
+    assert!(c.links.capacity() >= src.len() / 100);
+    assert!(c.paragraphs.capacity() >= src.len() / 80);
+    assert!(c.texts.capacity() >= src.len() / 10);
+}
+
+// 03. Lazy allocation does not change what is parsed
+#[test]
+fn integ_alloc_03_output_is_unaffected() {
+    let src = b"# T\n\n> quote\n\n- a\n1. b\n\n**x** *y* `z` <u> [t](u) ![i](v)\n\n```\nc\n```\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.headings.len(), 1);
+    assert_eq!(c.blockquotes.len(), 1);
+    assert_eq!(c.bullet_items.len(), 1);
+    assert_eq!(c.ordered_items.len(), 1);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(c.codes.len(), 1);
+    assert_eq!(c.autolinks.len(), 1);
+    assert_eq!(c.links.len(), 2);
+    assert_eq!(c.fenced_codes.len(), 1);
 }

@@ -21,9 +21,9 @@
 //!
 //! The active block state is a bounded stack `[(u8, u8, u8, u32); max_nest]`
 //! plus a depth counter, sharing the grammar-wide `max_nest` cap with the
-//! inline engine (see [`crate::parse_inline!`]). `max_nest = 1` reduces it to a
-//! single slot and reproduces the original, single-active-block behaviour
-//! exactly: at most one block open at a time, no block opening inside another.
+//! inline engine (see [`crate::parse_inline!`]). At `max_nest = 1` it is a
+//! single slot: at most one block open at a time, no block opening inside
+//! another.
 //!
 //! | Discriminant (field 0) | Meaning            | Field 1  | Field 2 | Field 3  |
 //! |------------------------|--------------------|----------|---------|----------|
@@ -44,8 +44,8 @@
 //!
 //! `block` items (bullets, ordered) are per-line leaves: they push nothing onto
 //! the stack and so consume no depth. They may still open *inside* a `cont`,
-//! but only when `max_nest > 1` — at `max_nest = 1` the open phase never runs
-//! inside an already-open block, exactly as before.
+//! but only when `max_nest > 1`; at `max_nest = 1` the open phase never runs
+//! inside an already-open block.
 //!
 //! # Return value
 //!
@@ -166,12 +166,11 @@ macro_rules! parse_block {
                         _go = true;          // a frame opened — try to nest further
                         continue;
                     }
-                    // A leaf `block` item (bullet / num) is itself a nesting
-                    // level, so it is gated by the same `max_nest` cap as a
+                    // A leaf `block` item (bullet / num) counts as a nesting
+                    // level and is gated by the same `max_nest` cap as a
                     // frame: at `max_nest = 1` an item never opens inside an
-                    // already-open block — the remainder goes to inline
-                    // instead, exactly as the pre-nesting engine did. At the
-                    // top level (`depth == 0 < max_nest`) it always opens.
+                    // already-open block and the remainder goes to inline. At
+                    // the top level (`depth == 0 < max_nest`) it always opens.
                     let mut _bres: ::core::option::Option<(bool, usize)> = None;
                     if $depth < $maxn {
                         $crate::parse_block!(@open_block _bres, $state,
@@ -209,7 +208,9 @@ macro_rules! parse_block {
         cont($cb:literal) => $field:ident $($rest:tt)*
     ) => {
         if $disc == 1u8 && $byte == $cb {
-            $st.$field.push($crate::span::Span::new($start, $endpos));
+            $crate::paste::paste! {
+                $st.[<push_ $field>]($crate::span::Span::new($start, $endpos));
+            }
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $endpos, $disc, $byte, $start ; $($rest)*)
     };
@@ -217,7 +218,9 @@ macro_rules! parse_block {
         fence($pat:pat, min = $min:literal) => $field:ident $($rest:tt)*
     ) => {
         if $disc == 0u8 && matches!($byte, $pat) {
-            $st.$field.push($crate::span::Span::new($start, $endpos));
+            $crate::paste::paste! {
+                $st.[<push_ $field>]($crate::span::Span::new($start, $endpos));
+            }
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $endpos, $disc, $byte, $start ; $($rest)*)
     };
@@ -297,7 +300,9 @@ macro_rules! parse_block {
                     let cs    = next + 1;
                     let $b    = $src[_p];
                     let _meta = $meta;
-                    $st.$field.push((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                    $crate::paste::paste! {
+                        $st.[<push_ $field>]((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                    }
                     $res = Some((true, cs));
                 }
             }
@@ -328,7 +333,9 @@ macro_rules! parse_block {
                         let $n    = _num;
                         let $k    = _end;
                         let _meta = $meta;
-                        $st.$field.push((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                        $crate::paste::paste! {
+                            $st.[<push_ $field>]((_meta, $crate::span::Span::new(cs as u32, $le as u32)));
+                        }
                         $res = Some((true, cs));
                     }
                 }

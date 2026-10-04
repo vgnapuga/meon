@@ -1,7 +1,5 @@
 # meon-md
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/meon-md/README_RU.md) - *GitHub*
-
 A fast flat parser for a subset of Markdown, built on the
 [`meon`](https://github.com/vgnapuga/meon/blob/main/meon/README.md) declarative
 parsing engine.
@@ -35,7 +33,7 @@ demonstrating what `meon` can express in a single `define_parser!` invocation.
 
 ```toml
 [dependencies]
-meon-md = "0.4"
+meon-md = "0.5"
 ```
 
 ```rust
@@ -72,6 +70,13 @@ if let Some((_, span)) = c.headings.first() {
 | Image         | `![alt](url)`             | `links`        | `Vec<Link>`   |
 | Autolink      | `<url>`                   | `autolinks`    | `Vec<Span>`   |
 | Hard break    | `\` or `·· ` at line end  | `hard_breaks`  | `Vec<Span>`   |
+
+Emphasis, links and autolinks are matched within a paragraph, not within a
+single line: `*a\nb*` is one italic span. A delimiter that never closes
+before the paragraph ends is not an element — its marker bytes are dropped
+and the text it enclosed stays in `texts`, together with any element that did
+close inside it. ``**a `c` b`` gives no `bolds` entry, one `codes` entry and
+the two surrounding text runs.
 
 ### Line
 
@@ -209,7 +214,7 @@ Inherited from `meon`:
 
 ```toml
 [dependencies]
-meon-md = { version = "0.1", features = ["avx2"] }
+meon-md = { version = "0.5", features = ["avx2"] }
 ```
 
 ---
@@ -243,7 +248,9 @@ does not nest its own brackets.
 
 This is a **demonstration grammar**, not a CommonMark-compliant implementation.
 
-- Emphasis spanning multiple lines is not detected.
+- Emphasis is bounded by the paragraph: it may cross a line break, but a
+  blank line inside an open delimiter discards the emphasis and leaves its
+  content as plain text.
 - Emphasis precedence (CommonMark §6.2) is not enforced — declaration order
   wins.
 - Reference-style links, HTML entities, and indented code blocks are not

@@ -213,7 +213,7 @@ fuzz_target!(|data: &[u8]| {
     // macro; passing the full parse says nothing about the standalone    //
     // scanners. They are documented to DIVERGE from the full parse on    //
     // content (a delimiter inside a fence, an escaped close), so this    //
-    // deliberately makes NO cross-comparison — it only asserts each      //
+    // makes no cross-comparison — it only asserts each                   //
     // standalone scanner survives arbitrary input and stays in bounds,   //
     // exactly the same floor the full parse is held to. Run over `data`  //
     // (raw source), independent of `kv`.                                 //

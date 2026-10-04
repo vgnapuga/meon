@@ -1,7 +1,5 @@
 # meon-json
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/meon-json/README_RU.md) - *GitHub*
-
 A fast flat JSON reader, built on the
 [`meon`](https://github.com/vgnapuga/meon/blob/main/meon/README.md) declarative
 parsing engine.
@@ -38,7 +36,7 @@ hot loop — a caller that never types pays nothing.
 
 ```toml
 [dependencies]
-meon-json = "0.3"
+meon-json = "0.4"
 ```
 
 ```rust
@@ -258,7 +256,7 @@ Inherited from `meon`:
 
 ```toml
 [dependencies]
-meon-json = { version = "0.1", features = ["avx2"] }
+meon-json = { version = "0.4", features = ["avx2"] }
 ```
 
 ---

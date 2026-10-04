@@ -17,31 +17,25 @@
 //!   lines this is exactly one span covering the whole input).
 //!
 //! **No test here asserts anything about scalar *typing*** (`nums` / `trues` /
-//! `falses` / `nulls`). That projection no longer exists in the engine at
-//! all — it moved to a separate post-pass (`JsonContent::type_scalars` /
-//! `type_field`) with its own test coverage. A consequence worth stating
-//! plainly: the engine no longer tracks individual *array elements* as spans
-//! at all (only the array's own outer span). Per-element introspection is
-//! entirely a post-pass concern now; these tests check container/member
-//! structure and raw text, never "how many elements".
+//! `falses` / `nulls`): that is a separate post-pass (`JsonContent::type_scalars`
+//! / `type_field`) with its own suite. The engine does not track individual
+//! *array elements* as spans, only the array's own outer span, so these tests
+//! check container/member structure and raw text, never "how many elements".
 //!
-//! # Multi-line / pretty JSON IS covered here
+//! # Multi-line / pretty JSON
 //!
-//! An earlier version of this suite stated multi-line JSON was unsupported.
-//! That is no longer true: the engine's `inline` scan now runs over a single
-//! accumulated multi-line run rather than per physical line, so the unified
-//! stack (`key_value` frames, open containers) survives every `\n` inside a
-//! document with no blank lines. A dedicated section below pins this down
-//! with pretty-printed, indented, multi-line input.
+//! The engine's `inline` scan runs over one accumulated multi-line run rather
+//! than per physical line, so the unified stack (`key_value` frames, open
+//! containers) survives every `\n` inside a document with no blank lines. A
+//! dedicated section below covers pretty-printed, indented input.
 //!
 //! # Raw, untrimmed values
 //!
-//! Without the old scalar layer, **nothing trims a member value** anymore.
-//! A value's span runs from right after its `:` (plus, at most, one
-//! immediately-following space — see `allow_sep`) to its terminator,
-//! verbatim: trailing spaces, tabs, `\r`, and embedded `\n` are all part of
-//! the raw span. Several tests below assert on that whitespace explicitly,
-//! on purpose, to lock the behaviour in rather than let it drift silently.
+//! **Nothing trims a member value.** A value's span runs from right after its
+//! `:` (plus, at most, one immediately-following space — see `allow_sep`) to
+//! its terminator, verbatim: trailing spaces, tabs, `\r`, and embedded `\n`
+//! are all part of the raw span. Several tests below assert on that
+//! whitespace explicitly.
 
 use meon_json::{JsonContent, JsonParser};
 
@@ -183,8 +177,7 @@ fn test_12_single_member_null_raw() {
 }
 
 // 13. An array value: the member's raw value is the whole bracketed array —
-//     containment, not a per-element breakdown (the engine no longer tracks
-//     elements at all).
+//     containment, not a per-element breakdown.
 #[test]
 fn test_13_single_member_array_value_whole_span() {
     let c = JsonParser::parse(br#"{"a":[1,2,3]}"#);
@@ -342,7 +335,7 @@ fn test_26_string_containing_brackets_not_structural() {
 }
 
 // ==========================================================================
-// Arrays — structural only (the engine no longer tracks individual elements)
+// Arrays — structural only (elements are not tracked individually)
 // ==========================================================================
 
 // 27. A flat numeric array: one container. `arrays[i]` is content-only (the
@@ -397,9 +390,8 @@ fn test_31_deeply_nested_arrays_count() {
 
 // 32. A double comma inside an array does not panic; the array still closes
 //     and its content span (brackets excluded) matches; the `_raw()`
-//     accessor recovers the bracket-inclusive form. (Element-level
-//     robustness for the double comma is now a post-pass concern, not an
-//     engine one.)
+//     accessor recovers the bracket-inclusive form. (Element-level handling
+//     of the double comma is the typing post-pass's concern.)
 #[test]
 fn test_32_array_double_comma_no_panic() {
     let c = JsonParser::parse(br#"[1,,2]"#);
@@ -527,8 +519,7 @@ fn test_40_array_span_includes_brackets() {
 // 41. Spaces around `:` and `,`: `allow_sep` skips exactly one leading space
 //     right after `:`, but nothing trims the *trailing* side — the value's
 //     raw span runs up to its terminator byte verbatim, trailing space
-//     included. This is intentional now that the scalar trim layer is gone;
-//     pinned down explicitly rather than left to silently drift.
+//     included.
 #[test]
 fn test_41_spaces_around_colon_and_comma() {
     let c = JsonParser::parse(br#"{ "a" : 1 , "b" : 2 }"#);
@@ -552,8 +543,8 @@ fn test_42_tab_after_colon_not_skipped_raw() {
 }
 
 // 43. A value spanning a newline: the raw span includes the embedded `\n`
-//     (and any indentation on the following line) verbatim — nothing trims
-//     it without the old scalar layer.
+//     (and any indentation on the following line) verbatim; nothing trims
+//     it.
 #[test]
 fn test_43_value_spanning_newline_raw() {
     let c = JsonParser::parse(b"{\"a\":\n  5\n}");
@@ -573,11 +564,11 @@ fn test_44_value_with_crlf_raw() {
 }
 
 // ==========================================================================
-// Multi-line / pretty-printed JSON — the new streaming capability
+// Multi-line / pretty-printed JSON
 // ==========================================================================
 
 // 45. A simple two-member object, pretty-printed across four lines: the
-//     unified inline stack must survive each internal `\n` untouched.
+//     unified inline stack survives each internal `\n`.
 #[test]
 fn test_45_pretty_printed_simple_object() {
     let src = b"{\n  \"a\": 1,\n  \"b\": 2\n}";
@@ -647,11 +638,9 @@ fn test_49_unterminated_object_member_committed_container_discarded() {
 }
 
 // 50. An unterminated *bare* (unwrapped) array: the array placeholder is
-//     discarded the same way, but — unlike the object case above — there is
-//     no key_value frame here to advance `text_start` past the content. The
-//     unconditional final flush therefore sweeps the array's untracked tail
-//     content into `scalars`. This asymmetry is a direct, deterministic
-//     consequence of the drain order, not a bug; pinned down here on purpose.
+//     discarded, and with no key_value frame to move `text_start` past the
+//     content, the final flush sweeps the array's tail into `scalars`. This
+//     asymmetry with the object case follows from the drain order.
 #[test]
 fn test_50_unterminated_array_discarded_tail_leaks_to_scalars() {
     let c = JsonParser::parse(br#"[1,2"#);
@@ -659,7 +648,7 @@ fn test_50_unterminated_array_discarded_tail_leaks_to_scalars() {
     assert_eq!(texts(&c, &c.scalars), vec!["1,2"]);
 }
 
-// 51. A top-level unterminated string: the legacy (off-stack) string search
+// 51. A top-level unterminated string: the off-stack string search
 //     never finds a close, so nothing is pushed to `strings`; the whole
 //     input — orphan opening quote included — falls through to the
 //     unconditional final flush as one `scalars` entry.
@@ -799,12 +788,9 @@ fn test_59_object_nesting_at_frame_cap() {
 // 60. Object nesting BEYOND the frame cap: 40 levels need 80 frames; only the
 //     outer 32 fit. The over-cap levels engage the overflow counter, which
 //     interleaves with the per-level key_value drains in an
-//     implementation-defined way — so this test deliberately asserts only the
-//     robust invariants (no panic, counts bounded by the cap, at least the
-//     outermost level survives) rather than an exact over-cap count. If you
-//     ever want exact numbers here, decide and document the
-//     overflow-vs-kv-drain ordering first; today it is intentionally not a
-//     contract.
+//     implementation-defined way, so this test asserts only the robust
+//     invariants: no panic, counts bounded by the cap, the outermost level
+//     survives. The over-cap count is not a contract.
 #[test]
 fn test_60_object_nesting_beyond_cap_no_panic_bounded() {
     let depth = 40;

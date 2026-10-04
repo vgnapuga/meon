@@ -28,7 +28,7 @@
 //! reuse the context-free iterator and post-filter items whose span start is
 //! covered — which is candidate-exact for whole-line constructs.
 
-use super::common::{Span, count_escape};
+use super::common::{Span, count_escape, next_in_paragraph};
 use super::context::{ContextCursor, ParseContext};
 
 /// Context-aware variant of [`super::symmetric::SymmetricExactIter`].
@@ -109,29 +109,19 @@ impl Iterator for ContextSymmetricExactIter<'_> {
             let cs = end;
             let mut j = cs;
             let mut ccur = self.cur;
+            let eol = self.eol;
             let close = loop {
-                let Some(r) = memchr::memchr2(self.byte, self.eol, &src[j..]) else {
+                // A region opening at a line start is either a fenced block
+                // (multi-line: the paragraph ends, the opener dies) or an
+                // inline region leading the line (skipped wholesale).
+                let enter_line = |ls: usize| match ccur.covering_end(ls) {
+                    Some(ce) if memchr::memchr(eol, &src[ls..ce]).is_some() => None,
+                    Some(ce) => Some(ce),
+                    None => Some(ls),
+                };
+                let Some(q) = next_in_paragraph(src, j, self.byte, eol, enter_line) else {
                     break None;
                 };
-                let q = j + r;
-                if src[q] == self.eol {
-                    if q + 1 >= len || src[q + 1] == self.eol {
-                        break None;
-                    }
-                    // A region opening at the next line start is either a
-                    // fenced block (multi-line: the paragraph ends, the
-                    // opener dies) or an inline region leading the line
-                    // (skip it wholesale).
-                    if let Some(ce) = ccur.covering_end(q + 1) {
-                        if memchr::memchr(self.eol, &src[q + 1..ce]).is_some() {
-                            break None;
-                        }
-                        j = ce;
-                        continue;
-                    }
-                    j = q + 1;
-                    continue;
-                }
                 if let Some(ce) = ccur.covering_end(q) {
                     j = ce;
                     continue;
@@ -236,25 +226,16 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
             let cs = end;
             let mut j = cs;
             let mut ccur = self.cur;
+            let eol = self.eol;
             let close = loop {
-                let Some(r) = memchr::memchr2(self.close, self.eol, &src[j..]) else {
+                let enter_line = |ls: usize| match ccur.covering_end(ls) {
+                    Some(ce) if memchr::memchr(eol, &src[ls..ce]).is_some() => None,
+                    Some(ce) => Some(ce),
+                    None => Some(ls),
+                };
+                let Some(q) = next_in_paragraph(src, j, self.close, eol, enter_line) else {
                     break None;
                 };
-                let q = j + r;
-                if src[q] == self.eol {
-                    if q + 1 >= len || src[q + 1] == self.eol {
-                        break None;
-                    }
-                    if let Some(ce) = ccur.covering_end(q + 1) {
-                        if memchr::memchr(self.eol, &src[q + 1..ce]).is_some() {
-                            break None;
-                        }
-                        j = ce;
-                        continue;
-                    }
-                    j = q + 1;
-                    continue;
-                }
                 if let Some(ce) = ccur.covering_end(q) {
                     j = ce;
                     continue;
@@ -384,7 +365,7 @@ mod tests {
         assert_eq!(spans, vec![Span::new(18, 19)]);
     }
 
-    // ---- Paragraph-bounded behaviour (the new contract) ----------------- //
+    // ---- Paragraph-bounded behaviour ------------------------------------ //
 
     // 09. A pair spanning a single newline closes, with a covered close
     //     candidate on the first line skipped

@@ -1572,7 +1572,7 @@ fn sym_bal_08_count2_opener_and_closer() {
 }
 
 // ================================================================
-// chained balanced — text component (tbal)
+// chained balanced - text component (tbal)
 // ================================================================
 
 // 01. A nested bracket in the text component is included when tbal=true
@@ -1615,7 +1615,7 @@ fn chained_tbal_04_deep_nesting() {
 }
 
 // ================================================================
-// chained balanced — url component (ubal)
+// chained balanced - url component (ubal)
 // ================================================================
 
 // 05. A nested parenthesis in the url component is included when ubal=true
@@ -1707,13 +1707,13 @@ fn chained_tbal_12_multiple_links_sequence() {
 }
 
 // ================================================================
-// balanced asymmetric — multi-level (max_nest > 1)
+// balanced asymmetric - multi-level (max_nest > 1)
 // ================================================================
 //
 // All of these use `run_inline_balanced_nested!`, the same grammar as
 // `run_inline_balanced!` above with a caller-supplied `max_nest`. The
-// `balanced_*` tests above already cover `max_nest = 1` (the collapsing,
-// pre-nesting-equivalent behaviour) — these specifically exercise depth > 1.
+// `balanced_*` tests above already cover `max_nest = 1` (the collapsing
+// behaviour) - these specifically exercise depth > 1.
 
 // 01. At depth 2, a single level of nesting is split into two spans,
 // sorted by start: outer first, inner second.
@@ -1727,7 +1727,7 @@ fn balanced_nested_01_depth2_two_spans() {
     assert_eq!(txt(src, st.objects[1]), "b");
 }
 
-// 02. The outer span contains the inner span (interval containment —
+// 02. The outer span contains the inner span (interval containment -
 // this is how a consumer reconstructs the tree, no parent field needed).
 #[test]
 fn balanced_nested_02_outer_contains_inner() {
@@ -1764,7 +1764,7 @@ fn balanced_nested_04_cap_below_actual_depth() {
 }
 
 // 05. A cap of 1 on a multi-level input reproduces the exact collapsing
-// behaviour of `run_inline_balanced!` — the explicit depth-1 boundary,
+// behaviour of `run_inline_balanced!` - the explicit depth-1 boundary,
 // not just its default.
 #[test]
 fn balanced_nested_05_depth1_collapses() {
@@ -1775,7 +1775,7 @@ fn balanced_nested_05_depth1_collapses() {
 }
 
 // 06. A frame that closes properly (inner) survives even though an
-// enclosing frame (outer) never finds its close before line end — this is
+// enclosing frame (outer) never finds its close before line end - this is
 // the exact scenario that requires `Vec::remove` rather than `truncate` in
 // the discard step: the inner entry sits at a *higher* index than the
 // still-open outer one.
@@ -1796,7 +1796,7 @@ fn balanced_nested_07_both_unclosed_nothing_survives() {
 }
 
 // 08. A close byte encountered with an empty stack is literal, not a
-// structural event — no panic, no underflow, no spurious span.
+// structural event - no panic, no underflow, no spurious span.
 #[test]
 fn balanced_nested_08_stray_close_on_empty_stack_is_literal() {
     let src = b"{a} b} c";
@@ -1806,7 +1806,7 @@ fn balanced_nested_08_stray_close_on_empty_stack_is_literal() {
 }
 
 // 09. Three independent (non-nested) top-level pairs still each get their
-// own span at higher max_nest, exactly as at max_nest = 1 — depth only
+// own span at higher max_nest, exactly as at max_nest = 1 - depth only
 // matters when pairs are actually nested.
 #[test]
 fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
@@ -1819,21 +1819,19 @@ fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
 }
 
 // ================================================================
-// symmetric balanced (parse_inside = true) — different-key nesting fix
+// symmetric balanced (parse_inside = true) - different-key nesting fix
 // ================================================================
 //
 // All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
 // true; balanced = true; ... }` fixture with its own `n_italics` / `n_bolds`
-// fields, separate from the pre-existing `italics` / `bolds` fixtures
-// above (which stay `balanced = false`, exercising the original single
-// pending-slot mechanism, untouched).
+// fields, separate from the `italics` / `bolds` fixtures above, which use
+// `balanced = false` and the single pending slot.
 
-// 01. The bug this fixes: with a single pending slot, a different-count
-// occurrence of the same byte used to silently overwrite the still-pending
-// outer delimiter, so the outer pair never closed. With the bounded stack
-// (depth >= 2), both levels resolve.
+// 01. With the bounded stack (depth >= 2) a different-count occurrence of the
+// same byte opens an inner frame instead of replacing the outer one, so both
+// levels resolve.
 #[test]
-fn sym_nested_01_different_key_nesting_fix() {
+fn sym_nested_01_different_key_nests() {
     let src = b"**bold *italic* still-bold**";
     let (st, _) = run_inline_sym_nested!(src, 2);
     assert_eq!(st.n_bolds.len(), 1);
@@ -1842,11 +1840,8 @@ fn sym_nested_01_different_key_nesting_fix() {
     assert_eq!(txt(src, st.n_italics[0]), "italic");
 }
 
-// 02. At depth 1 (the boundary, not just the default), the different-key
-// case is deliberately *not* fixed: there is no room to track the inner
-// frame, so it is left as literal content inside the (still correctly
-// closing, thanks to the stack rather than an overwritable slot) outer
-// span.
+// 02. At depth 1 there is no room for the inner frame: it is left as literal
+// content inside the outer span, which still closes.
 #[test]
 fn sym_nested_02_depth1_outer_still_closes_inner_untracked() {
     let src = b"**bold *italic* still-bold**";
@@ -1856,7 +1851,7 @@ fn sym_nested_02_depth1_outer_still_closes_inner_untracked() {
     assert_eq!(txt(src, st.n_bolds[0]), "bold *italic* still-bold");
 }
 
-// 03. An identical (byte, count) pair cannot self-nest — open and close
+// 03. An identical (byte, count) pair cannot self-nest - open and close
 // look the same for a symmetric delimiter, so there is no signal to tell
 // "nested open" apart from "close". Two adjacent runs result, with the
 // middle text left as plain content rather than nested.
@@ -1869,7 +1864,7 @@ fn sym_nested_03_identical_key_toggles_not_nests() {
     assert_eq!(txt(src, st.n_bolds[1]), " c");
 }
 
-// 04. A frame still pending at line end is discarded — neither delimiter
+// 04. A frame still pending at line end is discarded - neither delimiter
 // closes within the line, so neither produces a span.
 #[test]
 fn sym_nested_04_unclosed_both_discarded() {
@@ -1903,11 +1898,11 @@ fn sym_nested_06_plain_text_no_spans() {
 }
 
 // ================================================================
-// balanced asymmetric — multi-level, continued (run edge cases)
+// balanced asymmetric - multi-level, continued (run edge cases)
 // ================================================================
 
 // 10. A triple-character open run with max_nest = 3 opens three real
-// levels from one run — each byte of `{{{` is its own event.
+// levels from one run - each byte of `{{{` is its own event.
 #[test]
 fn balanced_nested_10_triple_run_depth3_three_levels() {
     let src = b"{{{x}}}";
@@ -1930,7 +1925,7 @@ fn balanced_nested_11_triple_run_depth2_overflow_skips_innermost() {
 }
 
 // 12. The same triple-character run with max_nest = 1 fully collapses to
-// one span — multi-character runs behave the same as single-character
+// one span - multi-character runs behave the same as single-character
 // ones at the depth-1 boundary.
 #[test]
 fn balanced_nested_12_triple_run_depth1_collapses() {
@@ -1942,7 +1937,7 @@ fn balanced_nested_12_triple_run_depth1_collapses() {
 
 // 13. A close run longer than what's actually needed: the real close
 // consumes one byte, the remaining bytes of that same run are literal
-// text — not lost, not mistaken for anything else.
+// text - not lost, not mistaken for anything else.
 #[test]
 fn balanced_nested_13_excess_close_bytes_become_text_not_lost() {
     let src = b"{x}}}";
@@ -1955,7 +1950,7 @@ fn balanced_nested_13_excess_close_bytes_become_text_not_lost() {
 
 // 14. An open run longer than what later closes: the outermost level
 // never finds its close and is discarded, while the inner levels that
-// did close survive — and survive at the right indices, since closing
+// did close survive - and survive at the right indices, since closing
 // uses `Vec::remove`, not `truncate`.
 #[test]
 fn balanced_nested_14_unclosed_outer_discarded_inner_survive() {
@@ -1978,7 +1973,7 @@ fn balanced_nested_15_depth1_overflow_consumes_both_closes_nothing_survives() {
 }
 
 // 16. Two independent multi-level groups on the same line don't share or
-// corrupt each other's bookkeeping — each gets its own pair of levels.
+// corrupt each other's bookkeeping - each gets its own pair of levels.
 #[test]
 fn balanced_nested_16_two_independent_multilevel_groups() {
     let src = b"{{x}} {{y}}";
@@ -2016,10 +2011,9 @@ fn balanced_nested_18_innermost_empty_content() {
 }
 
 // 19. Text between an outer pair's open and a same-type inner pair's open
-// is not a separate top-level text span — same principle as the
-// symmetric tests above, applied to asymmetric. Confirms the existing
-// `balanced_nested_01` shape (`objects` content is unchanged) while also
-// locking in that `texts` stays empty.
+// is not a separate top-level text span - same principle as the
+// symmetric tests above, applied to asymmetric. Same `objects` content as
+// `balanced_nested_01`, and `texts` stays empty.
 #[test]
 fn balanced_nested_19_filler_between_nested_opens_not_a_separate_text_span() {
     let src = b"{a {b} c}";
@@ -2031,11 +2025,11 @@ fn balanced_nested_19_filler_between_nested_opens_not_a_separate_text_span() {
 }
 
 // ================================================================
-// symmetric balanced (parse_inside = true) — continued (edge cases)
+// symmetric balanced (parse_inside = true) - continued (edge cases)
 // ================================================================
 
 // 07. An occurrence whose count matches no declared arm (only 1 and 2
-// are declared; this is a run of 3) is literal — it doesn't open a frame,
+// are declared; this is a run of 3) is literal - it doesn't open a frame,
 // doesn't move the stack, and doesn't prevent the enclosing pair that's
 // already open from later closing correctly around it.
 #[test]
@@ -2047,7 +2041,7 @@ fn sym_nested_07_unmatched_count_inside_open_pair_is_literal() {
 }
 
 // 08. A different-key occurrence arriving once the stack is already at
-// its cap is literal — it doesn't corrupt the frame already open, and a
+// its cap is literal - it doesn't corrupt the frame already open, and a
 // later, properly-nested occurrence of that same different key still
 // resolves once the cap frees up again. Nothing here ends up in `texts`:
 // every byte not claimed by `n_bolds`/`n_italics` is still content of the
@@ -2064,7 +2058,7 @@ fn sym_nested_08_beyond_cap_different_key_is_literal_then_recovers() {
 }
 
 // 09. Text between an outer pair's open and an inner, different-key
-// pair's open is not a separate top-level text span — it stays inside the
+// pair's open is not a separate top-level text span - it stays inside the
 // outer pair's own content, exactly like the bytes between the inner
 // pair's close and the outer pair's close.
 #[test]
@@ -2077,7 +2071,7 @@ fn sym_nested_09_filler_between_open_pairs_not_a_separate_text_span() {
 }
 
 // 10. An outer frame that never closes (discarded at line end) doesn't
-// affect an inner, different-field frame that already closed properly —
+// affect an inner, different-field frame that already closed properly -
 // the two live in separate Vecs, so discarding one is independent of the
 // other surviving.
 #[test]
@@ -2090,10 +2084,10 @@ fn sym_nested_10_unclosed_outer_does_not_affect_closed_inner_different_field() {
 }
 
 // ---------------------------------------------------------------
-// max_nest = 0 (degenerate, but legal — front-end doesn't reject it)
+// max_nest = 0 (degenerate, but legal - front-end doesn't reject it)
 // ---------------------------------------------------------------
 
-// 01. At max_nest = 0, a balanced asymmetric pair never opens at all — the
+// 01. At max_nest = 0, a balanced asymmetric pair never opens at all - the
 //     cap is 0, so `(asym_depth as usize) < _cap` is false on the very
 //     first occurrence, and the open byte is left as literal text rather
 //     than panicking on a zero-sized array.
@@ -2105,7 +2099,7 @@ fn maxnest_zero_01_balanced_asymmetric_never_opens() {
 }
 
 // 02. At max_nest = 0, the open and close bytes both surface as plain text
-//     (no panic, no lost bytes — the overflow counter never engages for
+//     (no panic, no lost bytes - the overflow counter never engages for
 //     `balanced = true` outside the open path, so the close byte falls
 //     through to ordinary text accumulation).
 #[test]
@@ -2118,7 +2112,7 @@ fn maxnest_zero_02_bytes_preserved_as_text() {
 }
 
 // 03. At max_nest = 0, a symmetric balanced rule (parse_inside = true,
-//     balanced = true) likewise never opens a frame — same cap-is-zero
+//     balanced = true) likewise never opens a frame - same cap-is-zero
 //     reasoning as the asymmetric case, exercised on the other stack.
 #[test]
 fn maxnest_zero_03_symmetric_balanced_never_opens() {
@@ -2133,18 +2127,18 @@ fn maxnest_zero_03_symmetric_balanced_never_opens() {
 // ---------------------------------------------------------------
 //
 // Fixture: two asymmetric rules in one on_trigger block, `(`,`)` and `[`,`)`
-// — chosen so the OPEN bytes differ (so the dispatcher can tell which rule
+// - chosen so the OPEN bytes differ (so the dispatcher can tell which rule
 // opened a given frame) but the CLOSE byte (`)`) is identical between them.
 // This is the exact shape flagged in inline.rs's doc-comment: the frame on
 // the stack still resolves by its own recorded close byte, but the
-// `match _rc { $an => … }` arm that actually receives the close is whichever
+// `match _rc { $an => ... }` arm that actually receives the close is whichever
 // rule's `1 => field` happens to be reached for count `1` in declaration
-// order inside that match — which, since both rules declare their exact
+// order inside that match - which, since both rules declare their exact
 // arm as `1`, are not actually ambiguous at the match level (each rule's
 // `$an => $af` pair is distinct token-wise), but the open byte is what
 // decides which frame (and therefore which field) is on the stack in the
-// first place. These tests lock in that the OPEN byte — not just "any
-// occurrence of the shared close byte" — determines routing.
+// first place. These tests lock in that the OPEN byte - not just "any
+// occurrence of the shared close byte" - determines routing.
 
 macro_rules! run_inline_shared_close_nested {
     ($src:expr, $maxn:literal) => {{
@@ -2171,7 +2165,7 @@ macro_rules! run_inline_shared_close_nested {
 }
 
 // 04. A `(...)` pair routes to its own rule's field (`objects`), matching
-//     close byte `)` against the frame's own recorded `$ac` — not against
+//     close byte `)` against the frame's own recorded `$ac` - not against
 //     whichever rule happens to be declared first.
 #[test]
 fn shared_close_04_paren_pair_routes_to_objects() {
@@ -2184,7 +2178,7 @@ fn shared_close_04_paren_pair_routes_to_objects() {
 
 // 05. A `[...)` pair (mismatched-looking but matching this fixture's second
 //     rule, which declares open `[` / close `)`) routes to that rule's own
-//     field (`n_italics`), not to `objects` — confirming routing keys off
+//     field (`n_italics`), not to `objects` - confirming routing keys off
 //     the *open* byte recorded on the frame, not just "first rule whose
 //     close byte matches".
 #[test]
@@ -2225,7 +2219,7 @@ fn shared_close_07_nested_different_open_bytes_shared_close() {
 }
 
 // ================================================================
-// escaped closing delimiters — internal forward-search fix
+// escaped closing delimiters - internal forward-search fix
 // ================================================================
 //
 // These exercise the `@is_escaped` check added to every *internal*
@@ -2233,20 +2227,20 @@ fn shared_close_07_nested_different_open_bytes_shared_close() {
 // escape-awareness entirely:
 //
 //   - symmetric greedy mode (`parse_inside = false`), both `balanced`
-//     settings — used for code spans and balanced quote-like rules;
-//   - the legacy asymmetric memchr search (`balanced = false,
-//     parse_inside = false`) — used for autolinks;
-//   - the legacy chained two-phase search (both components
-//     `parse_inside = false`) — used for `[text](url)`-style links.
+//     settings - used for code spans and balanced quote-like rules;
+//   - the asymmetric memchr search (`balanced = false,
+//     parse_inside = false`) - used for autolinks;
+//   - the chained two-phase search (both components
+//     `parse_inside = false`) - used for `[text](url)`-style links.
 //
-// Opacity (`parse_inside`) is unaffected in every case below — none of
+// Opacity (`parse_inside`) is unaffected in every case below - none of
 // these rules scan their own content for other rules' triggers, before or
 // after this fix. What changed is purely whether the *closing* delimiter
 // itself is correctly distinguished from a literal, backslash-escaped
 // occurrence of the same byte. The existing `sym_bal_02_doubled_is_escape`
 // test (unescaped doubled-quote content) already covers the regression
-// case that this fix must not disturb — content with no backslash involved
-// at all — so it isn't duplicated here.
+// case that this fix must not disturb - content with no backslash involved
+// at all - so it isn't duplicated here.
 
 // 01. An escaped closing backtick inside an open code span does not close
 //     it; the search continues and finds the real, unescaped closing run.
@@ -2294,8 +2288,8 @@ fn escape_close_04_balanced_symmetric_escaped_quote() {
     assert_eq!(txt(src, st.codes[0]), "a\\\"b");
 }
 
-// 05. An escaped closing `>` on an autolink (the legacy asymmetric memchr
-//     path) is skipped; the real, unescaped `>` closes it instead.
+// 05. An escaped closing `>` on an autolink (the asymmetric memchr path) is
+//     skipped; the real, unescaped `>` closes it instead.
 #[test]
 fn escape_close_05_autolink_escaped_close() {
     let src = br"<http://example.com\>more>";
@@ -2317,7 +2311,7 @@ fn escape_close_06_chained_text_escaped_bracket_no_nesting() {
 
 // 07. A chained link's text bracket, balanced (tbal = true): an escaped
 //     `]` inside genuine nested brackets is neither mistaken for the close
-//     nor for a depth-decrementing event — it doesn't disrupt the depth
+//     nor for a depth-decrementing event - it doesn't disrupt the depth
 //     count for the real, unescaped nested pair.
 #[test]
 fn escape_close_07_chained_text_escaped_bracket_with_real_nesting() {
@@ -2350,7 +2344,7 @@ fn escape_close_09_chained_url_escaped_paren_with_real_nesting() {
 }
 
 // 10. Span bounds stay within source length across every path touched by
-//     this fix — a basic sanity invariant, not specific to escaping itself.
+//     this fix - a basic sanity invariant, not specific to escaping itself.
 #[test]
 fn escape_close_10_span_bounds_sane_across_fixed_paths() {
     let len_check = |src: &[u8], spans: &[meon::span::Span]| {
@@ -2435,7 +2429,7 @@ fn kvn_05_nested_object_value() {
     assert_eq!(txt(src, st.key_values[1].value), r#"{"b":1}"#);
 }
 
-// 06. string value with a `:` and `,` inside is opaque — not seen as eq/end
+// 06. string value with a `:` and `,` inside is opaque - not seen as eq/end
 #[test]
 fn kvn_06_string_value_opaque() {
     let src = br#"{"a":"x:y,z"}"#;
@@ -2496,4 +2490,391 @@ fn kvn_12_two_objects() {
     let (st, _) = run_inline_kv_json!(src, 8);
     assert_eq!(st.key_values.len(), 2);
     assert_eq!(st.objects.len(), 2);
+}
+
+// ================================================================
+// held text: stack-mode frames (`balanced = true`) that never close
+// ================================================================
+//
+// `run_inline!` declares `*` with `balanced = false` (the off-stack `pending`
+// slot). The cases below use the stack path instead - `balanced = true` plus a
+// declared `hard_break`, exactly meon-md's configuration - where plain text
+// flushed while a frame is open is *held* in the fallback vector and either
+// rolled back when the frame closes or kept when the frame is discarded.
+
+macro_rules! run_inline_stack {
+    ($src:expr, $merge:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        let _ = meon::parse_inline!(
+            st, src, 0, le, texts, $merge, b'\\', b' ', b'\t', b'\n', 4, true;
+            hard_break(b'\\', b' ', 2) => hard_breaks;
+            on_trigger(b'*', b'`', b'<', b'>') {
+                symmetric b'`' {
+                    parse_inside = false;
+                    balanced     = false;
+                    _ => codes
+                }
+                symmetric b'*' {
+                    parse_inside = true;
+                    balanced     = true;
+                    1 => italics, 2 => bolds, _ => bold_italics
+                }
+                asymmetric b'<', b'>' {
+                    balanced     = true;
+                    parse_inside = true;
+                    1 => autolinks
+                }
+            }
+        );
+        st
+    }};
+}
+
+fn all(src: &[u8], v: &[meon::span::Span]) -> Vec<String> {
+    v.iter().map(|s| txt(src, *s).to_string()).collect()
+}
+
+// 01. An unclosed star followed by a newline keeps its text (single line)
+#[test]
+fn held_01_unclosed_star_with_newline_keeps_text() {
+    let src = b"*no close\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.texts), vec!["no close"]);
+    assert!(st.italics.is_empty());
+}
+
+// 02. An unclosed star keeps the text of every following line of the run
+#[test]
+fn held_02_unclosed_star_multi_line_keeps_all_lines() {
+    let src = b"*a\nb\nc\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert!(st.italics.is_empty());
+}
+
+// 03. With merge_simple the held lines coalesce across the newline
+#[test]
+fn held_03_unclosed_star_multi_line_merged() {
+    let src = b"*a\nb\n";
+    let st = run_inline_stack!(src, true);
+    assert_eq!(all(src, &st.texts), vec!["a\nb"]);
+}
+
+// 04. Text inside a frame that does close is not emitted as text
+#[test]
+fn held_04_closed_frame_rolls_back_held_text() {
+    let src = b"x *a\nb* y\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 05. Rollback restores a previous span that push_merge had extended into
+//     the held region
+#[test]
+fn held_05_rollback_restores_merged_previous_span() {
+    let src = b"x*a\nb*\n";
+    let st = run_inline_stack!(src, true);
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x"]);
+}
+
+// 06. Unclosed outer frame, closed inner frame: the inner span is kept, the
+//     outer's text is released as plain text around it
+#[test]
+fn held_06_unclosed_outer_closed_inner() {
+    let src = b"**a *b* c\n";
+    let st = run_inline_stack!(src, false);
+    assert!(st.bolds.is_empty());
+    assert_eq!(all(src, &st.italics), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["a ", " c"]);
+}
+
+// 07. A closed opaque span inside an unclosed frame: text around it survives
+#[test]
+fn held_07_unclosed_frame_with_inner_code_span() {
+    let src = b"*a `c` b\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["a ", " b"]);
+}
+
+// 08. Same rule for a stack-mode asymmetric frame left unclosed
+#[test]
+fn held_08_unclosed_asymmetric_keeps_text() {
+    let src = b"<a\nb\n";
+    let st = run_inline_stack!(src, false);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// 09. A closed asymmetric frame rolls its held text back
+#[test]
+fn held_09_closed_asymmetric_rolls_back() {
+    let src = b"x <a\nb> y\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.autolinks), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 10. Unclosed frame whose text ends with a hard break: the break is still
+//     recorded and the text before it is kept
+#[test]
+fn held_10_unclosed_frame_with_hard_break() {
+    let src = b"*a  \nb\n";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// 11. A run without any newline: the final flush alone releases the text
+#[test]
+fn held_11_single_line_without_newline() {
+    let src = b"*no close";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.texts), vec!["no close"]);
+}
+
+// ================================================================
+// dead close bytes: failed forward searches are not repeated
+// ================================================================
+//
+// The `balanced = false` asymmetric path and the both-opaque
+// `chained` path search forward to the run's end for their close byte. A
+// failed search marks that byte as absent for the rest of the run, so a
+// later opener of the same kind is rejected without rescanning. These cases
+// pin the contract: a failed search for one close byte never affects
+// openers whose close byte differs, and escaped close bytes do not count.
+
+// 01. A failed `>` search does not affect a later `[..](..)` link
+#[test]
+fn dead_01_asym_failure_leaves_chained_alone() {
+    let src = b"<a [b](c)";
+    let (st, _) = run_inline!(src);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+}
+
+// 02. A failed `]` search does not affect a later `<..>` autolink
+#[test]
+fn dead_02_chained_failure_leaves_asym_alone() {
+    let src = b"[a (b) <c>";
+    let (st, _) = run_inline!(src);
+    assert!(st.links.is_empty());
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), "c");
+}
+
+// 03. Two unclosed `<` openers: both rejected, text intact
+#[test]
+fn dead_03_repeated_unclosed_asym_openers() {
+    let src = b"<a <b <c";
+    let (st, _) = run_inline!(src);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "<a <b <c");
+}
+
+// 04. Two `[` openers whose `(..)` never closes: both rejected, text intact
+#[test]
+fn dead_04_repeated_unclosed_url_component() {
+    let src = b"[a](b [c](d";
+    let (st, _) = run_inline!(src);
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "[a](b [c](d");
+}
+
+// 05. An escaped close byte does not count: the first opener pairs with the
+//     next unescaped one, running over the escaped byte and the second opener
+#[test]
+fn dead_05_escaped_close_then_real_close() {
+    let src = b"<a\\> <b>";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.autolinks.len(), 1);
+    assert_eq!(txt(src, st.autolinks[0]), "a\\> <b");
+}
+
+// 06. A failed search for one chained component does not poison the other:
+//     `]` present but `)` absent, then a later link with both
+#[test]
+fn dead_06_url_failure_does_not_poison_text_close() {
+    let src = b"[a](b [c]";
+    let (st, _) = run_inline!(src);
+    // `)` is absent from the whole run, so no link can form; `]` stays live.
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!(txt(src, st.texts[0]), "[a](b [c]");
+}
+
+// 07. A run of many unclosed `[` openers completes in linear time
+#[test]
+fn dead_07_many_unclosed_openers_linear() {
+    let src: Vec<u8> = b"[a".repeat(100_000);
+    let started = std::time::Instant::now();
+    let (st, _) = run_inline!(&src);
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.len(), 1);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "unclosed-opener scan is not linear"
+    );
+}
+
+// ================================================================
+// pending slot (`parse_inside = true`, `balanced = false`): contract
+// ================================================================
+//
+// The off-stack pending slot tracks one symmetric opener at a time and never
+// nests. These pin that contract directly, since the slot's own code path is
+// the one the `run_inline!` grammar exercises for `*`.
+
+// 01. A different-count opener while one is pending replaces the slot:
+//     `**a *b* c**` yields the inner italic only, never the outer bold
+#[test]
+fn pending_01_different_count_replaces_slot() {
+    let src = b"**a *b* c**";
+    let (st, _) = run_inline!(src);
+    assert!(st.bolds.is_empty());
+    assert_eq!(st.italics.len(), 1);
+    assert_eq!(txt(src, st.italics[0]), "b");
+    assert_eq!(st.texts.len(), 2);
+    assert_eq!(txt(src, st.texts[0]), "**a ");
+    assert_eq!(txt(src, st.texts[1]), " c**");
+}
+
+// 02. A same-count occurrence closes the slot; the next one opens afresh
+#[test]
+fn pending_02_same_count_closes_then_reopens() {
+    let src = b"*a* *b*";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.italics.len(), 2);
+    assert_eq!(txt(src, st.italics[0]), "a");
+    assert_eq!(txt(src, st.italics[1]), "b");
+}
+
+// ================================================================
+// output vectors allocate on first push, not up front
+// ================================================================
+
+// 01. A field whose rule never fires holds no allocation at all
+#[test]
+fn alloc_01_unused_fields_stay_unallocated() {
+    let src = b"plain words with no delimiters anywhere in this run of text";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.bolds.capacity(), 0);
+    assert_eq!(st.italics.capacity(), 0);
+    assert_eq!(st.bold_italics.capacity(), 0);
+    assert_eq!(st.codes.capacity(), 0);
+    assert_eq!(st.autolinks.capacity(), 0);
+    assert_eq!(st.links.capacity(), 0);
+    assert_eq!(st.key_values.capacity(), 0);
+    assert_eq!(st.hard_breaks.capacity(), 0);
+}
+
+// 02. A field that does fire reserves its grammar hint on the first push,
+//     rather than growing from nothing by doubling
+#[test]
+fn alloc_02_used_field_reserves_its_hint() {
+    let src = &b"one *emphasised* word, then filler to make the source long enough \
+                 that the capacity hint is clearly larger than a doubling growth \
+                 would ever reach on a single push."[..];
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.italics.len(), 1);
+    assert!(
+        st.italics.capacity() >= src.len() / 40,
+        "italics capacity {} < hint {}",
+        st.italics.capacity(),
+        src.len() / 40
+    );
+    assert!(st.texts.capacity() >= src.len() / 10);
+}
+
+// 03. A user-typed inline field (`chained`) follows the same rule
+#[test]
+fn alloc_03_chained_field_allocates_only_when_it_fires() {
+    let plain = &b"no link here, just a long enough stretch of ordinary words"[..];
+    let (st, _) = run_inline!(plain);
+    assert_eq!(st.links.capacity(), 0);
+
+    let linked = &b"a [text](url) here, with enough trailing words to give the \
+                    capacity hint a value above one"[..];
+    let (st, _) = run_inline!(linked);
+    assert_eq!(st.links.len(), 1);
+    assert!(st.links.capacity() >= linked.len() / 100);
+}
+
+// 04. The first push reserves the hint once; the pushes that follow use that
+//     room without growing the vector until it is full
+#[test]
+fn alloc_04_hint_is_used_up_before_any_growth() {
+    use meon::span::Span;
+    let mut st = ParseState::new(400); // texts [10] -> hint 40
+    st.push_texts(Span::new(0, 1));
+    let reserved = st.texts.capacity();
+    assert!(reserved >= 40, "first push reserved {reserved} < hint 40");
+    for i in 1..reserved as u32 {
+        st.push_texts(Span::new(i * 2, i * 2 + 1));
+    }
+    assert_eq!(st.texts.len(), reserved);
+    assert_eq!(st.texts.capacity(), reserved);
+}
+
+// 05. Past the hint the vector grows as usual and keeps every element in order
+#[test]
+fn alloc_05_growth_past_the_hint_keeps_every_element() {
+    use meon::span::Span;
+    let mut st = ParseState::new(80); // texts [10] -> hint 8
+    for i in 0..1000u32 {
+        st.push_texts(Span::new(i * 2, i * 2 + 1));
+    }
+    assert_eq!(st.texts.len(), 1000);
+    for (i, s) in st.texts.iter().enumerate() {
+        assert_eq!((s.start, s.end), (i as u32 * 2, i as u32 * 2 + 1));
+    }
+}
+
+// 06. A source shorter than the divisor gives a zero hint: the first push
+//     still lands, with the vector growing from nothing
+#[test]
+fn alloc_06_zero_hint_still_records_the_element() {
+    use meon::span::Span;
+    let mut st = ParseState::new(5); // texts [10] -> hint 0
+    st.push_texts(Span::new(1, 3));
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (1, 3));
+}
+
+// 07. Merging into a full vector extends the last span in place: no push, no
+//     growth. The next non-adjacent span is the one that grows the vector.
+#[test]
+fn alloc_07_merge_into_a_full_vector_extends_in_place() {
+    use meon::span::Span;
+    let mut st = ParseState::new(20); // texts [10] -> hint 2
+    let mut at = 0u32;
+    while st.texts.is_empty() || st.texts.len() < st.texts.capacity() {
+        st.push_merge_texts(Span::new(at, at + 1));
+        at += 4;
+    }
+    let full = st.texts.len();
+    let last_start = st.texts[full - 1].start;
+
+    st.push_merge_texts(Span::new(at - 3, at + 2));
+    assert_eq!(st.texts.len(), full);
+    assert_eq!(st.texts.capacity(), full);
+    assert_eq!(
+        (st.texts[full - 1].start, st.texts[full - 1].end),
+        (last_start, at + 2)
+    );
+
+    st.push_merge_texts(Span::new(at + 10, at + 11));
+    assert_eq!(st.texts.len(), full + 1);
+    assert_eq!(
+        (st.texts[full].start, st.texts[full].end),
+        (at + 10, at + 11)
+    );
 }

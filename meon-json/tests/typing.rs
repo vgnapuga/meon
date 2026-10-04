@@ -1,7 +1,6 @@
 //! Tests for the scalar-typing post-pass (`JsonContent::type_scalars` /
 //! `type_field`) — separate from `tests/integration.rs`, which covers only
-//! the engine's own structural output and deliberately asserts nothing about
-//! typing.
+//! the engine's own structural output and asserts nothing about typing.
 //!
 //! # Scope
 //!
@@ -24,9 +23,7 @@
 //! This is first-byte classification, not JSON-number validation. A value
 //! like `1abc` is typed as a number purely because it starts with a digit —
 //! the classifier never checks that the rest of the run is a syntactically
-//! valid number. That is a deliberate scope boundary (the same one the old
-//! in-engine `scalar` rule had), pinned down explicitly below rather than
-//! left to be discovered by surprise.
+//! valid number. That scope boundary is asserted explicitly below.
 
 use meon::span::Span;
 use meon_json::{JsonParser, ScalarKind, TypedScalars};
@@ -219,9 +216,8 @@ fn test_14_array_containing_strings_and_objects_not_misrouted() {
 // Bare top-level scalar typing
 // ==========================================================================
 
-// 15. A bare top-level number (no wrapping object/array) types correctly —
-//     the completeness gap this layer originally had: `type_scalars` did
-//     not examine `self.scalars` at all. Now it does.
+// 15. A bare top-level number (no wrapping object/array) is typed from
+//     `self.scalars`.
 #[test]
 fn test_15_bare_top_level_number_typed() {
     let src = br#"42"#;
@@ -365,8 +361,7 @@ fn test_26_pretty_printed_array_elements_typed_across_lines() {
 
 // 27. A value that merely STARTS with a digit is typed as a number even
 //     though the rest of it is not valid JSON-number syntax. This is the
-//     classifier's actual contract (first byte only), pinned down here on
-//     purpose rather than left for someone to discover as a surprise.
+//     classifier's contract: first byte only.
 #[test]
 fn test_27_malformed_number_first_byte_still_typed_as_num() {
     let src = br#"{"a":1abc}"#;
@@ -783,10 +778,8 @@ fn test_52_empty_object_and_empty_input_type_nothing() {
 // ==========================================================================
 // Immutability of the post-pass
 //
-// The module doc promises `type_scalars` writes nothing back into
-// `JsonContent` — it "stays an immutable record of exactly what the engine
-// saw". This pins that: typing twice yields identical results, and the
-// content's own structural fields are untouched by typing.
+// `type_scalars` writes nothing back into `JsonContent`: typing twice yields
+// identical results and the structural fields do not change.
 // ==========================================================================
 
 // 53. `type_scalars` is repeatable and side-effect-free: two calls produce

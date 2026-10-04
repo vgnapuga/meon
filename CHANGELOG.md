@@ -7,6 +7,144 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [0.6.0] - 2026-10-04
+
+### Fixed
+
+- **`meon`, `meon-md`** — **plain text of an inline construct that never closes
+  is no longer dropped.** While a frame was open on the unified inline stack,
+  plain-text flushes were gated on `fdepth == 0`, so a run that ended with the
+  frame still open discarded not only the unmatched delimiter but every text
+  byte it enclosed: `*a\nb\n` produced no `italics` span **and** no `texts`
+  span. Text runs are now appended as they are scanned, and each push site
+  snapshots the fallback vector so that a normal close rolls the held text back
+  — output for constructs that do close is unchanged. `*a\nb\n` now yields
+  `texts = ["a\nb"]`, and an element that closed inside an unclosed container
+  keeps its own span without being duplicated as text (``**a `c` b`` yields
+  `codes = ["c"]` and `texts = ["a ", " b"]`). The unmatched delimiter bytes
+  themselves are still discarded. `meon-json`'s output is unaffected.
+- **`meon`** — **quadratic close searches in unbalanced runs.** The off-stack
+  forward searches — legacy `asymmetric`, and `chained` components declared
+  `balanced = false` — rescanned to the end of the run for every opener, so *k*
+  unmatched openers in one run cost *O(k·n)*; a document of repeated `[a` took
+  tens of seconds. A per-run 256-bit set now records the close bytes whose
+  search has already come back empty, and a later opener of the same kind is
+  rejected without scanning, which makes the whole run *O(n)*. Depth-counting
+  (`balanced = true`) searches are excluded, since their failure is not
+  monotone. Output is unchanged.
+
+### Changed
+
+- **`meon`** — `0.5.0` → `0.6.0`. **Output vectors allocate on first use.**
+  `NameState` fields start unallocated and reserve `source.len() / div`
+  elements when the field receives its first element; every push in the runtime
+  macros goes through a generated `push_<field>` method that carries the
+  reservation. A rule that never matches a given document allocates nothing, so
+  peak output size follows the document rather than the grammar — a grammar
+  with many element kinds no longer reserves a slice of the source length for
+  each of them up front. `meon-md`'s output went from 233% of the input size to
+  90% on markup-free prose, and from 239% to 180% on a mixed corpus. The
+  reservation rides on the `len == capacity` test `Vec::push` makes anyway: a
+  push with room left is a plain store, and only a full vector — the first
+  element included — leaves for an out-of-line `#[cold]` path that reserves
+  the hint and pushes. `MarkdownParser::parse` compiles to 34 296 bytes,
+  against 37 508 when every field was reserved up front. Parser output is
+  unchanged.
+- **`meon-macros`** — `0.3.1` → `0.4.0`. **The front-end is the single
+  authority on grammar shape.** A canonicalisation pass (`normalize.rs`)
+  rewrites the accepted `inline` section into the one token shape the runtime
+  `macro_rules!` patterns match, so sub-rules and settings may be written in
+  any order, with or without trailing `;` / `,`, and still compile — spellings
+  the front-end accepted but the runtime rejected with `no rules expected this
+  token` are now working grammars. In exchange the front-end rejects earlier
+  and with a location: an unknown keyword names its section and the keywords
+  that section accepts; `parse_inside` and `balanced` are required in
+  `symmetric`, `asymmetric` and `chained` component bodies and must be `true`
+  or `false`; an incomplete `chained` or `key_value` is reported at the rule
+  instead of as a pattern mismatch inside a runtime macro. Every grammar that
+  compiled before still compiles.
+- **`meon`** — the seven copies of the paragraph-bounded close search in the
+  standalone iterators are replaced by one `next_in_paragraph` primitive in
+  `standalone/common.rs`, with the per-caller decision moved into an
+  `enter_line` callback. The pending slot of `symmetric`
+  (`parse_inside = true, balanced = false`) drops an unreachable `balanced`
+  branch and a tuple field that was always zero, and the unreachable
+  `parse_text!` arm without `max_nest` is removed. Behaviour is unchanged.
+- **`meon-md`** — `0.4.0` → `0.5.0`, **`meon-json`** — `0.3.0` → `0.4.0`.
+  Recompiled against the `0.6.0` engine. `meon-md` picks up the retained text
+  of unclosed emphasis; `meon-json`'s output is identical to `0.3.0`.
+
+### Removed
+
+- The `memchr` alias in the `inline` DSL. It named no runtime construct and
+  never compiled past the front-end.
+- Russian documentation (`*_RU.md`). Documentation is English-only from this
+  release; the Russian files are no longer maintained.
+
+### Documentation
+
+- `ARCHITECTURE.md` — §4 documents the canonicalisation stage and the
+  order-independence it buys, §8 the lazy output allocation, §9 the held text
+  of unclosed frames and the dead-close-byte set, §12 the shared
+  paragraph-bounded close search, and §17 gains the `on_trigger` close-byte
+  requirement that §9 refers to.
+- Crate `README.md`s — capacity divisors are described as reserve-on-first-push,
+  `meon-macros` documents what the front-end rejects, and `meon-md` no longer
+  claims that emphasis spanning multiple lines goes undetected (it has been
+  matched within a paragraph since `0.3.0`).
+- `benches/README.md` — the `max_nest` performance note no longer describes the
+  per-line stack re-initialisation that `0.3.0` removed.
+- In-code comments across the workspace rewritten to describe current behaviour
+  instead of change history; stale rustdoc statements fixed. `cargo doc` now
+  builds the workspace without warnings.
+
+### Benchmarks
+
+Throughput is unchanged from `0.5.0` on every corpus, within run-to-run noise:
+the held text of unclosed frames, the dead-close-byte set and the lazy output
+allocation cost nothing measurable on ordinary documents. What they change is
+the edge of the input space — a run of unmatched openers is linear instead of
+quadratic (see Fixed), and a document no longer reserves output for element
+kinds it does not contain (see Changed).
+
+Hardware counters for the full `meon-md_parse` pass (`perf stat`, 10 runs,
+user-space counters, stable build, `--profile-time 10`), `small → big`:
+
+| Corpus  | insn/cycle   | branch-misses  | cache-misses   |
+|---------|--------------|----------------|----------------|
+| `plain` | 5.05 → 4.92  | 0.10% → 0.09%  | 1.50% → 1.53%  |
+| `hot`   | 4.59 → 4.25  | 0.08% → 0.09%  | 4.03% → 3.64%  |
+| `heavy` | 4.10 → 3.84  | 0.10% → 0.12%  | 6.05% → 3.22%  |
+
+IPC holds at 3.8–5.1 with branch-misses at 0.08–0.12%, and the cache-miss rate
+stays flat or falls as the input scales from `small` to `big`. Every IPC figure
+is within 0.11 of its `0.5.0` value; the largest move is `plain`, up by ~0.1 on
+both sizes.
+
+### Testing
+
+- **Fuzzing (`v0.6.0` campaign).** The `parse_text` target and its fuzz-only
+  grammar are unchanged; through the same four phases it now also reaches the
+  engine's new paths — the held text of unclosed frames, the dead-close-byte
+  set and the cold push path. Campaign: `cov` 4196 → 4497, `ft` 26488 → 28312,
+  corpus 6641/1610 KB → 7282/1793 KB, ~200M execs, no crashes. Full log in
+  `FUZZING.md`.
+- New unit tests in `meon` for the held text of unclosed frames (symmetric and
+  asymmetric frames, nested frames, an element that closes inside an unclosed
+  one, merge roll-back, hard breaks, and a run with no trailing newline), the
+  dead-close-byte set, the pending-slot contract, lazy allocation (an unused
+  field holds nothing, the hint is used up before any growth, growth past it
+  keeps every element, a merge into a full vector extends in place), and
+  `next_in_paragraph`.
+- New `meon-macros` unit tests for the canonicalisation pass and for the new
+  front-end rejections, plus `trybuild` cases: a grammar declared entirely in
+  the "wrong" order must compile and parse (`ui/pass/reordered_grammar.rs`),
+  and an unknown inline keyword, a missing flag, and an incomplete `chained`
+  must each fail with a located error.
+- New `meon-md` integration tests for unclosed emphasis, for the linear-time
+  behaviour of unbalanced runs, and for which output fields a document
+  actually allocates.
+
 ## [0.5.0] - 2026-07-19
 
 ### Added

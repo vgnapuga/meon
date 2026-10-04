@@ -2,7 +2,7 @@
 //!
 //! This module is `#[doc(hidden)]` — it is an implementation detail of the
 //! `meon` crate and is not part of the stable public API. Grammar authors
-//! interact with [`define_parser!`] only; the items here are used exclusively
+//! interact with [`define_parser!`](crate::define_parser) only; the items here are used exclusively
 //! by macro expansions.
 //!
 //! ## Structure

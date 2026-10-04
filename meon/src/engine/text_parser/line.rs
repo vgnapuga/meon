@@ -61,7 +61,9 @@ macro_rules! parse_line {
                 if _i < $le { _i += 1; }
                 let $n    = _c;
                 let _meta = $meta;
-                $st.$field.push((_meta, $crate::span::Span::new(_i as u32, $le as u32)));
+                $crate::paste::paste! {
+                    $st.[<push_ $field>]((_meta, $crate::span::Span::new(_i as u32, $le as u32)));
+                }
                 $res = Some(_i);
             }
         }
@@ -84,7 +86,9 @@ macro_rules! parse_line {
                 if _valid && _count >= $min {
                     let $b    = _delim;
                     let _meta = $meta;
-                    $st.$field.push((_meta, $crate::span::Span::new($pos as u32, $le as u32)));
+                    $crate::paste::paste! {
+                        $st.[<push_ $field>]((_meta, $crate::span::Span::new($pos as u32, $le as u32)));
+                    }
                     $res = Some($le);
                 }
             }

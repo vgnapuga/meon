@@ -1,7 +1,5 @@
 # meon-md — Cross-parser comparison
 
-EN | [**RU**](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE_RU.md)
-
 Throughput of [`meon-md`](https://github.com/vgnapuga/meon/blob/main/meon-md/README.md)
 (built on the [`meon`](https://github.com/vgnapuga/meon/blob/main/meon/README.md)
 engine) next to two CommonMark parsers, on the same corpora as the intra-engine
