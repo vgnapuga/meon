@@ -210,19 +210,209 @@ Each corpus is one valid top-level JSON array, scaled by `COUNT`
 
 **small:**
 
-| Corpus    | `meon-structural` | `meon-typed` | `simd-json` | `sonic-rs` |
-|-----------|-------------------|--------------|-------------|------------|
-| `numbers` | time:   [2.3261 ms 2.3282 ms 2.3303 ms] thrpt:  [814.18 MiB/s 814.92 MiB/s 815.64 MiB/s] | time:   [4.8090 ms 4.8169 ms 4.8248 ms] thrpt:  [393.24 MiB/s 393.88 MiB/s 394.52 MiB/s] | time:   [8.1397 ms 8.1854 ms 8.2325 ms] thrpt:  [230.46 MiB/s 231.79 MiB/s 233.09 MiB/s] | time:   [2.7498 ms 2.7667 ms 2.7842 ms] thrpt:  [681.44 MiB/s 685.75 MiB/s 689.98 MiB/s] |
-| `objects` | time:   [3.8821 ms 3.8903 ms 3.8987 ms] thrpt:  [356.33 MiB/s 357.09 MiB/s 357.85 MiB/s] | time:   [5.1094 ms 5.1192 ms 5.1290 ms] thrpt:  [270.85 MiB/s 271.37 MiB/s 271.89 MiB/s] | time:   [1.9563 ms 1.9619 ms 1.9681 ms] thrpt:  [705.84 MiB/s 708.09 MiB/s 710.11 MiB/s] | time:   [1.7473 ms 1.7530 ms 1.7607 ms] thrpt:  [788.99 MiB/s 792.45 MiB/s 795.03 MiB/s] |
-| `nested`  | time:   [4.6466 ms 4.6579 ms 4.6714 ms] thrpt:  [241.81 MiB/s 242.51 MiB/s 243.10 MiB/s] | time:   [5.6025 ms 5.6145 ms 5.6275 ms] thrpt:  [200.72 MiB/s 201.19 MiB/s 201.62 MiB/s] | time:   [2.1602 ms 2.1631 ms 2.1669 ms] thrpt:  [521.29 MiB/s 522.21 MiB/s 522.90 MiB/s] | time:   [2.2674 ms 2.2686 ms 2.2698 ms] thrpt:  [497.65 MiB/s 497.92 MiB/s 498.18 MiB/s] |
+| Corpus    | `meon-structural`          | `meon-typed`               | `simd-json`                | `sonic-rs`                 |
+|-----------|----------------------------|----------------------------|----------------------------|----------------------------|
+| `numbers` | [2.1805 ms]=[870.11 MiB/s] | [4.7649 ms]=[398.18 MiB/s] | [5.4442 ms]=[348.49 MiB/s] | [2.5050 ms]=[757.39 MiB/s] |
+| `objects` | [3.7751 ms]=[367.99 MiB/s] | [5.3719 ms]=[258.60 MiB/s] | [2.4693 ms]=[562.58 MiB/s] | [1.7249 ms]=[805.40 MiB/s] |
+| `nested`  | [4.6293 ms]=[244.00 MiB/s] | [5.9410 ms]=[190.13 MiB/s] | [2.5209 ms]=[448.08 MiB/s] | [2.2510 ms]=[501.82 MiB/s] |
+
+<details>
+    <summary>full log</summary>
+
+    ```
+    ┌─ corpus: numbers
+    │  size:            1.90 MiB  (1989441 bytes)
+    │  structural:         1     (0.0 per KiB)
+    │
+    │      objects:         0      arrays:         1     strings:         0
+    │      members:         0     scalars:         0       loose:         1
+    │  typed: nums:    150000       trues:     50000      falses:     50000     nulls:     50000
+    └─
+    json-compare/numbers/meon-structural
+                            time:   [2.1804 ms 2.1805 ms 2.1807 ms]
+                            thrpt:  [870.04 MiB/s 870.11 MiB/s 870.17 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    json-compare/numbers/meon-typed
+                            time:   [4.7620 ms 4.7649 ms 4.7698 ms]
+                            thrpt:  [397.77 MiB/s 398.18 MiB/s 398.42 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      3 (15.00%) high severe
+    json-compare/numbers/simd-json
+                            time:   [5.1763 ms 5.4442 ms 5.8969 ms]
+                            thrpt:  [321.74 MiB/s 348.49 MiB/s 366.54 MiB/s]
+    json-compare/numbers/sonic-rs
+                            time:   [2.4991 ms 2.5050 ms 2.5105 ms]
+                            thrpt:  [755.73 MiB/s 757.39 MiB/s 759.18 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    
+    ┌─ corpus: objects
+    │  size:            1.39 MiB  (1456671 bytes)
+    │  structural:    240001     (168.7 per KiB)
+    │
+    │      objects:     20000      arrays:         1     strings:    120000
+    │      members:    100000     scalars:         0       loose:         1
+    │  typed: nums:     40000       trues:     10000      falses:     10000     nulls:     20000
+    └─
+    json-compare/objects/meon-structural
+                            time:   [3.7739 ms 3.7751 ms 3.7766 ms]
+                            thrpt:  [367.84 MiB/s 367.99 MiB/s 368.11 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    json-compare/objects/meon-typed
+                            time:   [5.3474 ms 5.3719 ms 5.4021 ms]
+                            thrpt:  [257.16 MiB/s 258.60 MiB/s 259.79 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high severe
+    json-compare/objects/simd-json
+                            time:   [2.4157 ms 2.4693 ms 2.5573 ms]
+                            thrpt:  [543.23 MiB/s 562.58 MiB/s 575.06 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high mild
+    json-compare/objects/sonic-rs
+                            time:   [1.7215 ms 1.7249 ms 1.7279 ms]
+                            thrpt:  [803.96 MiB/s 805.40 MiB/s 806.98 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    
+    ┌─ corpus: nested
+    │  size:            1.13 MiB  (1184451 bytes)
+    │  structural:    290001     (250.7 per KiB)
+    │
+    │      objects:     50000      arrays:     10001     strings:    130000
+    │      members:    100000     scalars:         0       loose:         1
+    │  typed: nums:     40000       trues:     10000      falses:         0     nulls:         0
+    └─
+    json-compare/nested/meon-structural
+                            time:   [4.6089 ms 4.6293 ms 4.6404 ms]
+                            thrpt:  [243.42 MiB/s 244.00 MiB/s 245.09 MiB/s]
+    json-compare/nested/meon-typed
+                            time:   [5.9239 ms 5.9410 ms 5.9597 ms]
+                            thrpt:  [189.54 MiB/s 190.13 MiB/s 190.68 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      3 (15.00%) low mild
+    json-compare/nested/simd-json
+                            time:   [2.4863 ms 2.5209 ms 2.5818 ms]
+                            thrpt:  [437.52 MiB/s 448.08 MiB/s 454.32 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high mild
+    json-compare/nested/sonic-rs
+                            time:   [2.2493 ms 2.2510 ms 2.2537 ms]
+                            thrpt:  [501.22 MiB/s 501.82 MiB/s 502.20 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      3 (15.00%) high severe
+    ```
+</details>
 
 **big:**
 
-| Corpus    | `meon-structural` | `meon-typed` | `simd-json` | `sonic-rs` |
-|-----------|-------------------|--------------|-------------|------------|
-| `numbers` | time:   [247.45 ms 247.83 ms 248.17 ms] thrpt:  [879.81 MiB/s 881.00 MiB/s 882.34 MiB/s] | time:   [621.91 ms 624.78 ms 627.49 ms] thrpt:  [347.96 MiB/s 349.47 MiB/s 351.08 MiB/s] | time:   [936.42 ms 937.71 ms 938.87 ms] thrpt:  [232.55 MiB/s 232.84 MiB/s 233.16 MiB/s] | time:   [896.16 ms 897.18 ms 898.18 ms] thrpt:  [243.09 MiB/s 243.36 MiB/s 243.64 MiB/s] |
-| `objects` | time:   [522.66 ms 523.26 ms 523.87 ms] thrpt:  [287.02 MiB/s 287.36 MiB/s 287.69 MiB/s] | time:   [698.37 ms 699.36 ms 700.64 ms] thrpt:  [214.61 MiB/s 215.00 MiB/s 215.31 MiB/s] | time:   [680.63 ms 681.85 ms 683.01 ms] thrpt:  [220.15 MiB/s 220.52 MiB/s 220.92 MiB/s] | time:   [465.96 ms 466.57 ms 467.18 ms] thrpt:  [321.85 MiB/s 322.27 MiB/s 322.69 MiB/s] |
-| `nested`  | time:   [631.63 ms 638.39 ms 644.40 ms] thrpt:  [190.09 MiB/s 191.88 MiB/s 193.93 MiB/s] | time:   [751.56 ms 755.80 ms 760.03 ms] thrpt:  [161.17 MiB/s 162.07 MiB/s 162.99 MiB/s] | time:   [711.34 ms 713.21 ms 715.77 ms] thrpt:  [171.14 MiB/s 171.75 MiB/s 172.20 MiB/s] | time:   [538.68 ms 539.50 ms 540.27 ms] thrpt:  [226.73 MiB/s 227.05 MiB/s 227.40 MiB/s] |
+| Corpus    | `meon-structural`          | `meon-typed`               | `simd-json`                | `sonic-rs`                 |
+|-----------|----------------------------|----------------------------|----------------------------|----------------------------|
+| `numbers` | [234.76 ms]=[930.06 MiB/s] | [638.13 ms]=[342.16 MiB/s] | [969.17 ms]=[225.28 MiB/s] | [930.41 ms]=[234.67 MiB/s] |
+| `objects` | [542.84 ms]=[276.99 MiB/s] | [754.88 ms]=[199.19 MiB/s] | [710.30 ms]=[211.69 MiB/s] | [489.36 ms]=[307.26 MiB/s] |
+| `nested`  | [663.89 ms]=[184.51 MiB/s] | [811.91 ms]=[150.87 MiB/s] | [754.96 ms]=[162.25 MiB/s] | [565.59 ms]=[216.58 MiB/s] |
+
+<details>
+    <summary>full log</summary>
+
+    ```
+    ┌─ corpus: numbers
+    │  size:          218.34 MiB  (228944439 bytes)
+    │  structural:         1     (0.0 per KiB)
+    │
+    │      objects:         0      arrays:         1     strings:         0
+    │      members:         0     scalars:         0       loose:         1
+    │  typed: nums:  15000000       trues:   5000000      falses:   5000000     nulls:   5000000
+    └─
+    json-compare/numbers/meon-structural
+                            time:   [234.66 ms 234.76 ms 234.89 ms]
+                            thrpt:  [929.53 MiB/s 930.06 MiB/s 930.43 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high severe
+    Benchmarking json-compare/numbers/meon-typed: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 12.8s, or reduce sample count to 10.
+    json-compare/numbers/meon-typed
+                            time:   [635.76 ms 638.13 ms 640.60 ms]
+                            thrpt:  [340.83 MiB/s 342.16 MiB/s 343.43 MiB/s]
+    Benchmarking json-compare/numbers/simd-json: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 21.9s, or reduce sample count to 10.
+    json-compare/numbers/simd-json
+                            time:   [968.12 ms 969.17 ms 970.34 ms]
+                            thrpt:  [225.01 MiB/s 225.28 MiB/s 225.53 MiB/s]
+    Benchmarking json-compare/numbers/sonic-rs: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 18.4s, or reduce sample count to 10.
+    json-compare/numbers/sonic-rs
+                            time:   [925.06 ms 930.41 ms 936.07 ms]
+                            thrpt:  [233.25 MiB/s 234.67 MiB/s 236.03 MiB/s]
+    
+    ┌─ corpus: objects
+    │  size:          150.36 MiB  (157666671 bytes)
+    │  structural:  24000001     (155.9 per KiB)
+    │
+    │      objects:   2000000      arrays:         1     strings:  12000000
+    │      members:  10000000     scalars:         0       loose:         1
+    │  typed: nums:   4000000       trues:   1000000      falses:   1000000     nulls:   2000000
+    └─
+    Benchmarking json-compare/objects/meon-structural: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 10.8s, or reduce sample count to 10.
+    json-compare/objects/meon-structural
+                            time:   [542.03 ms 542.84 ms 543.67 ms]
+                            thrpt:  [276.57 MiB/s 276.99 MiB/s 277.41 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) low mild
+      1 (5.00%) high mild
+    Benchmarking json-compare/objects/meon-typed: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 15.1s, or reduce sample count to 10.
+    json-compare/objects/meon-typed
+                            time:   [753.63 ms 754.88 ms 756.28 ms]
+                            thrpt:  [198.82 MiB/s 199.19 MiB/s 199.52 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high mild
+    Benchmarking json-compare/objects/simd-json: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 15.8s, or reduce sample count to 10.
+    json-compare/objects/simd-json
+                            time:   [708.44 ms 710.30 ms 712.18 ms]
+                            thrpt:  [211.13 MiB/s 211.69 MiB/s 212.24 MiB/s]
+    json-compare/objects/sonic-rs
+                            time:   [487.62 ms 489.36 ms 491.45 ms]
+                            thrpt:  [305.96 MiB/s 307.26 MiB/s 308.36 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    
+    ┌─ corpus: nested
+    │  size:          122.49 MiB  (128444451 bytes)
+    │  structural:  29000001     (231.2 per KiB)
+    │
+    │      objects:   5000000      arrays:   1000001     strings:  13000000
+    │      members:  10000000     scalars:         0       loose:         1
+    │  typed: nums:   4000000       trues:   1000000      falses:         0     nulls:         0
+    └─
+    Benchmarking json-compare/nested/meon-structural: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 13.0s, or reduce sample count to 10.
+    json-compare/nested/meon-structural
+                            time:   [662.20 ms 663.89 ms 665.51 ms]
+                            thrpt:  [184.06 MiB/s 184.51 MiB/s 184.98 MiB/s]
+    Benchmarking json-compare/nested/meon-typed: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 16.1s, or reduce sample count to 10.
+    json-compare/nested/meon-typed
+                            time:   [810.19 ms 811.91 ms 813.21 ms]
+                            thrpt:  [150.63 MiB/s 150.87 MiB/s 151.19 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) low severe
+      1 (5.00%) low mild
+    Benchmarking json-compare/nested/simd-json: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 16.4s, or reduce sample count to 10.
+    json-compare/nested/simd-json
+                            time:   [753.34 ms 754.96 ms 756.57 ms]
+                            thrpt:  [161.91 MiB/s 162.25 MiB/s 162.60 MiB/s]
+    Benchmarking json-compare/nested/sonic-rs: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 11.4s, or reduce sample count to 10.
+    json-compare/nested/sonic-rs
+                            time:   [563.31 ms 565.59 ms 567.84 ms]
+                            thrpt:  [215.72 MiB/s 216.58 MiB/s 217.45 MiB/s]
+    ```
+</details>
 
 ### nightly - `RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_compare --features avx2`
 
@@ -230,48 +420,256 @@ Each corpus is one valid top-level JSON array, scaled by `COUNT`
 
 **small:**
 
-| Corpus    | `meon-structural` | `meon-typed` | `simd-json` | `sonic-rs` |
-|-----------|-------------------|--------------|-------------|------------|
-| `numbers` | time:   [2.0152 ms 2.0161 ms 2.0171 ms] thrpt:  [940.58 MiB/s 941.05 MiB/s 941.49 MiB/s] | time:   [4.2121 ms 4.2186 ms 4.2256 ms] thrpt:  [449.00 MiB/s 449.74 MiB/s 450.43 MiB/s] | time:   [7.7677 ms 7.7922 ms 7.8179 ms] thrpt:  [242.68 MiB/s 243.48 MiB/s 244.25 MiB/s] | time:   [2.6897 ms 2.7041 ms 2.7197 ms] thrpt:  [697.61 MiB/s 701.62 MiB/s 705.39 MiB/s] |
-| `objects` | time:   [3.7105 ms 3.7142 ms 3.7182 ms] thrpt:  [373.62 MiB/s 374.02 MiB/s 374.40 MiB/s] | time:   [5.2340 ms 5.2390 ms 5.2442 ms] thrpt:  [264.90 MiB/s 265.16 MiB/s 265.42 MiB/s] | time:   [1.8550 ms 1.8619 ms 1.8694 ms] thrpt:  [743.14 MiB/s 746.12 MiB/s 748.91 MiB/s] | time:   [1.6545 ms 1.6566 ms 1.6590 ms] thrpt:  [837.36 MiB/s 838.57 MiB/s 839.63 MiB/s] |
-| `nested`  | time:   [4.3796 ms 4.3852 ms 4.3908 ms] thrpt:  [257.26 MiB/s 257.59 MiB/s 257.92 MiB/s] | time:   [5.6681 ms 5.6761 ms 5.6847 ms] thrpt:  [198.71 MiB/s 199.01 MiB/s 199.29 MiB/s] | time:   [2.1097 ms 2.1134 ms 2.1176 ms] thrpt:  [533.42 MiB/s 534.49 MiB/s 535.42 MiB/s] | time:   [2.1642 ms 2.1662 ms 2.1682 ms] thrpt:  [520.97 MiB/s 521.46 MiB/s 521.93 MiB/s] |
+| Corpus    | `meon-structural`          | `meon-typed`               | `simd-json`                | `sonic-rs`                 |
+|-----------|----------------------------|----------------------------|----------------------------|----------------------------|
+| `numbers` | [2.4632 ms]=[770.24 MiB/s] | [5.1127 ms]=[371.09 MiB/s] | [5.4569 ms]=[347.68 MiB/s] | [2.5321 ms]=[749.28 MiB/s] |
+| `objects` | [4.0565 ms]=[342.46 MiB/s] | [5.6322 ms]=[246.65 MiB/s] | [2.4343 ms]=[570.66 MiB/s] | [1.7211 ms]=[807.16 MiB/s] |
+| `nested`  | [4.8705 ms]=[231.92 MiB/s] | [6.2523 ms]=[180.67 MiB/s] | [2.5501 ms]=[442.96 MiB/s] | [2.2486 ms]=[502.35 MiB/s] |
+
+<details>
+    <summary>full log</summary>
+
+    ```
+    ┌─ corpus: numbers
+    │  size:            1.90 MiB  (1989441 bytes)
+    │  structural:         1     (0.0 per KiB)
+    │
+    │      objects:         0      arrays:         1     strings:         0
+    │      members:         0     scalars:         0       loose:         1
+    │  typed: nums:    150000       trues:     50000      falses:     50000     nulls:     50000
+    └─
+    json-compare/numbers/meon-structural
+                            time:   [2.4629 ms 2.4632 ms 2.4637 ms]
+                            thrpt:  [770.10 MiB/s 770.24 MiB/s 770.34 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high severe
+    json-compare/numbers/meon-typed
+                            time:   [5.0852 ms 5.1127 ms 5.1408 ms]
+                            thrpt:  [369.06 MiB/s 371.09 MiB/s 373.10 MiB/s]
+    Found 5 outliers among 20 measurements (25.00%)
+      4 (20.00%) low mild
+      1 (5.00%) high mild
+    json-compare/numbers/simd-json
+                            time:   [5.1884 ms 5.4569 ms 5.9136 ms]
+                            thrpt:  [320.83 MiB/s 347.68 MiB/s 365.67 MiB/s]
+    json-compare/numbers/sonic-rs
+                            time:   [2.5247 ms 2.5321 ms 2.5398 ms]
+                            thrpt:  [747.03 MiB/s 749.28 MiB/s 751.48 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+    
+    ┌─ corpus: objects
+    │  size:            1.39 MiB  (1456671 bytes)
+    │  structural:    240001     (168.7 per KiB)
+    │
+    │      objects:     20000      arrays:         1     strings:    120000
+    │      members:    100000     scalars:         0       loose:         1
+    │  typed: nums:     40000       trues:     10000      falses:     10000     nulls:     20000
+    └─
+    json-compare/objects/meon-structural
+                            time:   [4.0539 ms 4.0565 ms 4.0605 ms]
+                            thrpt:  [342.12 MiB/s 342.46 MiB/s 342.68 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      1 (5.00%) high mild
+      2 (10.00%) high severe
+    json-compare/objects/meon-typed
+                            time:   [5.6226 ms 5.6322 ms 5.6429 ms]
+                            thrpt:  [246.18 MiB/s 246.65 MiB/s 247.07 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    json-compare/objects/simd-json
+                            time:   [2.3969 ms 2.4343 ms 2.5022 ms]
+                            thrpt:  [555.19 MiB/s 570.66 MiB/s 579.57 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high mild
+    json-compare/objects/sonic-rs
+                            time:   [1.7162 ms 1.7211 ms 1.7261 ms]
+                            thrpt:  [804.79 MiB/s 807.16 MiB/s 809.46 MiB/s]
+    Found 5 outliers among 20 measurements (25.00%)
+      3 (15.00%) low severe
+      2 (10.00%) high severe
+    
+    ┌─ corpus: nested
+    │  size:            1.13 MiB  (1184451 bytes)
+    │  structural:    290001     (250.7 per KiB)
+    │
+    │      objects:     50000      arrays:     10001     strings:    130000
+    │      members:    100000     scalars:         0       loose:         1
+    │  typed: nums:     40000       trues:     10000      falses:         0     nulls:         0
+    └─
+    json-compare/nested/meon-structural
+                            time:   [4.8685 ms 4.8705 ms 4.8742 ms]
+                            thrpt:  [231.75 MiB/s 231.92 MiB/s 232.02 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      3 (15.00%) high severe
+    json-compare/nested/meon-typed
+                            time:   [6.2380 ms 6.2523 ms 6.2705 ms]
+                            thrpt:  [180.14 MiB/s 180.67 MiB/s 181.08 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      1 (5.00%) high mild
+      2 (10.00%) high severe
+    json-compare/nested/simd-json
+                            time:   [2.5136 ms 2.5501 ms 2.6184 ms]
+                            thrpt:  [431.41 MiB/s 442.96 MiB/s 449.38 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high mild
+    json-compare/nested/sonic-rs
+                            time:   [2.2472 ms 2.2486 ms 2.2507 ms]
+                            thrpt:  [501.89 MiB/s 502.35 MiB/s 502.66 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    ```
+</details>
 
 **big:**
 
-| Corpus    | `meon-structural` | `meon-typed` | `simd-json` | `sonic-rs` |
-|-----------|-------------------|--------------|-------------|------------|
-| `numbers` | time:   [208.97 ms 209.28 ms 209.85 ms] thrpt:  [1.0161 GiB/s 1.0188 GiB/s 1.0204 GiB/s] | time:   [565.28 ms 567.39 ms 569.32 ms] thrpt:  [383.51 MiB/s 384.81 MiB/s 386.25 MiB/s] | time:   [909.24 ms 912.25 ms 915.57 ms] thrpt:  [238.47 MiB/s 239.34 MiB/s 240.13 MiB/s] | time:   [910.24 ms 915.12 ms 919.94 ms] thrpt:  [237.34 MiB/s 238.59 MiB/s 239.87 MiB/s] |
-| `objects` | time:   [504.00 ms 504.50 ms 505.08 ms] thrpt:  [297.70 MiB/s 298.04 MiB/s 298.34 MiB/s] | time:   [714.67 ms 719.04 ms 723.33 ms] thrpt:  [207.88 MiB/s 209.12 MiB/s 210.39 MiB/s] | time:   [671.77 ms 672.50 ms 673.24 ms] thrpt:  [223.34 MiB/s 223.59 MiB/s 223.83 MiB/s] | time:   [460.27 ms 461.38 ms 462.47 ms] thrpt:  [325.13 MiB/s 325.90 MiB/s 326.68 MiB/s] |
-| `nested`  | time:   [604.64 ms 606.10 ms 607.43 ms] thrpt:  [201.66 MiB/s 202.10 MiB/s 202.59 MiB/s] | time:   [766.82 ms 768.29 ms 769.73 ms] thrpt:  [159.14 MiB/s 159.44 MiB/s 159.74 MiB/s] | time:   [708.05 ms 712.20 ms 716.15 ms] thrpt:  [171.05 MiB/s 172.00 MiB/s 173.00 MiB/s] | time:   [529.42 ms 530.75 ms 532.59 ms] thrpt:  [230.00 MiB/s 230.79 MiB/s 231.37 MiB/s] |
+| Corpus    | `meon-structural`          | `meon-typed`               | `simd-json`                | `sonic-rs`                 |
+|-----------|----------------------------|----------------------------|----------------------------|----------------------------|
+| `numbers` | [253.95 ms]=[859.78 MiB/s] | [662.64 ms]=[329.50 MiB/s] | [971.66 ms]=[224.71 MiB/s] | [921.40 ms]=[236.96 MiB/s] |
+| `objects` | [568.41 ms]=[264.53 MiB/s] | [781.99 ms]=[192.28 MiB/s] | [709.28 ms]=[211.99 MiB/s] | [494.43 ms]=[304.11 MiB/s] |
+| `nested`  | [688.82 ms]=[177.83 MiB/s] | [839.24 ms]=[145.96 MiB/s] | [749.09 ms]=[163.52 MiB/s] | [565.11 ms]=[216.76 MiB/s] |
+
+<details>
+    <summary>full log</summary>
+
+    ```
+    ┌─ corpus: numbers
+    │  size:          218.34 MiB  (228944439 bytes)
+    │  structural:         1     (0.0 per KiB)
+    │
+    │      objects:         0      arrays:         1     strings:         0
+    │      members:         0     scalars:         0       loose:         1
+    │  typed: nums:  15000000       trues:   5000000      falses:   5000000     nulls:   5000000
+    └─
+    json-compare/numbers/meon-structural
+                            time:   [253.74 ms 253.95 ms 254.25 ms]
+                            thrpt:  [858.76 MiB/s 859.78 MiB/s 860.49 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) high mild
+      1 (5.00%) high severe
+    Benchmarking json-compare/numbers/meon-typed: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 13.2s, or reduce sample count to 10.
+    json-compare/numbers/meon-typed
+                            time:   [660.33 ms 662.64 ms 664.81 ms]
+                            thrpt:  [328.42 MiB/s 329.50 MiB/s 330.65 MiB/s]
+    Benchmarking json-compare/numbers/simd-json: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 22.0s, or reduce sample count to 10.
+    json-compare/numbers/simd-json
+                            time:   [970.40 ms 971.66 ms 973.05 ms]
+                            thrpt:  [224.39 MiB/s 224.71 MiB/s 225.00 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    Benchmarking json-compare/numbers/sonic-rs: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 18.5s, or reduce sample count to 10.
+    json-compare/numbers/sonic-rs
+                            time:   [920.47 ms 921.40 ms 922.63 ms]
+                            thrpt:  [236.65 MiB/s 236.96 MiB/s 237.20 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    
+    ┌─ corpus: objects
+    │  size:          150.36 MiB  (157666671 bytes)
+    │  structural:  24000001     (155.9 per KiB)
+    │
+    │      objects:   2000000      arrays:         1     strings:  12000000
+    │      members:  10000000     scalars:         0       loose:         1
+    │  typed: nums:   4000000       trues:   1000000      falses:   1000000     nulls:   2000000
+    └─
+    Benchmarking json-compare/objects/meon-structural: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 11.4s, or reduce sample count to 10.
+    json-compare/objects/meon-structural
+                            time:   [567.14 ms 568.41 ms 569.55 ms]
+                            thrpt:  [264.00 MiB/s 264.53 MiB/s 265.12 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) low mild
+    Benchmarking json-compare/objects/meon-typed: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 15.6s, or reduce sample count to 10.
+    json-compare/objects/meon-typed
+                            time:   [780.91 ms 781.99 ms 783.12 ms]
+                            thrpt:  [192.00 MiB/s 192.28 MiB/s 192.55 MiB/s]
+    Benchmarking json-compare/objects/simd-json: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 15.7s, or reduce sample count to 10.
+    json-compare/objects/simd-json
+                            time:   [707.62 ms 709.28 ms 710.88 ms]
+                            thrpt:  [211.52 MiB/s 211.99 MiB/s 212.49 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) low severe
+      1 (5.00%) high severe
+    json-compare/objects/sonic-rs
+                            time:   [490.53 ms 494.43 ms 498.49 ms]
+                            thrpt:  [301.63 MiB/s 304.11 MiB/s 306.53 MiB/s]
+    
+    ┌─ corpus: nested
+    │  size:          122.49 MiB  (128444451 bytes)
+    │  structural:  29000001     (231.2 per KiB)
+    │
+    │      objects:   5000000      arrays:   1000001     strings:  13000000
+    │      members:  10000000     scalars:         0       loose:         1
+    │  typed: nums:   4000000       trues:   1000000      falses:         0     nulls:         0
+    └─
+    Benchmarking json-compare/nested/meon-structural: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 13.6s, or reduce sample count to 10.
+    json-compare/nested/meon-structural
+                            time:   [688.01 ms 688.82 ms 689.90 ms]
+                            thrpt:  [177.55 MiB/s 177.83 MiB/s 178.04 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) high mild
+      1 (5.00%) high severe
+    Benchmarking json-compare/nested/meon-typed: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 16.6s, or reduce sample count to 10.
+    json-compare/nested/meon-typed
+                            time:   [834.48 ms 839.24 ms 843.15 ms]
+                            thrpt:  [145.28 MiB/s 145.96 MiB/s 146.79 MiB/s]
+    Found 5 outliers among 20 measurements (25.00%)
+      3 (15.00%) low severe
+      1 (5.00%) low mild
+      1 (5.00%) high mild
+    Benchmarking json-compare/nested/simd-json: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 16.3s, or reduce sample count to 10.
+    json-compare/nested/simd-json
+                            time:   [747.28 ms 749.09 ms 750.98 ms]
+                            thrpt:  [163.11 MiB/s 163.52 MiB/s 163.92 MiB/s]
+    Benchmarking json-compare/nested/sonic-rs: Warming up for 3.0000 s
+    Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 11.5s, or reduce sample count to 10.
+    json-compare/nested/sonic-rs
+                            time:   [564.13 ms 565.11 ms 566.11 ms]
+                            thrpt:  [216.38 MiB/s 216.76 MiB/s 217.14 MiB/s]
+    ```
+</details>
 
 ---
 
 ## Scaling from small to big
 
-How each parser holds up as the input grows past cache (stable build, median
-`thrpt`, MiB/s):
+How each parser holds up as the input grows past cache (median `thrpt`, MiB/s;
+`simd-json` / `sonic-rs` from the stable run):
 
-| Parser            | `numbers`     | `objects`     | `nested`      |
-|-------------------|---------------|---------------|---------------|
-| `meon-structural` | 815 -> 881    | 357 -> 287    | 243 -> 192    |
-| `meon-typed`      | 394 -> 349    | 271 -> 215    | 201 -> 162    |
-| `simd-json`       | 232 -> 233    | 708 -> 221    | 522 -> 172    |
-| `sonic-rs`        | 686 -> 243    | 792 -> 322    | 498 -> 227    |
+| Parser                      | `numbers`     | `objects`     | `nested`      |
+|-----------------------------|---------------|---------------|---------------|
+| `meon-structural` - stable  | 870 -> 930    | 368 -> 277    | 244 -> 185    |
+| `meon-structural` - nightly | 770 -> 860    | 342 -> 265    | 232 -> 178    |
+| `meon-typed` - stable       | 398 -> 342    | 259 -> 199    | 190 -> 151    |
+| `meon-typed` - nightly      | 371 -> 330    | 247 -> 192    | 181 -> 146    |
+| `simd-json`                 | 348 -> 225    | 563 -> 212    | 448 -> 162    |
+| `sonic-rs`                  | 757 -> 235    | 805 -> 307    | 502 -> 217    |
 
-- **meon degrades little with scale.** `meon-structural` even gains on `numbers`
-  (815 -> 881) and loses only ~20% on `objects`/`nested`; `meon-typed` tracks it.
-  The flat span table stays largely cache-resident.
-- **The validating parsers collapse on structured corpora at big.** `simd-json`
-  loses ~69% on `objects` and ~67% on `nested`; `sonic-rs` loses ~55–65% across
-  the board — materialising a tape / owned `Value`, their working set blows
-  cache as the document grows. (`simd-json` holds on `numbers`, where its tape
-  stays compact; `sonic-rs` drops there too.)
-- **The picture flips with scale.** At small the validating parsers lead
-  `objects`/`nested` by 2–3x; at big that lead is gone or inverted — e.g. on
-  `objects`, `meon-structural` overtakes `simd-json` (287 vs 221), and on
-  `numbers` meon leads at every scale and widens at big. A flat span table
-  degrades far less than a materialised tape or owned value. The AVX2 run shows
-  the same pattern.
+- **meon degrades little with scale.** `meon-structural` gains on `numbers`
+  (870 -> 930) and loses about a quarter on `objects` / `nested` (-25% / -24%).
+  `meon-typed` loses 14-23%. The flat span table stays largely cache-resident.
+- **The validating parsers lose more at big.** `simd-json` loses 62% on
+  `objects`, 64% on `nested` and 35% on `numbers`. `sonic-rs` loses 57-69% on
+  every corpus, most on `numbers`. Both materialise a tape / an owned `Value`,
+  and that working set outgrows cache as the document grows.
+- **The gap narrows with scale.** At small, `simd-json` and `sonic-rs` lead
+  `meon-structural` on `objects` / `nested` by 1.5-2.2x. At big,
+  `meon-structural` overtakes `simd-json` (277 vs 212 on `objects`, 185 vs 162
+  on `nested`), while `sonic-rs` keeps a smaller lead (307 vs 277, 217 vs 185).
+  On `numbers` meon leads at every scale, from 1.15x over `sonic-rs` at small to
+  about 4x at big.
+- **AVX2 does not speed up meon-json.** The nightly AVX2 rows follow the same
+  scaling shape, but they are 3-11% slower than the stable SWAR rows on every
+  corpus at both sizes.
 
 ---
 
@@ -300,288 +698,447 @@ Shown for both `small` and `big`.
 
 **small:**
 
+#### Standalone - `find_*`
+| Function       | `numbers`                  | `objects`                  | `nested`                   |
+|----------------|----------------------------|----------------------------|----------------------------|
+| `find_objects` | [22.495 µs]=[82.366 GiB/s] | [303.27 µs]=[4.4734 GiB/s] | [284.77 µs]=[3.8737 GiB/s] |
+| `find_arrays`  | [25.984 µs]=[71.304 GiB/s] | [18.090 µs]=[74.995 GiB/s] | [150.14 µs]=[7.3472 GiB/s] |
+| `find_strings` | [22.542 µs]=[82.194 GiB/s] | [1.4992 ms]=[926.59 MiB/s] | [1.6234 ms]=[695.82 MiB/s] |
+| `find_members` | [20.783 µs]=[89.148 GiB/s] | [1.6914 ms]=[821.33 MiB/s] | [1.0464 ms]=[1.0542 GiB/s] |
+
+#### Context-aware - `context()` + `find_context_*`
+| Function               | `numbers`                  | `objects`                  | `nested`                   |
+|------------------------|----------------------------|----------------------------|----------------------------|
+| `context`              | [23.111 µs]=[80.171 GiB/s] | [1.6700 ms]=[831.84 MiB/s] | [1.8042 ms]=[626.07 MiB/s] |
+| `find_context_objects` | [20.029 µs]=[92.505 GiB/s] | [395.69 µs]=[3.4285 GiB/s] | [353.65 µs]=[3.1192 GiB/s] |
+| `find_context_arrays`  | [27.189 µs]=[68.146 GiB/s] | [51.039 µs]=[26.580 GiB/s] | [213.84 µs]=[5.1586 GiB/s] |
+
+#### Cold context - `find_context_*_cold`
+| Function                    | `numbers`                  | `objects`                  | `nested`                   |
+|-----------------------------|----------------------------|----------------------------|----------------------------|
+| `find_context_objects_cold` | [42.409 µs]=[43.689 GiB/s] | [2.0608 ms]=[674.11 MiB/s] | [2.1584 ms]=[523.33 MiB/s] |
+| `find_context_arrays_cold`  | [47.290 µs]=[39.180 GiB/s] | [1.7131 ms]=[810.90 MiB/s] | [2.0145 ms]=[560.73 MiB/s] |
+
 <details>
-<summary>numbers</summary>
+    <summary>numbers full log</summary>
 
-```
-  find_objects   full=        0  standalone=        0
-                        time:   [21.887 µs 22.547 µs 23.372 µs]
-                        thrpt:  [79.276 GiB/s 82.174 GiB/s 84.655 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [23.961 µs 24.212 µs 24.447 µs]
-                        thrpt:  [75.789 GiB/s 76.525 GiB/s 77.325 GiB/s]
-
-  find_strings   full=        0  standalone=        0
-                        time:   [18.546 µs 18.803 µs 19.068 µs]
-                        thrpt:  [97.170 GiB/s 98.537 GiB/s 99.905 GiB/s]
-
-  find_members   full=        0  standalone=        0
-                        time:   [18.938 µs 19.237 µs 19.521 µs]
-                        thrpt:  [94.914 GiB/s 96.314 GiB/s 97.836 GiB/s]
-```
-
+    ```
+    ┌─ corpus: numbers
+    │  size:            1.90 MiB  (1989441 bytes)
+    │  structural:         1     (0.0 per KiB)
+    │
+    │      objects:         0      arrays:         1     strings:         0
+    │      members:         0     scalars:         0       loose:         1
+    │  typed: nums:    150000       trues:     50000      falses:     50000     nulls:     50000
+    └─
+    │  full-vs-standalone counts:
+        find_objects   full=        0  standalone=        0
+    json-standalone/numbers/find_objects
+                            time:   [21.666 µs 22.495 µs 23.408 µs]
+                            thrpt:  [79.152 GiB/s 82.366 GiB/s 85.518 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) low mild
+      1 (5.00%) high mild
+        find_arrays    full=        1  standalone=        1
+    json-standalone/numbers/find_arrays
+                            time:   [25.016 µs 25.984 µs 26.900 µs]
+                            thrpt:  [68.878 GiB/s 71.304 GiB/s 74.065 GiB/s]
+        find_strings   full=        0  standalone=        0
+    json-standalone/numbers/find_strings
+                            time:   [21.892 µs 22.542 µs 23.038 µs]
+                            thrpt:  [80.426 GiB/s 82.194 GiB/s 84.634 GiB/s]
+        find_members   full=        0  standalone=        0
+    json-standalone/numbers/find_members
+                            time:   [20.046 µs 20.783 µs 21.394 µs]
+                            thrpt:  [86.603 GiB/s 89.148 GiB/s 92.427 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    │  context regions (strings): 0
+    json-standalone/numbers/context
+                            time:   [22.137 µs 23.111 µs 24.090 µs]
+                            thrpt:  [76.912 GiB/s 80.171 GiB/s 83.699 GiB/s]
+    │  full-vs-context-aware counts:
+        find_context_objects full=        0  context-aware=        0
+    json-standalone/numbers/find_context_objects
+                            time:   [19.197 µs 20.029 µs 20.658 µs]
+                            thrpt:  [89.691 GiB/s 92.505 GiB/s 96.518 GiB/s]
+        find_context_arrays full=        1  context-aware=        1
+    json-standalone/numbers/find_context_arrays
+                            time:   [26.725 µs 27.189 µs 27.677 µs]
+                            thrpt:  [66.944 GiB/s 68.146 GiB/s 69.328 GiB/s]
+    json-standalone/numbers/find_context_objects_cold
+                            time:   [40.912 µs 42.409 µs 43.608 µs]
+                            thrpt:  [42.488 GiB/s 43.689 GiB/s 45.288 GiB/s]
+    json-standalone/numbers/find_context_arrays_cold
+                            time:   [45.711 µs 47.290 µs 48.850 µs]
+                            thrpt:  [37.928 GiB/s 39.180 GiB/s 40.533 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    ```
 </details>
 
 <details>
-<summary>objects</summary>
+    <summary>objects full log</summary>
 
-```
-  find_objects   full=    20000  standalone=    20000
-                        time:   [300.05 µs 300.35 µs 300.86 µs]
-                        thrpt:  [4.5092 GiB/s 4.5168 GiB/s 4.5214 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [18.863 µs 19.162 µs 19.474 µs]
-                        thrpt:  [69.662 GiB/s 70.797 GiB/s 71.920 GiB/s]
-
-  find_strings   full=   120000  standalone=   120000
-                        time:   [1.7571 ms 1.7591 ms 1.7616 ms]
-                        thrpt:  [788.58 MiB/s 789.71 MiB/s 790.61 MiB/s]
-
-  find_members   full=   100000  standalone=   100000
-                        time:   [1.7185 ms 1.7196 ms 1.7211 ms]
-                        thrpt:  [807.14 MiB/s 807.85 MiB/s 808.38 MiB/s]
-```
-
+    ```
+    ┌─ corpus: objects
+    │  size:            1.39 MiB  (1456671 bytes)
+    │  structural:    240001     (168.7 per KiB)
+    │
+    │      objects:     20000      arrays:         1     strings:    120000
+    │      members:    100000     scalars:         0       loose:         1
+    │  typed: nums:     40000       trues:     10000      falses:     10000     nulls:     20000
+    └─
+    │  full-vs-standalone counts:
+        find_objects   full=    20000  standalone=    20000
+    json-standalone/objects/find_objects
+                            time:   [302.37 µs 303.27 µs 304.44 µs]
+                            thrpt:  [4.4562 GiB/s 4.4734 GiB/s 4.4866 GiB/s]
+        find_arrays    full=        1  standalone=        1
+    json-standalone/objects/find_arrays
+                            time:   [17.590 µs 18.090 µs 18.594 µs]
+                            thrpt:  [72.961 GiB/s 74.995 GiB/s 77.125 GiB/s]
+        find_strings   full=   120000  standalone=   120000
+    json-standalone/objects/find_strings
+                            time:   [1.4982 ms 1.4992 ms 1.5005 ms]
+                            thrpt:  [925.84 MiB/s 926.59 MiB/s 927.22 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      1 (5.00%) high mild
+      2 (10.00%) high severe
+        find_members   full=   100000  standalone=   100000
+    json-standalone/objects/find_members
+                            time:   [1.6902 ms 1.6914 ms 1.6925 ms]
+                            thrpt:  [820.77 MiB/s 821.33 MiB/s 821.90 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      3 (15.00%) high mild
+    │  context regions (strings): 120000
+    json-standalone/objects/context
+                            time:   [1.6680 ms 1.6700 ms 1.6729 ms]
+                            thrpt:  [830.40 MiB/s 831.84 MiB/s 832.83 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) high mild
+      1 (5.00%) high severe
+    │  full-vs-context-aware counts:
+        find_context_objects full=    20000  context-aware=    20000
+    json-standalone/objects/find_context_objects
+                            time:   [394.82 µs 395.69 µs 396.35 µs]
+                            thrpt:  [3.4228 GiB/s 3.4285 GiB/s 3.4361 GiB/s]
+        find_context_arrays full=        1  context-aware=        1
+    json-standalone/objects/find_context_arrays
+                            time:   [49.625 µs 51.039 µs 52.391 µs]
+                            thrpt:  [25.894 GiB/s 26.580 GiB/s 27.338 GiB/s]
+    json-standalone/objects/find_context_objects_cold
+                            time:   [2.0597 ms 2.0608 ms 2.0624 ms]
+                            thrpt:  [673.58 MiB/s 674.11 MiB/s 674.48 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    json-standalone/objects/find_context_arrays_cold
+                            time:   [1.7103 ms 1.7131 ms 1.7180 ms]
+                            thrpt:  [808.61 MiB/s 810.90 MiB/s 812.25 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) high mild
+      1 (5.00%) high severe
+    ```
 </details>
 
 <details>
-<summary>nested</summary>
+    <summary>nested full log</summary>
 
-```
-  find_objects   full=    50000  standalone=    20000
-                        time:   [286.75 µs 287.54 µs 288.45 µs]
-                        thrpt:  [3.8243 GiB/s 3.8363 GiB/s 3.8470 GiB/s]
-
-  find_arrays    full=    10001  standalone=    10000
-                        time:   [144.90 µs 145.23 µs 145.71 µs]
-                        thrpt:  [7.5703 GiB/s 7.5954 GiB/s 7.6129 GiB/s]
-
-  find_strings   full=   130000  standalone=   130000
-                        time:   [1.8986 ms 1.8992 ms 1.8999 ms]
-                        thrpt:  [594.55 MiB/s 594.76 MiB/s 594.94 MiB/s]
-
-  find_members   full=   100000  standalone=    60000
-                        time:   [1.0543 ms 1.0545 ms 1.0547 ms]
-                        thrpt:  [1.0459 GiB/s 1.0461 GiB/s 1.0463 GiB/s]
-```
-
+    ```
+    ┌─ corpus: nested
+    │  size:            1.13 MiB  (1184451 bytes)
+    │  structural:    290001     (250.7 per KiB)
+    │
+    │      objects:     50000      arrays:     10001     strings:    130000
+    │      members:    100000     scalars:         0       loose:         1
+    │  typed: nums:     40000       trues:     10000      falses:         0     nulls:         0
+    └─
+    │  full-vs-standalone counts:
+        find_objects   full=    50000  standalone=    20000
+    json-standalone/nested/find_objects
+                            time:   [284.36 µs 284.77 µs 285.22 µs]
+                            thrpt:  [3.8675 GiB/s 3.8737 GiB/s 3.8793 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+        find_arrays    full=    10001  standalone=    10000
+    json-standalone/nested/find_arrays
+                            time:   [149.93 µs 150.14 µs 150.29 µs]
+                            thrpt:  [7.3397 GiB/s 7.3472 GiB/s 7.3574 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_strings   full=   130000  standalone=   130000
+    json-standalone/nested/find_strings
+                            time:   [1.6220 ms 1.6234 ms 1.6255 ms]
+                            thrpt:  [694.92 MiB/s 695.82 MiB/s 696.40 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+        find_members   full=   100000  standalone=    60000
+    json-standalone/nested/find_members
+                            time:   [1.0453 ms 1.0464 ms 1.0477 ms]
+                            thrpt:  [1.0529 GiB/s 1.0542 GiB/s 1.0553 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+    │  context regions (strings): 130000
+    json-standalone/nested/context
+                            time:   [1.8025 ms 1.8042 ms 1.8060 ms]
+                            thrpt:  [625.46 MiB/s 626.07 MiB/s 626.66 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+    │  full-vs-context-aware counts:
+        find_context_objects full=    50000  context-aware=    20000
+    json-standalone/nested/find_context_objects
+                            time:   [353.35 µs 353.65 µs 353.94 µs]
+                            thrpt:  [3.1167 GiB/s 3.1192 GiB/s 3.1218 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+        find_context_arrays full=    10001  context-aware=    10000
+    json-standalone/nested/find_context_arrays
+                            time:   [213.56 µs 213.84 µs 214.14 µs]
+                            thrpt:  [5.1513 GiB/s 5.1586 GiB/s 5.1654 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    json-standalone/nested/find_context_objects_cold
+                            time:   [2.1535 ms 2.1584 ms 2.1660 ms]
+                            thrpt:  [521.51 MiB/s 523.33 MiB/s 524.52 MiB/s]
+    Found 4 outliers among 20 measurements (20.00%)
+      3 (15.00%) high mild
+      1 (5.00%) high severe
+    json-standalone/nested/find_context_arrays_cold
+                            time:   [2.0128 ms 2.0145 ms 2.0165 ms]
+                            thrpt:  [560.17 MiB/s 560.73 MiB/s 561.20 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      3 (15.00%) high mild
+    ```
 </details>
 
 **big:**
 
+#### Standalone - `find_*`
+| Function       | `numbers`                  | `objects`                  | `nested`                   |
+|----------------|----------------------------|----------------------------|----------------------------|
+| `find_objects` | [9.0211 ms]=[23.636 GiB/s] | [30.069 ms]=[4.8834 GiB/s] | [29.286 ms]=[4.0846 GiB/s] |
+| `find_arrays`  | [9.5245 ms]=[22.387 GiB/s] | [6.4081 ms]=[22.915 GiB/s] | [15.210 ms]=[7.8649 GiB/s] |
+| `find_strings` | [8.6628 ms]=[24.614 GiB/s] | [150.52 ms]=[998.98 MiB/s] | [162.92 ms]=[751.89 MiB/s] |
+| `find_members` | [8.6089 ms]=[24.768 GiB/s] | [169.13 ms]=[889.01 MiB/s] | [106.00 ms]=[1.1285 GiB/s] |
+
+#### Context-aware - `context()` + `find_context_*`
+| Function               | `numbers`                  | `objects`                  | `nested`                   |
+|------------------------|----------------------------|----------------------------|----------------------------|
+| `context`              | [8.8003 ms]=[24.229 GiB/s] | [210.39 ms]=[714.70 MiB/s] | [228.78 ms]=[535.42 MiB/s] |
+| `find_context_objects` | [8.6965 ms]=[24.518 GiB/s] | [41.394 ms]=[3.5473 GiB/s] | [36.907 ms]=[3.2412 GiB/s] |
+| `find_context_arrays`  | [9.5862 ms]=[22.243 GiB/s] | [11.522 ms]=[12.744 GiB/s] | [22.408 ms]=[5.3384 GiB/s] |
+
+#### Cold context - `find_context_*_cold`
+| Function                    | `numbers`                  | `objects`                  | `nested`                   |
+|-----------------------------|----------------------------|----------------------------|----------------------------|
+| `find_context_objects_cold` | [17.314 ms]=[12.315 GiB/s] | [252.70 ms]=[595.03 MiB/s] | [265.47 ms]=[461.43 MiB/s] |
+| `find_context_arrays_cold`  | [18.483 ms]=[11.536 GiB/s] | [223.86 ms]=[671.68 MiB/s] | [250.18 ms]=[489.63 MiB/s] |
+
 <details>
-<summary>numbers</summary>
+    <summary>numbers full log</summary>
 
-```
-  find_objects   full=        0  standalone=        0
-                        time:   [8.6214 ms 8.6317 ms 8.6424 ms]
-                        thrpt:  [24.671 GiB/s 24.702 GiB/s 24.732 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [9.4820 ms 9.4955 ms 9.5104 ms]
-                        thrpt:  [22.420 GiB/s 22.455 GiB/s 22.487 GiB/s]
-
-  find_strings   full=        0  standalone=        0
-                        time:   [8.7343 ms 8.7507 ms 8.7761 ms]
-                        thrpt:  [24.296 GiB/s 24.366 GiB/s 24.412 GiB/s]
-
-  find_members   full=        0  standalone=        0
-                        time:   [8.6625 ms 8.6893 ms 8.7301 ms]
-                        thrpt:  [24.424 GiB/s 24.538 GiB/s 24.614 GiB/s]
-```
-
+    ```
+    ┌─ corpus: numbers
+    │  size:          218.34 MiB  (228944439 bytes)
+    │  structural:         1     (0.0 per KiB)
+    │
+    │      objects:         0      arrays:         1     strings:         0
+    │      members:         0     scalars:         0       loose:         1
+    │  typed: nums:  15000000       trues:   5000000      falses:   5000000     nulls:   5000000
+    └─
+    │  full-vs-standalone counts:
+        find_objects   full=        0  standalone=        0
+    json-standalone/numbers/find_objects
+                            time:   [8.8112 ms 9.0211 ms 9.3552 ms]
+                            thrpt:  [22.792 GiB/s 23.636 GiB/s 24.199 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+        find_arrays    full=        1  standalone=        1
+    json-standalone/numbers/find_arrays
+                            time:   [9.5121 ms 9.5245 ms 9.5455 ms]
+                            thrpt:  [22.337 GiB/s 22.387 GiB/s 22.416 GiB/s]
+    Found 4 outliers among 20 measurements (20.00%)
+      1 (5.00%) high mild
+      3 (15.00%) high severe
+        find_strings   full=        0  standalone=        0
+    json-standalone/numbers/find_strings
+                            time:   [8.6246 ms 8.6628 ms 8.6961 ms]
+                            thrpt:  [24.519 GiB/s 24.614 GiB/s 24.722 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_members   full=        0  standalone=        0
+    json-standalone/numbers/find_members
+                            time:   [8.5686 ms 8.6089 ms 8.6706 ms]
+                            thrpt:  [24.591 GiB/s 24.768 GiB/s 24.884 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    │  context regions (strings): 0
+    json-standalone/numbers/context
+                            time:   [8.7605 ms 8.8003 ms 8.8335 ms]
+                            thrpt:  [24.138 GiB/s 24.229 GiB/s 24.339 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+    │  full-vs-context-aware counts:
+        find_context_objects full=        0  context-aware=        0
+    json-standalone/numbers/find_context_objects
+                            time:   [8.6467 ms 8.6965 ms 8.7596 ms]
+                            thrpt:  [24.341 GiB/s 24.518 GiB/s 24.659 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_context_arrays full=        1  context-aware=        1
+    json-standalone/numbers/find_context_arrays
+                            time:   [9.5565 ms 9.5862 ms 9.6243 ms]
+                            thrpt:  [22.154 GiB/s 22.243 GiB/s 22.312 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    json-standalone/numbers/find_context_objects_cold
+                            time:   [17.249 ms 17.314 ms 17.393 ms]
+                            thrpt:  [12.259 GiB/s 12.315 GiB/s 12.361 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    json-standalone/numbers/find_context_arrays_cold
+                            time:   [18.374 ms 18.483 ms 18.551 ms]
+                            thrpt:  [11.494 GiB/s 11.536 GiB/s 11.604 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    ```
 </details>
 
 <details>
-<summary>objects</summary>
+    <summary>objects full log</summary>
 
-```
-  find_objects   full=  2000000  standalone=  2000000
-                        time:   [29.963 ms 30.002 ms 30.054 ms]
-                        thrpt:  [4.8859 GiB/s 4.8943 GiB/s 4.9007 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [6.4211 ms 6.4309 ms 6.4452 ms]
-                        thrpt:  [22.783 GiB/s 22.833 GiB/s 22.868 GiB/s]
-
-  find_strings   full= 12000000  standalone= 12000000
-                        time:   [175.45 ms 175.51 ms 175.56 ms]
-                        thrpt:  [856.46 MiB/s 856.73 MiB/s 856.99 MiB/s]
-
-  find_members   full= 10000000  standalone= 10000000
-                        time:   [171.80 ms 171.94 ms 172.09 ms]
-                        thrpt:  [873.73 MiB/s 874.51 MiB/s 875.22 MiB/s]
-```
-
+    ```
+    ┌─ corpus: objects
+    │  size:          150.36 MiB  (157666671 bytes)
+    │  structural:  24000001     (155.9 per KiB)
+    │
+    │      objects:   2000000      arrays:         1     strings:  12000000
+    │      members:  10000000     scalars:         0       loose:         1
+    │  typed: nums:   4000000       trues:   1000000      falses:   1000000     nulls:   2000000
+    └─
+    │  full-vs-standalone counts:
+        find_objects   full=  2000000  standalone=  2000000
+    json-standalone/objects/find_objects
+                            time:   [30.037 ms 30.069 ms 30.102 ms]
+                            thrpt:  [4.8780 GiB/s 4.8834 GiB/s 4.8886 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_arrays    full=        1  standalone=        1
+    json-standalone/objects/find_arrays
+                            time:   [6.3972 ms 6.4081 ms 6.4252 ms]
+                            thrpt:  [22.854 GiB/s 22.915 GiB/s 22.953 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_strings   full= 12000000  standalone= 12000000
+    json-standalone/objects/find_strings
+                            time:   [150.29 ms 150.52 ms 150.84 ms]
+                            thrpt:  [996.85 MiB/s 998.98 MiB/s 1000.5 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_members   full= 10000000  standalone= 10000000
+    json-standalone/objects/find_members
+                            time:   [169.03 ms 169.13 ms 169.25 ms]
+                            thrpt:  [888.43 MiB/s 889.01 MiB/s 889.55 MiB/s]
+    │  context regions (strings): 12000000
+    json-standalone/objects/context
+                            time:   [210.09 ms 210.39 ms 210.70 ms]
+                            thrpt:  [713.62 MiB/s 714.70 MiB/s 715.71 MiB/s]
+    │  full-vs-context-aware counts:
+        find_context_objects full=  2000000  context-aware=  2000000
+    json-standalone/objects/find_context_objects
+                            time:   [41.356 ms 41.394 ms 41.438 ms]
+                            thrpt:  [3.5436 GiB/s 3.5473 GiB/s 3.5506 GiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) high mild
+      1 (5.00%) high severe
+        find_context_arrays full=        1  context-aware=        1
+    json-standalone/objects/find_context_arrays
+                            time:   [11.498 ms 11.522 ms 11.546 ms]
+                            thrpt:  [12.717 GiB/s 12.744 GiB/s 12.770 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+    json-standalone/objects/find_context_objects_cold
+                            time:   [252.38 ms 252.70 ms 253.13 ms]
+                            thrpt:  [594.02 MiB/s 595.03 MiB/s 595.78 MiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+    json-standalone/objects/find_context_arrays_cold
+                            time:   [223.60 ms 223.86 ms 224.09 ms]
+                            thrpt:  [670.99 MiB/s 671.68 MiB/s 672.45 MiB/s]
+    ```
 </details>
 
 <details>
-<summary>nested</summary>
+    <summary>nested full log</summary>
 
-```
-  find_objects   full=  5000000  standalone=  2000000
-                        time:   [29.343 ms 29.389 ms 29.428 ms]
-                        thrpt:  [4.0649 GiB/s 4.0704 GiB/s 4.0768 GiB/s]
-
-  find_arrays    full=  1000001  standalone=  1000000
-                        time:   [15.350 ms 15.357 ms 15.367 ms]
-                        thrpt:  [7.7845 GiB/s 7.7893 GiB/s 7.7929 GiB/s]
-
-  find_strings   full= 13000000  standalone= 13000000
-                        time:   [189.99 ms 190.07 ms 190.15 ms]
-                        thrpt:  [644.19 MiB/s 644.47 MiB/s 644.74 MiB/s]
-
-  find_members   full= 10000000  standalone=  6000000
-                        time:   [107.06 ms 107.14 ms 107.22 ms]
-                        thrpt:  [1.1157 GiB/s 1.1165 GiB/s 1.1173 GiB/s]
-```
-
-</details>
-
-### nightly - `RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_standalone --features avx2`
-
-**small:**
-
-<details>
-<summary>numbers</summary>
-
-```
-  find_objects   full=        0  standalone=        0
-                        time:   [19.921 µs 20.352 µs 20.695 µs]
-                        thrpt:  [89.529 GiB/s 91.039 GiB/s 93.010 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [25.058 µs 25.646 µs 26.405 µs]
-                        thrpt:  [70.169 GiB/s 72.245 GiB/s 73.941 GiB/s]
-
-  find_strings   full=        0  standalone=        0
-                        time:   [19.767 µs 20.265 µs 20.730 µs]
-                        thrpt:  [89.377 GiB/s 91.427 GiB/s 93.732 GiB/s]
-
-  find_members   full=        0  standalone=        0
-                        time:   [22.369 µs 22.722 µs 23.061 µs]
-                        thrpt:  [80.344 GiB/s 81.544 GiB/s 82.830 GiB/s]
-```
-
-</details>
-
-<details>
-<summary>objects</summary>
-
-```
-  find_objects   full=    20000  standalone=    20000
-                        time:   [235.90 µs 236.43 µs 237.31 µs]
-                        thrpt:  [5.7167 GiB/s 5.7380 GiB/s 5.7510 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [19.039 µs 19.451 µs 19.823 µs]
-                        thrpt:  [68.439 GiB/s 69.745 GiB/s 71.255 GiB/s]
-
-  find_strings   full=   120000  standalone=   120000
-                        time:   [1.2501 ms 1.2509 ms 1.2516 ms]
-                        thrpt:  [1.0840 GiB/s 1.0845 GiB/s 1.0852 GiB/s]
-
-  find_members   full=   100000  standalone=   100000
-                        time:   [1.4891 ms 1.4899 ms 1.4906 ms]
-                        thrpt:  [931.98 MiB/s 932.42 MiB/s 932.88 MiB/s]
-```
-
-</details>
-
-<details>
-<summary>nested</summary>
-
-```
-  find_objects   full=    50000  standalone=    20000
-                        time:   [217.09 µs 217.23 µs 217.33 µs]
-                        thrpt:  [5.0757 GiB/s 5.0779 GiB/s 5.0814 GiB/s]
-
-  find_arrays    full=    10001  standalone=    10000
-                        time:   [122.02 µs 122.14 µs 122.29 µs]
-                        thrpt:  [9.0204 GiB/s 9.0317 GiB/s 9.0402 GiB/s]
-
-  find_strings   full=   130000  standalone=   130000
-                        time:   [1.3484 ms 1.3490 ms 1.3499 ms]
-                        thrpt:  [836.80 MiB/s 837.32 MiB/s 837.75 MiB/s]
-
-  find_members   full=   100000  standalone=    60000
-                        time:   [913.13 µs 913.21 µs 913.33 µs]
-                        thrpt:  [1.2078 GiB/s 1.2079 GiB/s 1.2080 GiB/s]
-```
-
-</details>
-
-**big:**
-
-<details>
-<summary>numbers</summary>
-
-```
-  find_objects   full=        0  standalone=        0
-                        time:   [8.7345 ms 8.7469 ms 8.7599 ms]
-                        thrpt:  [24.341 GiB/s 24.377 GiB/s 24.412 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [9.5939 ms 9.6656 ms 9.7281 ms]
-                        thrpt:  [21.918 GiB/s 22.060 GiB/s 22.225 GiB/s]
-
-  find_strings   full=        0  standalone=        0
-                        time:   [8.7041 ms 8.7498 ms 8.8278 ms]
-                        thrpt:  [24.153 GiB/s 24.369 GiB/s 24.497 GiB/s]
-
-  find_members   full=        0  standalone=        0
-                        time:   [8.6381 ms 8.6513 ms 8.6695 ms]
-                        thrpt:  [24.594 GiB/s 24.646 GiB/s 24.684 GiB/s]
-```
-
-</details>
-
-<details>
-<summary>objects</summary>
-
-```
-  find_objects   full=  2000000  standalone=  2000000
-                        time:   [23.978 ms 23.997 ms 24.012 ms]
-                        thrpt:  [6.1152 GiB/s 6.1190 GiB/s 6.1238 GiB/s]
-
-  find_arrays    full=        1  standalone=        1
-                        time:   [6.4343 ms 6.4465 ms 6.4665 ms]
-                        thrpt:  [22.708 GiB/s 22.778 GiB/s 22.821 GiB/s]
-
-  find_strings   full= 12000000  standalone= 12000000
-                        time:   [125.18 ms 125.29 ms 125.41 ms]
-                        thrpt:  [1.1709 GiB/s 1.1720 GiB/s 1.1730 GiB/s]
-
-  find_members   full= 10000000  standalone= 10000000
-                        time:   [148.79 ms 148.85 ms 148.97 ms]
-                        thrpt:  [1009.4 MiB/s 1010.2 MiB/s 1010.6 MiB/s]
-```
-
-</details>
-
-<details>
-<summary>nested</summary>
-
-```
-  find_objects   full=  5000000  standalone=  2000000
-                        time:   [23.080 ms 23.106 ms 23.141 ms]
-                        thrpt:  [5.1693 GiB/s 5.1772 GiB/s 5.1830 GiB/s]
-
-  find_arrays    full=  1000001  standalone=  1000000
-                        time:   [13.017 ms 13.026 ms 13.037 ms]
-                        thrpt:  [9.1759 GiB/s 9.1833 GiB/s 9.1901 GiB/s]
-
-  find_strings   full= 13000000  standalone= 13000000
-                        time:   [134.78 ms 134.82 ms 134.86 ms]
-                        thrpt:  [908.30 MiB/s 908.59 MiB/s 908.83 MiB/s]
-
-  find_members   full= 10000000  standalone=  6000000
-                        time:   [92.517 ms 92.559 ms 92.608 ms]
-                        thrpt:  [1.2917 GiB/s 1.2924 GiB/s 1.2930 GiB/s]
-```
-
+    ```
+    ┌─ corpus: nested
+    │  size:          122.49 MiB  (128444451 bytes)
+    │  structural:  29000001     (231.2 per KiB)
+    │
+    │      objects:   5000000      arrays:   1000001     strings:  13000000
+    │      members:  10000000     scalars:         0       loose:         1
+    │  typed: nums:   4000000       trues:   1000000      falses:         0     nulls:         0
+    └─
+    │  full-vs-standalone counts:
+        find_objects   full=  5000000  standalone=  2000000
+    json-standalone/nested/find_objects
+                            time:   [29.242 ms 29.286 ms 29.345 ms]
+                            thrpt:  [4.0764 GiB/s 4.0846 GiB/s 4.0908 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) high mild
+      1 (5.00%) high severe
+        find_arrays    full=  1000001  standalone=  1000000
+    json-standalone/nested/find_arrays
+                            time:   [15.195 ms 15.210 ms 15.225 ms]
+                            thrpt:  [7.8569 GiB/s 7.8649 GiB/s 7.8723 GiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high severe
+        find_strings   full= 13000000  standalone= 13000000
+    json-standalone/nested/find_strings
+                            time:   [162.75 ms 162.92 ms 163.09 ms]
+                            thrpt:  [751.07 MiB/s 751.89 MiB/s 752.64 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+        find_members   full= 10000000  standalone=  6000000
+    json-standalone/nested/find_members
+                            time:   [105.94 ms 106.00 ms 106.08 ms]
+                            thrpt:  [1.1276 GiB/s 1.1285 GiB/s 1.1292 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      2 (10.00%) high severe
+    │  context regions (strings): 13000000
+    json-standalone/nested/context
+                            time:   [228.46 ms 228.78 ms 229.13 ms]
+                            thrpt:  [534.61 MiB/s 535.42 MiB/s 536.17 MiB/s]
+    Found 1 outliers among 20 measurements (5.00%)
+      1 (5.00%) high mild
+    │  full-vs-context-aware counts:
+        find_context_objects full=  5000000  context-aware=  2000000
+    json-standalone/nested/find_context_objects
+                            time:   [36.886 ms 36.907 ms 36.931 ms]
+                            thrpt:  [3.2391 GiB/s 3.2412 GiB/s 3.2430 GiB/s]
+    Found 2 outliers among 20 measurements (10.00%)
+      1 (5.00%) low mild
+      1 (5.00%) high severe
+        find_context_arrays full=  1000001  context-aware=  1000000
+    json-standalone/nested/find_context_arrays
+                            time:   [22.254 ms 22.408 ms 22.517 ms]
+                            thrpt:  [5.3126 GiB/s 5.3384 GiB/s 5.3754 GiB/s]
+    json-standalone/nested/find_context_objects_cold
+                            time:   [265.10 ms 265.47 ms 265.91 ms]
+                            thrpt:  [460.66 MiB/s 461.43 MiB/s 462.07 MiB/s]
+    Found 3 outliers among 20 measurements (15.00%)
+      2 (10.00%) high mild
+      1 (5.00%) high severe
+    json-standalone/nested/find_context_arrays_cold
+                            time:   [249.76 ms 250.18 ms 250.63 ms]
+                            thrpt:  [488.75 MiB/s 489.63 MiB/s 490.45 MiB/s]
+    ```
 </details>
 
 ---
@@ -606,344 +1163,6 @@ Three groups per corpus:
   `context-aware` counts alongside.
 - `find_context_*_cold` — map build plus scan in a single call: the one-shot
   price when no map is reused.
-
-Shown for both `small` and `big`.
-
-### stable - `cargo bench --bench meon-json_standalone`
-
-**small:**
-
-<details>
-<summary>numbers</summary>
-
-```
-  context regions (strings): 0
-                        time:   [20.995 µs 21.512 µs 22.088 µs]
-                        thrpt:  [83.882 GiB/s 86.128 GiB/s 88.249 GiB/s]
-
-  find_context_objects full=        0  context-aware=        0
-                        time:   [19.225 µs 20.076 µs 20.860 µs]
-                        thrpt:  [88.820 GiB/s 92.288 GiB/s 96.376 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [24.026 µs 24.459 µs 24.821 µs]
-                        thrpt:  [74.648 GiB/s 75.752 GiB/s 77.118 GiB/s]
-
-  find_context_objects_cold
-                        time:   [40.340 µs 40.762 µs 41.184 µs]
-                        thrpt:  [44.989 GiB/s 45.455 GiB/s 45.930 GiB/s]
-
-  find_context_arrays_cold
-                        time:   [48.881 µs 49.909 µs 50.950 µs]
-                        thrpt:  [36.365 GiB/s 37.124 GiB/s 37.905 GiB/s]
-```
-
-</details>
-
-<details>
-<summary>objects</summary>
-
-```
-  context regions (strings): 120000
-                        time:   [1.7226 ms 1.7236 ms 1.7245 ms]
-                        thrpt:  [805.58 MiB/s 806.00 MiB/s 806.46 MiB/s]
-
-  find_context_objects full=    20000  context-aware=    20000
-                        time:   [402.79 µs 404.65 µs 407.52 µs]
-                        thrpt:  [3.3290 GiB/s 3.3526 GiB/s 3.3681 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [77.066 µs 78.418 µs 79.960 µs]
-                        thrpt:  [16.966 GiB/s 17.300 GiB/s 17.603 GiB/s]
-
-  find_context_objects_cold
-                        time:   [2.1215 ms 2.1230 ms 2.1243 ms]
-                        thrpt:  [653.94 MiB/s 654.36 MiB/s 654.81 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [1.7940 ms 1.7951 ms 1.7963 ms]
-                        thrpt:  [773.37 MiB/s 773.89 MiB/s 774.34 MiB/s]
-```
-
-</details>
-
-<details>
-<summary>nested</summary>
-
-```
-  context regions (strings): 130000
-                        time:   [1.8486 ms 1.8493 ms 1.8500 ms]
-                        thrpt:  [610.58 MiB/s 610.82 MiB/s 611.05 MiB/s]
-
-  find_context_objects full=    50000  context-aware=    20000
-                        time:   [361.97 µs 363.60 µs 366.35 µs]
-                        thrpt:  [3.0111 GiB/s 3.0339 GiB/s 3.0475 GiB/s]
-
-  find_context_arrays full=    10001  context-aware=    10000
-                        time:   [228.93 µs 229.52 µs 229.93 µs]
-                        thrpt:  [4.7976 GiB/s 4.8061 GiB/s 4.8186 GiB/s]
-
-  find_context_objects_cold
-                        time:   [2.2165 ms 2.2210 ms 2.2269 ms]
-                        thrpt:  [507.24 MiB/s 508.59 MiB/s 509.62 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [2.0827 ms 2.0868 ms 2.0897 ms]
-                        thrpt:  [540.55 MiB/s 541.30 MiB/s 542.36 MiB/s]
-```
-
-</details>
-
-**big:**
-
-<details>
-<summary>numbers</summary>
-
-```
-  context regions (strings): 0
-                        time:   [8.7870 ms 8.7936 ms 8.7991 ms]
-                        thrpt:  [24.232 GiB/s 24.247 GiB/s 24.265 GiB/s]
-
-  find_context_objects full=        0  context-aware=        0
-                        time:   [8.6355 ms 8.6422 ms 8.6498 ms]
-                        thrpt:  [24.650 GiB/s 24.672 GiB/s 24.691 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [9.4881 ms 9.4997 ms 9.5118 ms]
-                        thrpt:  [22.416 GiB/s 22.445 GiB/s 22.472 GiB/s]
-
-  find_context_objects_cold
-                        time:   [17.307 ms 17.328 ms 17.351 ms]
-                        thrpt:  [12.289 GiB/s 12.305 GiB/s 12.320 GiB/s]
-
-  find_context_arrays_cold
-                        time:   [18.189 ms 18.232 ms 18.285 ms]
-                        thrpt:  [11.661 GiB/s 11.695 GiB/s 11.723 GiB/s]
-```
-
-</details>
-
-<details>
-<summary>objects</summary>
-
-```
-  context regions (strings): 12000000
-                        time:   [213.67 ms 214.09 ms 214.60 ms]
-                        thrpt:  [700.66 MiB/s 702.35 MiB/s 703.70 MiB/s]
-
-  find_context_objects full=  2000000  context-aware=  2000000
-                        time:   [43.688 ms 43.739 ms 43.774 ms]
-                        thrpt:  [3.3544 GiB/s 3.3572 GiB/s 3.3611 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [13.207 ms 13.239 ms 13.267 ms]
-                        thrpt:  [11.068 GiB/s 11.092 GiB/s 11.119 GiB/s]
-
-  find_context_objects_cold
-                        time:   [255.77 ms 256.05 ms 256.40 ms]
-                        thrpt:  [586.43 MiB/s 587.24 MiB/s 587.89 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [226.35 ms 226.71 ms 227.12 ms]
-                        thrpt:  [662.03 MiB/s 663.25 MiB/s 664.30 MiB/s]
-```
-
-</details>
-
-<details>
-<summary>nested</summary>
-
-```
-  context regions (strings): 13000000
-                        time:   [231.42 ms 231.69 ms 231.94 ms]
-                        thrpt:  [528.13 MiB/s 528.70 MiB/s 529.31 MiB/s]
-
-  find_context_objects full=  5000000  context-aware=  2000000
-                        time:   [38.256 ms 38.349 ms 38.405 ms]
-                        thrpt:  [3.1148 GiB/s 3.1193 GiB/s 3.1269 GiB/s]
-
-  find_context_arrays full=  1000001  context-aware=  1000000
-                        time:   [22.765 ms 22.884 ms 22.980 ms]
-                        thrpt:  [5.2056 GiB/s 5.2273 GiB/s 5.2548 GiB/s]
-
-  find_context_objects_cold
-                        time:   [269.40 ms 269.73 ms 270.02 ms]
-                        thrpt:  [453.66 MiB/s 454.14 MiB/s 454.70 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [253.48 ms 253.74 ms 254.11 ms]
-                        thrpt:  [482.05 MiB/s 482.76 MiB/s 483.25 MiB/s]
-```
-
-</details>
-
-### nightly - `RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_standalone --features avx2`
-
-**small:**
-
-<details>
-<summary>numbers</summary>
-
-```
-  context regions (strings): 0
-                        time:   [20.624 µs 21.159 µs 21.860 µs]
-                        thrpt:  [84.759 GiB/s 87.565 GiB/s 89.836 GiB/s]
-
-  find_context_objects full=        0  context-aware=        0
-                        time:   [19.940 µs 20.953 µs 22.210 µs]
-                        thrpt:  [83.424 GiB/s 88.426 GiB/s 92.919 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [23.764 µs 24.126 µs 24.423 µs]
-                        thrpt:  [75.863 GiB/s 76.798 GiB/s 77.968 GiB/s]
-
-  find_context_objects_cold
-                        time:   [39.562 µs 40.352 µs 41.387 µs]
-                        thrpt:  [44.768 GiB/s 45.917 GiB/s 46.833 GiB/s]
-
-  find_context_arrays_cold
-                        time:   [44.927 µs 46.463 µs 47.599 µs]
-                        thrpt:  [38.926 GiB/s 39.877 GiB/s 41.241 GiB/s]
-```
-
-</details>
-
-<details>
-<summary>objects</summary>
-
-```
-  context regions (strings): 120000
-                        time:   [1.3703 ms 1.3715 ms 1.3727 ms]
-                        thrpt:  [1012.0 MiB/s 1012.9 MiB/s 1013.8 MiB/s]
-
-  find_context_objects full=    20000  context-aware=    20000
-                        time:   [298.52 µs 298.95 µs 299.28 µs]
-                        thrpt:  [4.5330 GiB/s 4.5380 GiB/s 4.5446 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [49.051 µs 50.612 µs 52.413 µs]
-                        thrpt:  [25.883 GiB/s 26.804 GiB/s 27.658 GiB/s]
-
-  find_context_objects_cold
-                        time:   [1.6808 ms 1.6817 ms 1.6826 ms]
-                        thrpt:  [825.62 MiB/s 826.07 MiB/s 826.48 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [1.4155 ms 1.4159 ms 1.4164 ms]
-                        thrpt:  [980.81 MiB/s 981.14 MiB/s 981.39 MiB/s]
-```
-
-</details>
-
-<details>
-<summary>nested</summary>
-
-```
-  context regions (strings): 130000
-                        time:   [1.4703 ms 1.4705 ms 1.4707 ms]
-                        thrpt:  [768.04 MiB/s 768.17 MiB/s 768.28 MiB/s]
-
-  find_context_objects full=    50000  context-aware=    20000
-                        time:   [270.63 µs 270.83 µs 271.03 µs]
-                        thrpt:  [4.0700 GiB/s 4.0731 GiB/s 4.0761 GiB/s]
-
-  find_context_arrays full=    10001  context-aware=    10000
-                        time:   [176.55 µs 176.85 µs 177.11 µs]
-                        thrpt:  [6.2285 GiB/s 6.2375 GiB/s 6.2481 GiB/s]
-
-  find_context_objects_cold
-                        time:   [1.7445 ms 1.7455 ms 1.7464 ms]
-                        thrpt:  [646.81 MiB/s 647.14 MiB/s 647.50 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [1.6503 ms 1.6514 ms 1.6524 ms]
-                        thrpt:  [683.61 MiB/s 684.03 MiB/s 684.46 MiB/s]
-```
-
-</details>
-
-**big:**
-
-<details>
-<summary>numbers</summary>
-
-```
-  context regions (strings): 0
-                        time:   [8.8090 ms 8.8233 ms 8.8456 ms]
-                        thrpt:  [24.105 GiB/s 24.166 GiB/s 24.205 GiB/s]
-
-  find_context_objects full=        0  context-aware=        0
-                        time:   [8.7020 ms 8.7245 ms 8.7511 ms]
-                        thrpt:  [24.365 GiB/s 24.439 GiB/s 24.503 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [9.5281 ms 9.5431 ms 9.5600 ms]
-                        thrpt:  [22.303 GiB/s 22.343 GiB/s 22.378 GiB/s]
-
-  find_context_objects_cold
-                        time:   [17.470 ms 17.544 ms 17.599 ms]
-                        thrpt:  [12.116 GiB/s 12.154 GiB/s 12.205 GiB/s]
-
-  find_context_arrays_cold
-                        time:   [18.347 ms 18.400 ms 18.488 ms]
-                        thrpt:  [11.533 GiB/s 11.588 GiB/s 11.622 GiB/s]
-```
-
-</details>
-
-<details>
-<summary>objects</summary>
-
-```
-  context regions (strings): 12000000
-                        time:   [177.93 ms 178.13 ms 178.33 ms]
-                        thrpt:  [843.15 MiB/s 844.10 MiB/s 845.07 MiB/s]
-
-  find_context_objects full=  2000000  context-aware=  2000000
-                        time:   [32.940 ms 33.036 ms 33.093 ms]
-                        thrpt:  [4.4371 GiB/s 4.4448 GiB/s 4.4577 GiB/s]
-
-  find_context_arrays full=        1  context-aware=        1
-                        time:   [11.472 ms 11.479 ms 11.487 ms]
-                        thrpt:  [12.783 GiB/s 12.792 GiB/s 12.799 GiB/s]
-
-  find_context_objects_cold
-                        time:   [211.04 ms 211.38 ms 211.72 ms]
-                        thrpt:  [710.18 MiB/s 711.35 MiB/s 712.48 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [190.79 ms 190.90 ms 191.02 ms]
-                        thrpt:  [787.16 MiB/s 787.64 MiB/s 788.12 MiB/s]
-```
-
-</details>
-
-<details>
-<summary>nested</summary>
-
-```
-  context regions (strings): 13000000
-                        time:   [192.18 ms 192.33 ms 192.48 ms]
-                        thrpt:  [636.40 MiB/s 636.88 MiB/s 637.38 MiB/s]
-
-  find_context_objects full=  5000000  context-aware=  2000000
-                        time:   [29.057 ms 29.077 ms 29.110 ms]
-                        thrpt:  [4.1093 GiB/s 4.1140 GiB/s 4.1169 GiB/s]
-
-  find_context_arrays full=  1000001  context-aware=  1000000
-                        time:   [18.240 ms 18.259 ms 18.277 ms]
-                        thrpt:  [6.5451 GiB/s 6.5515 GiB/s 6.5583 GiB/s]
-
-  find_context_objects_cold
-                        time:   [222.91 ms 223.11 ms 223.32 ms]
-                        thrpt:  [548.51 MiB/s 549.03 MiB/s 549.51 MiB/s]
-
-  find_context_arrays_cold
-                        time:   [213.06 ms 213.28 ms 213.49 ms]
-                        thrpt:  [573.77 MiB/s 574.32 MiB/s 574.92 MiB/s]
-```
-
-</details>
 
 ---
 
