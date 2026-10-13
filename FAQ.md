@@ -36,3 +36,7 @@ is restored by merging the vectors and sorting them.
 ## Is nesting lost?
 
 No. Nesting is a span inside a span.
+
+## This is synthetic benchmarks? So this is not real numbers for real documents
+
+Yes, but this benchmarks more like stress-test for formats. For `meon-md` real metrics will be between `plain` and `hot` benchmarks/
