@@ -1038,3 +1038,25 @@ fn test_77_leading_blank_lines_no_scalars() {
     assert_eq!(c.objects.len(), 1);
     assert!(c.scalars.is_empty());
 }
+
+// 78. The newline that ends the document is not a scalar.
+#[test]
+fn test_78_trailing_newline_no_scalar() {
+    let c = JsonParser::parse(b"{\"a\": 1}\n");
+    assert_eq!(c.objects.len(), 1);
+    assert!(c.scalars.is_empty());
+}
+
+// 79. Bare values on lines separated by a blank line carry no line break.
+#[test]
+fn test_79_bare_values_carry_no_line_break() {
+    let c = JsonParser::parse(b"1\n\n2\n");
+    assert_eq!(texts(&c, &c.scalars), vec!["1", "2"]);
+}
+
+// 80. The value of an unterminated member ends before the final newline.
+#[test]
+fn test_80_unterminated_member_value_excludes_newline() {
+    let c = JsonParser::parse(b"{\"a\": 1\n");
+    assert_eq!(members(&c), vec![(r#""a""#.to_string(), "1".to_string())]);
+}

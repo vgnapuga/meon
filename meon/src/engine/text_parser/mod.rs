@@ -68,7 +68,9 @@ pub use crate::parse_block;
 /// at a blank line, at a line where a line or block rule matches, or at the
 /// end of input. Inside the run every `eol` is ordinary content, so the
 /// inline stack survives it: a grammar with empty `lines {}` / `blocks {}`
-/// sections (JSON) gets one run over the whole input, blank lines aside.
+/// sections (JSON) gets one run over the whole input, blank lines aside. The
+/// `eol` that ends the run's last line is not part of the scanned run, the
+/// same as for a single-line call; the paragraph span still includes it.
 ///
 /// Trailing content after a matched line or block marker is scanned by a
 /// single-line `parse_inline!` call; it cannot continue onto another line.
@@ -337,7 +339,10 @@ macro_rules! parse_text {
                 ($end:expr) => {
                     if let Some(s) = para_start {
                         let _ps = s as usize;
-                        let _pe = $end as usize;
+                        let mut _pe = $end as usize;
+                        if _pe > _ps && src[_pe - 1] == $eol {
+                            _pe -= 1;
+                        }
                         if _ps < _pe {
                             $crate::parse_inline!(
                                 state, src, _ps, _pe,

@@ -1335,3 +1335,23 @@ fn integ_gap_07_heading_then_paragraph() {
     let c = MarkdownParser::parse(src);
     assert_eq!(texts(src, &c), vec!["h", "b"]);
 }
+
+// 08. Trailing spaces on a paragraph's last line are still a hard break
+#[test]
+fn integ_gap_08_space_hard_break_on_last_line() {
+    let src = b"a  \n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+    assert_eq!(c.hard_breaks.len(), 1);
+    assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
+}
+
+// 09. A trailing backslash on a paragraph's last line is still a hard break
+#[test]
+fn integ_gap_09_backslash_hard_break_on_last_line() {
+    let src = b"a\\\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a"]);
+    assert_eq!(c.hard_breaks.len(), 1);
+    assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
+}
