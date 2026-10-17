@@ -1003,3 +1003,30 @@ fn test_74_key_without_colon_no_member() {
     assert_eq!(c.members.len(), 0);
     assert_eq!(sorted(&c, &c.strings), vec!["a"]);
 }
+
+// 75. A key containing a space is kept whole, quotes included.
+#[test]
+fn test_75_key_with_space() {
+    let c = JsonParser::parse(br#"{"first name": "Ada", "last name": "L"}"#);
+    assert_eq!(
+        members(&c),
+        vec![
+            (r#""first name""#.to_string(), r#""Ada""#.to_string()),
+            (r#""last name""#.to_string(), r#""L""#.to_string()),
+        ]
+    );
+}
+
+// 76. Keys of a pretty-printed document without indentation carry no line
+//     break, for both LF and CRLF line ends.
+#[test]
+fn test_76_unindented_keys_carry_no_line_break() {
+    for src in [
+        &b"{\n\"a\": 1,\n\"b\": 2\n}"[..],
+        b"{\r\n\"a\": 1,\r\n\"b\": 2\r\n}",
+    ] {
+        let c = JsonParser::parse(src);
+        let keys: Vec<String> = members(&c).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![r#""a""#, r#""b""#]);
+    }
+}

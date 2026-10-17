@@ -1404,6 +1404,36 @@ fn kv_10_only_key_and_eq() {
     assert_eq!(txt(src, st.key_values[0].value), "");
 }
 
+// 11. The key does not reach back across a line break of the same run
+#[test]
+fn kv_11_key_stops_at_eol() {
+    let src = b"title\nkey=value";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "key");
+    assert_eq!(txt(src, st.key_values[0].value), "value");
+}
+
+// 12. A code span right before `eq` is the key, its inner space included
+#[test]
+fn kv_12_opaque_span_is_whole_key() {
+    let src = b"`a b`=value";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "`a b`");
+    assert_eq!(txt(src, st.key_values[0].value), "value");
+}
+
+// 13. A word after a code span does not extend into the span
+#[test]
+fn kv_13_key_stops_at_opaque_span_end() {
+    let src = b"`c`key=value";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "key");
+    assert_eq!(st.codes.len(), 1);
+}
+
 // ================================================================
 // balanced asymmetric (objects)
 // ================================================================
@@ -2490,6 +2520,45 @@ fn kvn_12_two_objects() {
     let (st, _) = run_inline_kv_json!(src, 8);
     assert_eq!(st.key_values.len(), 2);
     assert_eq!(st.objects.len(), 2);
+}
+
+// 13. a quoted key containing `sep` is kept whole
+#[test]
+fn kvn_13_quoted_key_with_sep() {
+    let src = br#"{"first name":1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""first name""#);
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+}
+
+// 14. `sep` between a quoted key and `eq` is trimmed; the key stays whole
+#[test]
+fn kvn_14_quoted_key_with_sep_before_eq() {
+    let src = br#"{"a b" : 1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a b""#);
+}
+
+// 15. a key at the start of a line does not absorb the preceding eol
+#[test]
+fn kvn_15_key_after_eol() {
+    let src = b"{\n\"a\":1,\n\"b\":2}";
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[1].key), r#""b""#);
+}
+
+// 16. with CRLF line ends the key carries no `\r` or `\n`
+#[test]
+fn kvn_16_key_after_crlf() {
+    let src = b"{\r\n\"a\":1,\r\n\"b\":2\r\n}";
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[1].key), r#""b""#);
 }
 
 // ================================================================

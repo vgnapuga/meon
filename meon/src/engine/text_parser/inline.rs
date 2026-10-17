@@ -128,10 +128,13 @@
 //!
 //! # `key_value`
 //!
-//! The rule triggers on `eq`. The key is found by scanning back from `eq` to
-//! the previous `sep`/`tab`, clamped to the start of the current key segment
-//! (the position after the last container open or `end` byte), so a quoted
-//! key consumed by an opaque rule is still covered. The value starts after
+//! The rule triggers on `eq`. The key is found by scanning back from `eq`,
+//! clamped to the start of the current key segment (the position after the
+//! last container open or `end` byte). When an opaque span (a quoted key)
+//! ends right before `eq`, or before the `sep` run trimmed when `allow_sep`,
+//! that span with its delimiters is the key, `sep` bytes inside it included.
+//! Otherwise the key is the word before `eq`: the scan stops at `sep`, `tab`,
+//! `eol` and at the end of an earlier opaque span. The value starts after
 //! `eq` (skipping `sep` when `allow_sep`) and is tracked by a stack frame; a
 //! second `eq` while a `key_value` frame is on top is value content. The
 //! pair is pushed when the value closes: at `end`, when the enclosing
@@ -361,6 +364,9 @@ macro_rules! parse_inline {
         let mut asym_overflow: u32 = 0u32;
         // Anchor for the start of the current key segment (see kv docs).
         let mut _kv_seg_start: usize = $start;
+        // Delimiter-inclusive bounds of the last opaque span emitted in this
+        // run. A key that ends where this span ends is the span itself.
+        let mut _kv_opaque: Option<(usize, usize)> = None;
 
         // Hard-break detection.
         let _hb = 'hb: {
@@ -1040,6 +1046,7 @@ macro_rules! parse_inline {
                             match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
                             pos = end;
                             text_start = end;
+                            _kv_opaque = Some((delim_start as usize, end));
                         }
                     }
                     continue;
@@ -1100,6 +1107,7 @@ macro_rules! parse_inline {
                         match count { $( $an => { push_il!($af, clean); } )* _ => {} }
                         pos = cp + 1;
                         text_start = pos;
+                        _kv_opaque = Some((delim_start as usize, pos));
                     }
                     continue;
                 }
@@ -1121,11 +1129,24 @@ macro_rules! parse_inline {
                             }
                         }
                         let mut ks = key_end;
-                        while ks > _kv_seg_start
-                            && src[ks - 1] != $sep
-                            && src[ks - 1] != $tab
-                        {
-                            ks -= 1;
+                        let mut key_floor = _kv_seg_start;
+                        let mut key_is_opaque = false;
+                        if let Some((_os, _oe)) = _kv_opaque {
+                            if _oe == key_end && _os >= _kv_seg_start {
+                                ks = _os;
+                                key_is_opaque = true;
+                            } else if _oe > key_floor && _oe <= key_end {
+                                key_floor = _oe;
+                            }
+                        }
+                        if !key_is_opaque {
+                            while ks > key_floor
+                                && src[ks - 1] != $sep
+                                && src[ks - 1] != $tab
+                                && src[ks - 1] != $eol
+                            {
+                                ks -= 1;
+                            }
                         }
                         let mut val_start = pos;
                         if $kv_allow {
