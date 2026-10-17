@@ -3005,3 +3005,55 @@ fn merge_04_consecutive_runs_keep_text_apart() {
     }
     assert_eq!(all(src, &st.texts), vec!["a", "b"]);
 }
+
+// ================================================================
+// asymmetric open refused by the stack
+// ================================================================
+
+// 01. An open byte refused because the stack is full under another rule's
+//     frame stays literal text, and the text before it is emitted once
+#[test]
+fn asym_refused_01_full_stack_keeps_text_once() {
+    let src = b"[a{b";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "{b"]);
+}
+
+// 02. A second open of a `balanced = false` rule, refused by its cap of one,
+//     stays literal text, and the text before it is emitted once
+#[test]
+fn asym_refused_02_unbalanced_cap_keeps_text_once() {
+    let src: &[u8] = b"(a(b";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'(', b')') {
+            asymmetric b'(', b')' { balanced = false; parse_inside = true; 1 => objects }
+        }
+    );
+    assert_eq!(all(src, &st.texts), vec!["a", "(b"]);
+    assert!(st.objects.is_empty());
+}
+
+// 03. Inside a transparent chained match that never closes, a refused open
+//     does not hide the text before it from the end-of-run flush
+#[test]
+fn asym_refused_03_inside_open_chained_match_keeps_text() {
+    let src: &[u8] = b"see [x<y<z";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'<', b'>', b'[', b']', b'(', b')') {
+            asymmetric b'<', b'>' { balanced = false; parse_inside = true; 1 => autolinks }
+            chained: Link {
+                | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert!(st.links.is_empty());
+    assert!(st.texts.iter().any(|s| s.start <= 7 && s.end == 10));
+}

@@ -100,8 +100,11 @@
 //! inside the frame. Either flag `true` puts the rule on the stack; its
 //! close byte must then be listed in the same `on_trigger` set, because
 //! closes are found by the same search as opens. Each byte of an open run is
-//! its own open event: `{{` is two opens. An open beyond the cap bumps a
-//! one-shot overflow counter, consumed by the next same-type close.
+//! its own open event: `{{` is two opens. An open of a `balanced = true`
+//! rule beyond the cap, with that rule's own frame on top, bumps a one-shot
+//! overflow counter, consumed by the next same-type close. Any other open the
+//! stack cannot take (the cap of a `balanced = false` rule, a full stack under
+//! another rule's frame) is refused and stays literal text.
 //!
 //! A close byte runs one pass per character: a `key_value` frame on top of
 //! the stack is committed first (its value ends where its container closes),
@@ -559,10 +562,15 @@ macro_rules! parse_inline {
                 // --- open side ---
                 $(
                     if ($abal || $api) && delim == $ao {
-                        if text_start < delim_start as usize {
-                            if !ch_in_text && !ch_in_url {
+                        // Outside a chained match the text before the run is
+                        // flushed and the text cursor moves to the run. An open
+                        // byte the stack takes moves the cursor past itself; one
+                        // it refuses stays as literal text after the flushed part.
+                        if !ch_in_text && !ch_in_url {
+                            if text_start < delim_start as usize {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
-                            };
+                            }
+                            text_start = delim_start as usize;
                         }
                         let _cap: usize = if $abal { $maxn } else { 1usize };
                         for _k in 0..count {

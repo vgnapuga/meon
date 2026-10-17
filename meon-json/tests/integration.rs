@@ -1060,3 +1060,13 @@ fn test_80_unterminated_member_value_excludes_newline() {
     let c = JsonParser::parse(b"{\"a\": 1\n");
     assert_eq!(members(&c), vec![(r#""a""#.to_string(), "1".to_string())]);
 }
+
+// 81. A `{` past the nesting cap starts the bare text that follows it, and the
+//     text before it is not repeated.
+#[test]
+fn test_81_open_past_cap_does_not_repeat_text() {
+    let mut src = vec![b'['; 64];
+    src.extend_from_slice(b"x{y");
+    let c = JsonParser::parse(&src);
+    assert_eq!(texts(&c, &c.scalars), vec!["x", "{y"]);
+}
