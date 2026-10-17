@@ -2926,13 +2926,13 @@ fn alloc_07_merge_into_a_full_vector_extends_in_place() {
     let mut st = ParseState::new(20); // texts [10] -> hint 2
     let mut at = 0u32;
     while st.texts.is_empty() || st.texts.len() < st.texts.capacity() {
-        st.push_merge_texts(Span::new(at, at + 1));
+        st.push_merge_texts(Span::new(at, at + 1), 0);
         at += 4;
     }
     let full = st.texts.len();
     let last_start = st.texts[full - 1].start;
 
-    st.push_merge_texts(Span::new(at - 3, at + 2));
+    st.push_merge_texts(Span::new(at - 3, at + 2), 0);
     assert_eq!(st.texts.len(), full);
     assert_eq!(st.texts.capacity(), full);
     assert_eq!(
@@ -2940,10 +2940,68 @@ fn alloc_07_merge_into_a_full_vector_extends_in_place() {
         (last_start, at + 2)
     );
 
-    st.push_merge_texts(Span::new(at + 10, at + 11));
+    st.push_merge_texts(Span::new(at + 10, at + 11), 0);
     assert_eq!(st.texts.len(), full + 1);
     assert_eq!(
         (st.texts[full].start, st.texts[full].end),
         (at + 10, at + 11)
     );
+}
+
+// ================================================================
+// merge boundaries: `push_merge_*` and the run floor
+// ================================================================
+
+// 01. A span within one byte of the last one merges when the last span ends
+//     inside the current run
+#[test]
+fn merge_01_adjacent_span_of_same_run_merges() {
+    use meon::span::Span;
+    let mut st = ParseState::new(10);
+    st.push_merge_texts(Span::new(0, 1), 0);
+    st.push_merge_texts(Span::new(2, 3), 0);
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (0, 3));
+}
+
+// 02. The same pair does not merge when the last span ends before the run
+//     the new one belongs to
+#[test]
+fn merge_02_span_of_previous_run_is_not_extended() {
+    use meon::span::Span;
+    let mut st = ParseState::new(10);
+    st.push_merge_texts(Span::new(0, 1), 0);
+    st.push_merge_texts(Span::new(2, 3), 2);
+    assert_eq!(st.texts.len(), 2);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (0, 1));
+}
+
+// 03. A span starting before the last one ends is pushed as is and does not
+//     shorten the last span
+#[test]
+fn merge_03_overlapping_span_does_not_shrink_the_last() {
+    use meon::span::Span;
+    let mut st = ParseState::new(20);
+    st.push_merge_texts(Span::new(0, 10), 0);
+    st.push_merge_texts(Span::new(3, 5), 0);
+    assert_eq!(st.texts.len(), 2);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (0, 10));
+    assert_eq!((st.texts[1].start, st.texts[1].end), (3, 5));
+}
+
+// 04. Two inline runs scanned one after the other keep their text apart,
+//     though only the run-separating `eol` lies between them
+#[test]
+fn merge_04_consecutive_runs_keep_text_apart() {
+    let src: &[u8] = b"a\nb";
+    let mut st = ParseState::new(src.len());
+    for (s, e) in [(0usize, 1usize), (2, 3)] {
+        meon::parse_inline!(
+            st, src, s, e, texts, true, b'\\', b' ', b'\t', b'\n', 1, false;
+            on_trigger(b'*') {
+                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+            }
+        );
+    }
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
 }

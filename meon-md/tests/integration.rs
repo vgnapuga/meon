@@ -1355,3 +1355,35 @@ fn integ_gap_09_backslash_hard_break_on_last_line() {
     assert_eq!(c.hard_breaks.len(), 1);
     assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
 }
+
+// 10. The text of a heading and of the paragraph on the next line stay apart
+#[test]
+fn integ_gap_10_heading_text_does_not_merge_into_paragraph() {
+    let src = b"# a\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+}
+
+// 11. The text of a blockquote line and of the following paragraph stay apart
+#[test]
+fn integ_gap_11_blockquote_text_does_not_merge_into_paragraph() {
+    let src = b"> a\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+}
+
+// 12. The text of a list item and of the following paragraph stay apart
+#[test]
+fn integ_gap_12_list_item_text_does_not_merge_into_paragraph() {
+    let src = b"- x\ny";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["x", "y"]);
+}
+
+// 13. Lines of one paragraph still merge into a single text across `eol`
+#[test]
+fn integ_gap_13_paragraph_lines_still_merge() {
+    let src = b"a\nb\nc";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a\nb\nc"]);
+}

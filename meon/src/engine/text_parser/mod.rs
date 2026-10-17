@@ -513,10 +513,10 @@ macro_rules! parse_text {
 
     (@hb_push $st:ident, $le:ident, $hb:ident ; []) => {};
 
-    (@dispatch $st:ident, $field:ident, $span:expr, true) => {
-        $crate::paste::paste! { $st.[<push_merge_ $field>]($span); }
+    (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, true) => {
+        $crate::paste::paste! { $st.[<push_merge_ $field>]($span, $floor); }
     };
-    (@dispatch $st:ident, $field:ident, $span:expr, false) => {
+    (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, false) => {
         $crate::paste::paste! { $st.[<push_ $field>]($span); }
     };
 

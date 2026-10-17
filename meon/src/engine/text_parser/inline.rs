@@ -297,7 +297,7 @@ macro_rules! parse_inline {
 
         macro_rules! push_il {
             ($field:ident, $span:expr) => {
-                $crate::parse_text!(@dispatch $state, $field, $span, $merge_il)
+                $crate::parse_text!(@dispatch $state, $field, $span, $start as u32, $merge_il)
             };
         }
 

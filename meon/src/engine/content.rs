@@ -31,8 +31,9 @@
 //! Stores `Vec<Span>` - a plain byte-range with no additional metadata.
 //! Used for single-span inline constructs such as bold, italic, code, autolinks,
 //! and plain text runs. These fields support optional *merge* behaviour: adjacent
-//! spans separated by at most one byte are coalesced into a single span via
-//! `push_merge_<field>` (controlled by `merge_simple` in the grammar).
+//! spans of the same inline run separated by at most one byte are coalesced
+//! into a single span via `push_merge_<field>` (controlled by `merge_simple` in
+//! the grammar).
 //!
 //! ## `line { field: Type [div] }`
 //!
@@ -85,9 +86,13 @@
 //!
 //! Every `inline_simple` field gets one more:
 //!
-//! - `push_merge_f(&mut self, Span)` - append with coalescing: if the last span
-//!   is non-empty, the new span is non-empty, and they are adjacent (gap <= 1
-//!   byte), the last span's end is extended instead of pushing a new entry.
+//! - `push_merge_f(&mut self, Span, floor: u32)` - append with coalescing: if
+//!   the last span is non-empty, ends at or after `floor`, the new span is
+//!   non-empty and starts at most one byte after the last one ends, the last
+//!   span's end is extended instead of pushing a new entry. `floor` is the start
+//!   of the inline run being scanned, so spans of different runs - of different
+//!   block or line elements - never merge. A new span that starts before the
+//!   last one ends is pushed as is.
 //!
 //! The merge variant is selected by `parse_text!` when `merge_simple = true` is
 //! set in the grammar's `inline` section.
@@ -300,14 +305,17 @@ macro_rules! define_content {
 
                     #[inline(always)]
                     pub(crate) fn [<push_merge_ $inline_simple_field>](
-                        &mut self, s: $crate::span::Span,
+                        &mut self, s: $crate::span::Span, floor: u32,
                     ) {
                         if let Some(last) = self.$inline_simple_field.last_mut() {
-                            if last.start != last.end && s.start != s.end {
-                                if s.start.saturating_sub(last.end) <= 1 {
-                                    last.end = s.end;
-                                    return;
-                                }
+                            if last.start != last.end
+                                && s.start != s.end
+                                && last.end >= floor
+                                && s.start >= last.end
+                                && s.start - last.end <= 1
+                            {
+                                last.end = s.end;
+                                return;
                             }
                         }
                         self.[<push_ $inline_simple_field>](s);
