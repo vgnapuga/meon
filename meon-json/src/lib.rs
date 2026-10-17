@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (C) 2026 Nikita Shavrin
 
+#![forbid(unsafe_code)]
+
 //! `meon-json` — a flat, span-based JSON reader built on the `meon` engine.
 //!
 //! The grammar produces a *table of intervals*, not a tree. Structure is

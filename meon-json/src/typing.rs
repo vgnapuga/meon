@@ -45,26 +45,10 @@ fn classify(first: u8) -> Option<ScalarKind> {
     }
 }
 
-/// Trim trailing `sep` / `tab` / `\n` / `\r` from the end of `[start, end)`
-/// over `src`.
-///
-/// # Safety invariant relied on by every `get_unchecked` in this file
-///
-/// Every index used here comes from a [`Span`] produced by the parser, whose
-/// `end` never exceeds `src.len()`, and every access is additionally guarded
-/// by the same `< end` / `> start` condition a checked index would test.
+/// Whitespace trimmed from both ends of a value before it is classified.
 #[inline]
-fn trim_end(src: &[u8], start: usize, mut end: usize) -> usize {
-    while end > start {
-        // SAFETY: `end > start` just checked; `end <= src.len()` by the
-        // span invariant above, so `end - 1` is in bounds.
-        let b = unsafe { *src.get_unchecked(end - 1) };
-        if b != b' ' && b != b'\t' && b != b'\n' && b != b'\r' {
-            break;
-        }
-        end -= 1;
-    }
-    end
+fn is_ws(b: u8) -> bool {
+    b == b' ' || b == b'\t' || b == b'\n' || b == b'\r'
 }
 
 impl JsonContent<'_> {
@@ -113,63 +97,57 @@ impl JsonContent<'_> {
 
     /// Trim and classify one segment, visiting it if its first byte types.
     /// Shared by member values, top-level scalars and array elements.
+    ///
+    /// Panics if `start..end` is not a valid range of `src`, like slice
+    /// indexing does.
     #[inline]
     fn process_scalar(
         src: &[u8],
-        mut start: usize,
+        start: usize,
         end: usize,
         visit: &mut impl FnMut(ScalarKind, Span),
     ) {
-        while start < end {
-            // SAFETY: `start < end <= src.len()` (span invariant).
-            let b = unsafe { *src.get_unchecked(start) };
-            if b != b' ' && b != b'\t' && b != b'\n' && b != b'\r' {
-                break;
-            }
-            start += 1;
-        }
-
-        if start < end {
-            // SAFETY: `start < end <= src.len()`.
-            if let Some(k) = classify(unsafe { *src.get_unchecked(start) }) {
-                let e = trim_end(src, start, end);
-                visit(k, Span::new(start as u32, e as u32));
-            }
+        let seg = &src[start..end];
+        let Some(lead) = seg.iter().position(|&b| !is_ws(b)) else {
+            return;
+        };
+        if let Some(k) = classify(seg[lead]) {
+            let trail = seg.iter().rposition(|&b| !is_ws(b)).map_or(lead, |p| p + 1);
+            visit(k, Span::new((start + lead) as u32, (start + trail) as u32));
         }
     }
 
     /// Split one array's content on top-level commas and call `visit` for
     /// each element whose first byte classifies. `arr` is content-only
     /// (brackets excluded), so `[arr.start, arr.end)` IS the interior.
+    ///
+    /// Panics if `arr` is not a valid range of `src`, like slice indexing
+    /// does.
     fn for_each_array_element(src: &[u8], arr: &Span, visit: &mut impl FnMut(ScalarKind, Span)) {
-        let inner_start = arr.start as usize;
-        let inner_end = arr.end as usize;
-        if inner_start >= inner_end {
+        let base = arr.start as usize;
+        let end = arr.end as usize;
+        if base >= end {
             return;
         }
+        let inner = &src[base..end];
 
-        let mut seg_start = inner_start;
+        let mut seg_start = 0;
         let mut depth: u32 = 0;
-        let mut i = inner_start;
+        let mut i = 0;
 
-        while i < inner_end {
-            // SAFETY: `i < inner_end <= src.len()` (span invariant above).
-            let b = unsafe { *src.get_unchecked(i) };
-            match b {
+        while i < inner.len() {
+            match inner[i] {
                 b'"' => {
                     i += 1;
-                    while i < inner_end {
-                        // SAFETY: `i < inner_end <= src.len()`.
-                        let sb = unsafe { *src.get_unchecked(i) };
-                        if sb == b'\\' {
-                            i += 2;
-                            continue;
+                    while i < inner.len() {
+                        match inner[i] {
+                            b'\\' => i += 2,
+                            b'"' => {
+                                i += 1;
+                                break;
+                            }
+                            _ => i += 1,
                         }
-                        if sb == b'"' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
                     }
                 }
                 b'{' | b'[' => {
@@ -177,24 +155,20 @@ impl JsonContent<'_> {
                     i += 1;
                 }
                 b'}' | b']' => {
-                    if depth > 0 {
-                        depth = depth.saturating_sub(1);
-                    }
+                    depth = depth.saturating_sub(1);
                     i += 1;
                 }
                 b',' => {
                     if depth == 0 {
-                        Self::process_scalar(src, seg_start, i, visit);
+                        Self::process_scalar(src, base + seg_start, base + i, visit);
                         seg_start = i + 1;
                     }
                     i += 1;
                 }
-                _ => {
-                    i += 1;
-                }
+                _ => i += 1,
             }
         }
-        Self::process_scalar(src, seg_start, inner_end, visit);
+        Self::process_scalar(src, base + seg_start, end, visit);
     }
 }
 
