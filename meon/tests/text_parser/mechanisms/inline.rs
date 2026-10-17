@@ -3057,3 +3057,62 @@ fn asym_refused_03_inside_open_chained_match_keeps_text() {
     assert!(st.links.is_empty());
     assert!(st.texts.iter().any(|s| s.start <= 7 && s.end == 10));
 }
+
+// ================================================================
+// overflow pairs: an open absorbed past the cap and the close it pairs with
+// ================================================================
+//
+// `run_inline_balanced_nested!` declares `{`/`}` with `parse_inside = false`
+// (an opaque frame); 03 and 04 use transparent frames.
+
+// 01. In a frame that never closes, the text between an overflow open and its
+//     close stays fallback text, like the rest of the frame's content
+#[test]
+fn overflow_01_text_between_pair_kept_in_unclosed_frame() {
+    let src = b"{a{b}c";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert!(st.objects.is_empty());
+}
+
+// 02. When the tracked frame closes, that text is rolled back with the rest
+//     of its content
+#[test]
+fn overflow_02_text_between_pair_rolled_back_when_frame_closes() {
+    let src = b"{a{b}c}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert!(st.texts.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["a{b}c"]);
+}
+
+// 03. The same for a transparent frame
+#[test]
+fn overflow_03_transparent_frame_keeps_text_between_pair() {
+    let src = b"[a[b]c";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+}
+
+// 04. Inside a chained match that closes, the text before an overflow close
+//     belongs to the link and is not emitted as fallback
+#[test]
+fn overflow_04_inside_closed_chained_match_text_stays_in_link() {
+    let src: &[u8] = b"{a[b{c}d](u)";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
+        on_trigger(b'{', b'}', b'[', b']', b'(', b')') {
+            asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+            chained: Link {
+                | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert_eq!(all(src, &st.texts), vec!["a"]);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b{c}d");
+    assert_eq!(txt(src, st.links[0].url), "u");
+}

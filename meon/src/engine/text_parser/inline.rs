@@ -102,9 +102,12 @@
 //! closes are found by the same search as opens. Each byte of an open run is
 //! its own open event: `{{` is two opens. An open of a `balanced = true`
 //! rule beyond the cap, with that rule's own frame on top, bumps a one-shot
-//! overflow counter, consumed by the next same-type close. Any other open the
-//! stack cannot take (the cap of a `balanced = false` rule, a full stack under
-//! another rule's frame) is refused and stays literal text.
+//! overflow counter, consumed by the next same-type close. That open and
+//! that close are dropped; the text between them is plain text of the frame
+//! on the stack, rolled back or kept with the rest of its content (see "Plain
+//! text and open frames"). Any other open the stack cannot take (the cap of
+//! a `balanced = false` rule, a full stack under another rule's frame) is
+//! refused and stays literal text.
 //!
 //! A close byte runs one pass per character: a `key_value` frame on top of
 //! the stack is committed first (its value ends where its container closes),
@@ -656,6 +659,16 @@ macro_rules! parse_inline {
                                 } )*
                                 if _closes_here {
                                     if asym_overflow > 0 {
+                                        // The close pairs with an open absorbed
+                                        // past the cap. Like that open, the byte
+                                        // is dropped; the text before it is
+                                        // plain text of the frame on the stack.
+                                        if text_start < _close_char_pos as usize {
+                                            if !ch_in_text && !ch_in_url {
+                                                push_il!($tx, $crate::span::Span::new(
+                                                    text_start as u32, _close_char_pos));
+                                            }
+                                        }
                                         asym_overflow -= 1;
                                     } else {
                                         let _vidx = frames[fdepth - 1].2;

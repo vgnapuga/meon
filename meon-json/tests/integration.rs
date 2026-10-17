@@ -1070,3 +1070,13 @@ fn test_81_open_past_cap_does_not_repeat_text() {
     let c = JsonParser::parse(&src);
     assert_eq!(texts(&c, &c.scalars), vec!["x", "{y"]);
 }
+
+// 82. An array opened past the nesting cap and closed again keeps its bare
+//     content in the text of the still-open outer array.
+#[test]
+fn test_82_array_past_cap_keeps_its_content() {
+    let mut src = vec![b'['; 64];
+    src.extend_from_slice(b"[a]b");
+    let c = JsonParser::parse(&src);
+    assert_eq!(texts(&c, &c.scalars), vec!["a", "b"]);
+}
