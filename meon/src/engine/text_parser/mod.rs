@@ -98,10 +98,11 @@ pub use crate::parse_block;
 ///   the open block frames (see [`crate::parse_block!`] for the encoding).
 /// - `para_start` — start of the current fallthrough run, `None` when no run
 ///   is open. Also the run's inline-scan start.
-/// - `text_start` — start of pending plain text for the single-line inline
-///   calls. Kept equal to `pos` while a run is deferred, so the flushes at the
-///   run's close points are no-ops; the run's text is emitted by its own
-///   `parse_inline!` call.
+///
+/// Plain text is emitted only by `parse_inline!`: by the run's own call for a
+/// deferred run, by the single-line call for content after a matched marker.
+/// Bytes outside both — `eol` bytes between runs, lines consumed by a `line`
+/// rule or a fence — belong to no fallback span.
 ///
 /// # Context bytes
 ///
@@ -321,17 +322,6 @@ macro_rules! parse_text {
             let mut _active_depth: usize = 0;
             let mut pos: usize = 0;
             let mut para_start: Option<u32> = None;
-            let mut text_start: u32 = 0;
-
-            macro_rules! flush_text {
-                ($end:expr) => {
-                    let _end = $end as u32;
-                    if text_start < _end {
-                        $crate::parse_text!(@dispatch state, $tx,
-                            $crate::span::Span::new(text_start, _end), $merge_il);
-                    }
-                };
-            }
 
             macro_rules! close_para {
                 () => {
@@ -366,7 +356,6 @@ macro_rules! parse_text {
 
                 if current_byte == $eol {
                     flush_para_inline!(pos);
-                    flush_text!(pos);
                     close_para!();
 
                     let is_fence = if $maxn == 1 {
@@ -404,10 +393,8 @@ macro_rules! parse_text {
                         Some((opened, cs)) => {
                             if opened {
                                 flush_para_inline!(pos);
-                                flush_text!(pos);
                                 close_para!();
                             }
-                            text_start = cs as u32;
                             pos = cs;
 
                             if cs >= current_line_end {
@@ -430,9 +417,7 @@ macro_rules! parse_text {
                     ) {
                         Some(cs) => {
                             flush_para_inline!(pos);
-                            flush_text!(pos);
                             close_para!();
-                            text_start = cs as u32;
                             pos = cs;
 
                             if cs >= current_line_end {
@@ -453,7 +438,6 @@ macro_rules! parse_text {
                         para_start = Some(pos as u32);
                     }
                     pos = next_line_start;
-                    text_start = pos as u32;
                     continue;
                 }
 
@@ -475,11 +459,9 @@ macro_rules! parse_text {
                     );
                 }
                 pos = next_line_start;
-                text_start = pos as u32;
             }
 
             flush_para_inline!(len);
-            flush_text!(len);
             if let Some(s) = para_start {
                 $crate::paste::paste! {
                     state.[<push_ $para>]($crate::span::Span::new(s, len as u32));

@@ -1030,3 +1030,11 @@ fn test_76_unindented_keys_carry_no_line_break() {
         assert_eq!(keys, vec![r#""a""#, r#""b""#]);
     }
 }
+
+// 77. Leading blank lines produce no scalars.
+#[test]
+fn test_77_leading_blank_lines_no_scalars() {
+    let c = JsonParser::parse(b"\n\n\n\n\n{}");
+    assert_eq!(c.objects.len(), 1);
+    assert!(c.scalars.is_empty());
+}

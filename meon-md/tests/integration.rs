@@ -1269,3 +1269,69 @@ fn integ_alloc_03_output_is_unaffected() {
     assert_eq!(c.links.len(), 2);
     assert_eq!(c.fenced_codes.len(), 1);
 }
+
+// ================================================================
+// plain text between blocks
+// ================================================================
+
+fn texts(src: &[u8], c: &meon_md::MarkdownContent<'_>) -> Vec<String> {
+    c.texts.iter().map(|s| txt(src, *s).to_string()).collect()
+}
+
+// 01. Blank lines between two paragraphs belong to neither text run
+#[test]
+fn integ_gap_01_blank_lines_split_text() {
+    let src = b"a\n\n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+}
+
+// 02. Trailing blank lines produce no text
+#[test]
+fn integ_gap_02_trailing_blank_lines() {
+    let src = b"x\n\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["x"]);
+}
+
+// 03. A line consumed by a line rule leaves no text behind its eol
+#[test]
+fn integ_gap_03_thematic_break_line() {
+    let src = b"---\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.thematic_breaks.len(), 1);
+    assert!(c.texts.is_empty());
+}
+
+// 04. A lone eol is not text
+#[test]
+fn integ_gap_04_lone_eol() {
+    let c = MarkdownParser::parse(b"\n");
+    assert!(c.texts.is_empty());
+}
+
+// 05. Lines inside an unclosed fence are not text
+#[test]
+fn integ_gap_05_fence_content() {
+    let src = b"```a\n\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.fenced_codes.len(), 1);
+    assert!(c.texts.is_empty());
+}
+
+// 06. A marker-only blockquote line contributes no text to the next paragraph
+#[test]
+fn integ_gap_06_empty_blockquote_line() {
+    let src = b">\n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 1);
+    assert_eq!(texts(src, &c), vec!["b"]);
+}
+
+// 07. Heading content and the following paragraph stay separate across blank lines
+#[test]
+fn integ_gap_07_heading_then_paragraph() {
+    let src = b"# h\n\n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["h", "b"]);
+}
