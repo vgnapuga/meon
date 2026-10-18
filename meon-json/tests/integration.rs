@@ -1080,3 +1080,18 @@ fn test_82_array_past_cap_keeps_its_content() {
     let c = JsonParser::parse(&src);
     assert_eq!(texts(&c, &c.scalars), vec!["a", "b"]);
 }
+
+// 83. Two empty strings do not pair up as one string: every member between
+//     them is kept.
+#[test]
+fn test_83_empty_strings_do_not_swallow_members() {
+    let c = JsonParser::parse(br#"{"a":"","b":"x","c":""}"#);
+    assert_eq!(
+        members(&c),
+        vec![
+            (r#""a""#.to_string(), r#""""#.to_string()),
+            (r#""b""#.to_string(), r#""x""#.to_string()),
+            (r#""c""#.to_string(), r#""""#.to_string()),
+        ]
+    );
+}

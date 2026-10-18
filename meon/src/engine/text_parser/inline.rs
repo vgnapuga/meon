@@ -94,6 +94,10 @@
 //!   transparent component it is a two-phase state machine that lets other
 //!   rules fire on the bytes it scans over.
 //!
+//! In the pending slot and in both forward searches a run whose count matches
+//! no declared arm is literal text: it opens nothing, and no close is searched
+//! for, so nothing after it is skipped.
+//!
 //! Every forward search skips escaped close candidates. The `memchr`-style
 //! searches (off-stack `asymmetric`, opaque `chained` components with
 //! `balanced = false`) remember a close byte that is absent from the rest of
@@ -1011,12 +1015,16 @@ macro_rules! parse_inline {
                             }
                         } else {
                             // Single pending slot: `parse_inside = true`, `balanced = false`.
+                            // A run with no arm for its count is literal text: it
+                            // neither opens, closes nor replaces the slot.
+                            if !(match count { $( $sn => true, )* _ => false }) {
+                                continue;
+                            }
                             if let Some((pb, op, oc)) = pending {
                                 if pb == $sb && oc == count {
                                     // Text flushed since the open (by another rule
                                     // or an internal eol) belongs to this pair:
-                                    // when the pair emits an element, roll that
-                                    // text back and emit the text before the
+                                    // roll it back and emit the text before the
                                     // opener once. Not when the pair crosses
                                     // another construct: a frame open at the
                                     // slot's open that has closed since owns the
@@ -1025,9 +1033,7 @@ macro_rules! parse_inline {
                                     // above it, a key starting before the opener
                                     // owns part of that text, and inside a chained
                                     // match it cannot be emitted.
-                                    let _has_arm = match count { $( $sn => true, )* _ => false };
-                                    let _intact = _has_arm
-                                        && _pending_low >= _pending_depth
+                                    let _intact = _pending_low >= _pending_depth
                                         && fdepth == _pending_depth
                                         && _pending_clean
                                         && !ch_in_text
@@ -1057,6 +1063,11 @@ macro_rules! parse_inline {
                             _pending_clean = !ch_in_text && !ch_in_url;
                         }
                     } else {
+                        // A run with no arm for its count is literal text, not
+                        // an opener: no forward search, nothing skipped.
+                        if !(match count { $( $sn => true, )* _ => false }) {
+                            continue;
+                        }
                         let cs = pos;
                         let mut _i = pos;
                         let close: Option<(usize, usize)> = if $bal {
@@ -1131,6 +1142,11 @@ macro_rules! parse_inline {
             // --- asymmetric, balanced = false and parse_inside = false: forward search ---
             $(
                 if delim == $ao {
+                    // A run with no arm for its count is literal text, not an
+                    // opener: no forward search, nothing skipped.
+                    if !(match count { $( $an => true, )* _ => false }) {
+                        continue;
+                    }
                     let cs = pos;
                     let close_pos: Option<usize> = if $abal {
                         let mut depth: usize = 1;

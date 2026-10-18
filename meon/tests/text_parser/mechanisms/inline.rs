@@ -2802,8 +2802,8 @@ fn dead_07_many_unclosed_openers_linear() {
 // nests. 01-06 pin the open/close contract and the rollback of text flushed
 // inside a pair with the `run_inline!` grammar (`*`); 07-09 add a stack rule
 // (`run_pending_with_stack!`), 10-13 check that a pair crossing another
-// construct keeps its text, 14-15 check the snapshot itself and 16 a pair
-// that emits no element.
+// construct keeps its text, 14-15 check the snapshot itself, and 16-17 a run
+// whose count has no declared arm.
 
 // 01. A different-count opener while one is pending replaces the slot:
 //     `**a *b* c**` yields the inner italic only, never the outer bold
@@ -3035,15 +3035,24 @@ fn pending_15_rollback_restores_merged_span() {
     assert_eq!(all(src, &st.texts), vec!["p\nx ", " y"]);
 }
 
-// 16. A pair whose count has no declared arm emits nothing, so nothing is
-//     rolled back: the text flushed inside it stays
+// 16. A run whose count has no declared arm is literal text: it opens no
+//     pair, and the text around it stays
 #[test]
-fn pending_16_pair_without_arm_keeps_its_text() {
+fn pending_16_run_without_arm_is_literal() {
     let src = b"~~a {b} c~~ d";
     let st = run_pending_with_stack!(src, 4);
     assert!(st.italics.is_empty());
     assert_eq!(all(src, &st.objects), vec!["b"]);
-    assert!(st.texts.iter().any(|t| (t.start, t.end) == (0, 4)));
+    assert_eq!(all(src, &st.texts), vec!["~~a ", " c~~ d"]);
+}
+
+// 17. Such a run inside a pending pair neither closes nor replaces it
+#[test]
+fn pending_17_run_without_arm_leaves_the_slot_alone() {
+    let src = b"~a ~~ b~";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a ~~ b"]);
+    assert!(st.texts.is_empty());
 }
 
 // ================================================================
@@ -3335,4 +3344,49 @@ fn overflow_04_inside_closed_chained_match_text_stays_in_link() {
     assert_eq!(st.links.len(), 1);
     assert_eq!(txt(src, st.links[0].text), "b{c}d");
     assert_eq!(txt(src, st.links[0].url), "u");
+}
+
+// ================================================================
+// runs whose count has no declared arm
+// ================================================================
+//
+// Such a run is literal text for the off-stack forward searches: no close is
+// searched for, so nothing after it is skipped.
+
+// 01. An opaque symmetric rule declaring only `1`: a doubled run is text, and
+//     the rules after it still fire
+#[test]
+fn undeclared_01_opaque_symmetric_run_is_text() {
+    let src: &[u8] = b"x ``*a*`` `c` y";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
+        on_trigger(b'`', b'*') {
+            symmetric b'`' { parse_inside = false; balanced = false; 1 => codes }
+            symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+        }
+    );
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.italics), vec!["a"]);
+    assert_eq!(all(src, &st.texts), vec!["x ``", "`` ", " y"]);
+}
+
+// 02. An off-stack asymmetric rule declaring only `1`: a doubled opener is
+//     text, and the close byte it would have reached is text too
+#[test]
+fn undeclared_02_asymmetric_run_is_text() {
+    let src = b"a <<b>> c";
+    let (st, _) = run_inline!(src);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a <<b>> c"]);
+}
+
+// 03. The same rule still matches a single opener after such a run
+#[test]
+fn undeclared_03_asymmetric_single_open_after_run() {
+    let src = b"x << 2 <u> y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.autolinks), vec!["u"]);
+    assert_eq!(all(src, &st.texts), vec!["x << 2 ", " y"]);
 }

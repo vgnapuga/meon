@@ -1387,3 +1387,27 @@ fn integ_gap_13_paragraph_lines_still_merge() {
     let c = MarkdownParser::parse(src);
     assert_eq!(texts(src, &c), vec!["a\nb\nc"]);
 }
+
+// ================================================================
+// delimiter runs the grammar does not declare
+// ================================================================
+
+// 01. `<<` is not an autolink opener: the comparison stays text
+#[test]
+fn integ_undeclared_01_double_angle_is_text() {
+    let src = b"use x << 2 when y > 0\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.autolinks.is_empty());
+    assert_eq!(texts(src, &c), vec!["use x << 2 when y > 0"]);
+}
+
+// 02. A double backtick is not a code span: it stays text, and emphasis
+//     inside it is still found
+#[test]
+fn integ_undeclared_02_double_backtick_is_text() {
+    let src = b"x ``*a*`` y\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.codes.is_empty());
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(texts(src, &c), vec!["x ``", "`` y"]);
+}
