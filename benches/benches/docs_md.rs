@@ -52,7 +52,7 @@ pub fn doc_hot() -> String {
             i, i
         ));
         doc.push_str(&format!(
-            "Another line with some [text](url) plain text and `code {}` and <link> inline.\n",
+            "Another line with some [text](url) plain text and `code {}` and <https://link> inline.\n",
             i
         ));
         doc.push('\n');
@@ -70,11 +70,11 @@ pub fn doc_heavy() -> String {
             i
         ));
         doc.push_str(&format!(
-            "> Blockquote <link> with ![text](url) **bold {}** and *italic* content here.\n",
+            "> Blockquote <https://link> with ![text](url) **bold {}** and *italic* content here.\n",
             i
         ));
         doc.push_str(&format!(
-            "> Second [text](url) blockquote <link> line with `code {}` here.\n",
+            "> Second [text](url) blockquote <https://link> line with `code {}` here.\n",
             i
         ));
         // Nested blockquote: continues the still-open `>` continuation from
@@ -99,6 +99,9 @@ pub fn doc_heavy() -> String {
             i % 9 + 1
         ));
         doc.push_str(&format!("{}. Second ordered `code` item here\n", i % 9 + 2));
+        // A blank line ends the list: without it CommonMark reads the next
+        // line as a lazy continuation of the last item's paragraph.
+        doc.push('\n');
         doc.push_str(&format!(
             "Mixed line **bold** then *italic* then `code` then ***bi*** end {}.\n",
             i
@@ -110,9 +113,9 @@ pub fn doc_heavy() -> String {
             "Nested emphasis check {}: **outer bold *inner italic* still outer bold** done.\n",
             i
         ));
-        doc.push_str("~~~python\n");
+        doc.push_str("```python\n");
         doc.push_str(&format!("def func_{}(): pass\n", i));
-        doc.push_str("~~~\n");
+        doc.push_str("```\n");
         doc.push('\n');
     }
     doc
