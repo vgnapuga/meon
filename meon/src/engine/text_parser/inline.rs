@@ -113,8 +113,9 @@
 //!
 //! Every forward search skips escaped close candidates. The `memchr`-style
 //! searches (off-stack `asymmetric`, opaque `chained` components with
-//! `balanced = false`) remember a close byte that is absent from the rest of
-//! the run, so later openers of the same kind are rejected without a rescan.
+//! `balanced = false`) remember a close byte they did not find and where
+//! they started: a later search for that byte from there on stops at that
+//! start, so later openers of the same kind are rejected without a rescan.
 //!
 //! # `asymmetric`
 //!
@@ -495,27 +496,55 @@ macro_rules! parse_inline {
             };
         }
 
-        // Close bytes known to be absent (unescaped) from the rest of the
-        // run. The forward searches below (asymmetric with `balanced = false`
-        // and `parse_inside = false`; opaque `chained` components with
-        // `balanced = false`) scan from the current position to `parse_end`.
-        // `parse_end` is fixed, and `pos` moves back only to read the rest of
-        // a delimiter run again, never before the start of a search already
-        // made, so a failed search for a byte cannot succeed later in this
-        // run: the byte is recorded and later openers of the same kind are
-        // rejected without a rescan. One bit per byte value.
+        // Close bytes known to be absent (unescaped) from part of the run.
+        // The forward searches below (asymmetric with `balanced = false` and
+        // `parse_inside = false`; opaque `chained` components with
+        // `balanced = false`) scan up to `parse_end`, which is fixed, so a
+        // failed search tells that its byte is absent from its start on.
+        // `_dead_close` holds, one bit per byte value, the bytes absent from
+        // the scan position on: their search started there, and `pos` moves
+        // back only to read the rest of a delimiter run again, never before a
+        // search already made. The url component's search starts past the
+        // text component, ahead of the scan: its byte and start go to
+        // `_dead_ahead`, and a later search stops where that one started.
         let mut _dead_close: [u64; 4] = [0u64; 4];
+        let mut _dead_ahead: (u8, usize) = (0u8, usize::MAX);
+        // End of the range a search for `$b` from `$s` still has to scan:
+        // `$s` itself when the byte is known absent from there on.
         #[allow(unused_macros)]
-        macro_rules! dead_close_has {
-            ($b:expr) => {
-                (_dead_close[($b as usize) >> 6] >> (($b as usize) & 63)) & 1 == 1
-            };
+        macro_rules! dead_limit {
+            ($b:expr, $s:expr) => {{
+                let _s: usize = $s;
+                if (_dead_close[($b as usize) >> 6] >> (($b as usize) & 63)) & 1 == 1 {
+                    _s
+                } else if _dead_ahead.0 == $b && _dead_ahead.1 < parse_end {
+                    if _dead_ahead.1 > _s { _dead_ahead.1 } else { _s }
+                } else {
+                    parse_end
+                }
+            }};
         }
+        // Record that `$b` is absent from `$s` on, keeping the earliest start
+        // known. An entry `_dead_ahead` drops for another byte joins
+        // `_dead_close` when the scan has reached its start.
         #[allow(unused_macros)]
         macro_rules! dead_close_set {
-            ($b:expr) => {
-                _dead_close[($b as usize) >> 6] |= 1u64 << (($b as usize) & 63)
-            };
+            ($b:expr, $s:expr) => {{
+                let _s: usize = $s;
+                let _w = ($b as usize) >> 6;
+                let _m = 1u64 << (($b as usize) & 63);
+                if _dead_close[_w] & _m == 0 {
+                    if _s <= pos {
+                        _dead_close[_w] |= _m;
+                    } else if _dead_ahead.0 != $b || _dead_ahead.1 > _s {
+                        if _dead_ahead.0 != $b && _dead_ahead.1 <= pos {
+                            let _ob = _dead_ahead.0 as usize;
+                            _dead_close[_ob >> 6] |= 1u64 << (_ob & 63);
+                        }
+                        _dead_ahead = ($b, _s);
+                    }
+                }
+            }};
         }
 
         loop {
@@ -933,11 +962,10 @@ macro_rules! parse_inline {
                             _i += 1;
                         }
                         _found
-                    } else if dead_close_has!($cc) {
-                        None
                     } else {
+                        let _lim = dead_limit!($cc, pos);
                         let mut _found: Option<usize> = None;
-                        while _i < parse_end {
+                        while _i < _lim {
                             if src[_i] == $cc
                                 && !$crate::parse_inline!(@is_escaped src, _i, $start, $esc)
                             {
@@ -947,7 +975,7 @@ macro_rules! parse_inline {
                             _i += 1;
                         }
                         if _found.is_none() {
-                            dead_close_set!($cc);
+                            dead_close_set!($cc, pos);
                         }
                         _found
                     };
@@ -969,11 +997,10 @@ macro_rules! parse_inline {
                                     _j += 1;
                                 }
                                 _found
-                            } else if dead_close_has!($uc) {
-                                None
                             } else {
+                                let _lim = dead_limit!($uc, next + 1);
                                 let mut _found: Option<usize> = None;
-                                while _j < parse_end {
+                                while _j < _lim {
                                     if src[_j] == $uc
                                         && !$crate::parse_inline!(@is_escaped src, _j, $start, $esc)
                                     {
@@ -983,7 +1010,7 @@ macro_rules! parse_inline {
                                     _j += 1;
                                 }
                                 if _found.is_none() {
-                                    dead_close_set!($uc);
+                                    dead_close_set!($uc, next + 1);
                                 }
                                 _found
                             };
@@ -1228,13 +1255,12 @@ macro_rules! parse_inline {
                             _i += 1;
                         }
                         found
-                    } else if dead_close_has!($ac) {
-                        None
                     } else {
+                        let _lim = dead_limit!($ac, pos);
                         let mut _i = pos;
                         let mut _found: Option<usize> = None;
                         loop {
-                            match $crate::memchr::memchr($ac, &src[_i..parse_end]) {
+                            match $crate::memchr::memchr($ac, &src[_i.._lim]) {
                                 None => break,
                                 Some(r) => {
                                     let p = _i + r;
@@ -1248,7 +1274,7 @@ macro_rules! parse_inline {
                             }
                         }
                         if _found.is_none() {
-                            dead_close_set!($ac);
+                            dead_close_set!($ac, pos);
                         }
                         _found
                     };

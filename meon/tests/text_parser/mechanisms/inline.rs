@@ -3935,3 +3935,46 @@ fn byte_runs_08_failed_match_rereads_close_run() {
     assert_eq!(txt(src, st.links[0].url), "u");
     assert_eq!(all(src, &st.texts), vec![r#"x "a""#, " y"]);
 }
+
+// ================================================================
+// close bytes a failed search did not find
+// ================================================================
+//
+// A failed forward search records its close byte, so later searches skip
+// the part of the run it covered. The url component's search starts past
+// the text component, ahead of the scan: a later search starting before it
+// still scans up to that point.
+
+// 01. A failed url search does not hide the `)` of a match nested in the
+//     failed match's text
+#[test]
+fn dead_close_01_url_search_ahead_of_scan() {
+    let src = b"[a [b](c) d](e";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+    assert_eq!(all(src, &st.texts), vec!["[a ", " d](e"]);
+}
+
+// 02. Nor the same byte for another rule's search
+#[test]
+fn dead_close_02_shared_close_byte() {
+    let src = b"[a {b) ](c";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'[', b'{') {
+            asymmetric b'{', b')' { balanced = false; parse_inside = false; 1 => autolinks }
+            chained: Link {
+                | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.autolinks), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["[a ", " ](c"]);
+}
