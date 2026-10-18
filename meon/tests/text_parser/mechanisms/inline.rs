@@ -4055,3 +4055,24 @@ fn sep_end_04_without_allow_sep() {
     assert_eq!(sep_end_pairs(src, &st), vec![("a", "")]);
     assert_eq!(all(src, &st.texts), vec!["1"]);
 }
+
+// 03. Openers before a far text close with no url component after it all
+//     fail, and their text stays
+#[test]
+fn dead_close_03_openers_before_found_close() {
+    let src = b"[a [b [c ]] d";
+    let (st, _) = run_inline!(src);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["[a [b [c ]] d"]);
+}
+
+// 04. An opener past the remembered close searches again
+#[test]
+fn dead_close_04_opener_past_found_close() {
+    let src = b"[a] [b](c)";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+    assert_eq!(all(src, &st.texts), vec!["[a] "]);
+}

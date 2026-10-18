@@ -116,6 +116,9 @@
 //! `balanced = false`) remember a close byte they did not find and where
 //! they started: a later search for that byte from there on stops at that
 //! start, so later openers of the same kind are rejected without a rescan.
+//! The text component of an opaque `chained` rule also remembers the close
+//! it found when the match fails after it, for the openers before that
+//! close.
 //!
 //! # `asymmetric`
 //!
@@ -546,6 +549,54 @@ macro_rules! parse_inline {
                 }
             }};
         }
+        // Close bytes found: `(byte, from, at)` says that the first unescaped
+        // byte at or after any position in `from..=at` is at `at`. An opaque
+        // `chained` match that fails after its text close fills it: a later
+        // opener of the same rule before that close searches for it again.
+        // Four close bytes are kept; `from == usize::MAX` marks a free slot.
+        let mut _found_close: [(u8, usize, usize); 4] = [(0u8, usize::MAX, 0usize); 4];
+        let mut _found_next: usize = 0;
+        // The close a search for `$b` from `$s` finds, when already known.
+        #[allow(unused_macros)]
+        macro_rules! found_close {
+            ($b:expr, $s:expr) => {{
+                let _s: usize = $s;
+                let mut _r: Option<usize> = None;
+                for _e in _found_close.iter() {
+                    if _e.0 == $b && _e.1 <= _s && _s <= _e.2 {
+                        _r = Some(_e.2);
+                        break;
+                    }
+                }
+                _r
+            }};
+        }
+        // Record that a search for `$b` from `$s` found it at `$p`. A byte
+        // keeps its slot; a new byte takes a free slot, or the oldest one.
+        #[allow(unused_macros)]
+        macro_rules! found_close_set {
+            ($b:expr, $s:expr, $p:expr) => {{
+                let (_s, _p): (usize, usize) = ($s, $p);
+                let mut _k = usize::MAX;
+                for (_i, _e) in _found_close.iter().enumerate() {
+                    if _e.0 == $b && _e.1 != usize::MAX {
+                        _k = _i;
+                        break;
+                    }
+                }
+                if _k == usize::MAX {
+                    _k = _found_next;
+                    _found_next = (_found_next + 1) & 3;
+                    _found_close[_k] = ($b, _s, _p);
+                } else if _found_close[_k].2 == _p {
+                    if _s < _found_close[_k].1 {
+                        _found_close[_k].1 = _s;
+                    }
+                } else {
+                    _found_close[_k] = ($b, _s, _p);
+                }
+            }};
+        }
 
         loop {
             // ---- Single unified trigger search -------------------------- //
@@ -964,6 +1015,8 @@ macro_rules! parse_inline {
                             _i += 1;
                         }
                         _found
+                    } else if let Some(_at) = found_close!($cc, pos) {
+                        Some(_at)
                     } else {
                         let _lim = dead_limit!($cc, pos);
                         let mut _found: Option<usize> = None;
@@ -1033,6 +1086,11 @@ macro_rules! parse_inline {
                                 text_start = pos;
                                 continue;
                             }
+                        }
+                        // The match failed after its text close: an opener of
+                        // this rule before that close finds the same one.
+                        if !$tbal {
+                            found_close_set!($cc, pos, ct_end);
                         }
                     }
                     continue;
