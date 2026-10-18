@@ -3390,3 +3390,43 @@ fn undeclared_03_asymmetric_single_open_after_run() {
     assert_eq!(all(src, &st.autolinks), vec!["u"]);
     assert_eq!(all(src, &st.texts), vec!["x << 2 ", " y"]);
 }
+
+// ================================================================
+// end-of-run drain of symmetric stack frames
+// ================================================================
+//
+// `run_inline_stack!` declares `*` on the stack. A frame still open at the
+// end of the run is discarded; elements of the same field that closed above
+// it stay.
+
+// 01. An unclosed italic around a bold that holds a closed italic: the inner
+//     italic stays
+#[test]
+fn drain_01_closed_inner_italic_survives_unclosed_outer() {
+    let src = b"*a **b *c* d** e";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["c"]);
+    assert_eq!(all(src, &st.bolds), vec!["b *c* d"]);
+    assert_eq!(all(src, &st.texts), vec!["a ", " e"]);
+}
+
+// 02. The same with the counts swapped
+#[test]
+fn drain_02_closed_inner_bold_survives_unclosed_outer() {
+    let src = b"**a *b **c** d* e";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.bolds), vec!["c"]);
+    assert_eq!(all(src, &st.italics), vec!["b **c** d"]);
+    assert_eq!(all(src, &st.texts), vec!["a ", " e"]);
+}
+
+// 03. Several unclosed frames of the same field drain without touching the
+//     element that closed between them
+#[test]
+fn drain_03_several_unclosed_frames() {
+    let src = b"*a **b *c* d";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["c"]);
+    assert!(st.bolds.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a ", "b ", " d"]);
+}

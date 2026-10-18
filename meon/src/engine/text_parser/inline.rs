@@ -129,8 +129,10 @@
 //!
 //! With `parse_inside = true, balanced = true`, a run whose `(byte, count)`
 //! matches the top frame closes it; otherwise, with room, it opens a new
-//! frame. An identical `(byte, count)` never self-nests, so `**a **b** c**`
-//! is two adjacent runs. The run length selects the field arm.
+//! frame. An identical `(byte, count)` never nests directly in itself, so
+//! `**a **b** c**` is two adjacent runs, but it opens again above a frame of
+//! another count: in `*a **b *c* d** e` the second `*` opens a second italic
+//! frame. The run length selects the field arm.
 //!
 //! # Internal `eol`
 //!
@@ -1275,10 +1277,10 @@ macro_rules! parse_inline {
         // byte.                                                                //
         //  - key_value  : push the pair complete, value ending at the run's    //
         //    end, and move the text cursor past it.                            //
-        //  - asymmetric : discard via `Vec::remove(vidx)`; a closed inner       //
-        //    entry may sit above a still-open outer one.                        //
-        //  - symmetric  : discard via `truncate(vidx)`; the placeholder is       //
-        //    always the field's last entry.                                     //
+        //  - asymmetric and symmetric : discard via `Vec::remove(vidx)`; a     //
+        //    closed inner entry may sit above a still-open outer one in the    //
+        //    same field. Frames go top-down, so a removal never shifts the     //
+        //    placeholder of a frame still to be drained.                       //
         // The outermost discarded frame's held text stays in the fallback      //
         // field (see `held_base`).                                             //
         // ------------------------------------------------------------------ //
@@ -1320,7 +1322,7 @@ macro_rules! parse_inline {
                     $(
                         if $bal && $pi && _fb == $sb {
                             match _fc {
-                                $( $sn => { $state.$sf.truncate(_fv as usize); } )*
+                                $( $sn => { $state.$sf.remove(_fv as usize); } )*
                                 _ => {}
                             }
                         }

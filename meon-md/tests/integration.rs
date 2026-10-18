@@ -1411,3 +1411,29 @@ fn integ_undeclared_02_double_backtick_is_text() {
     assert_eq!(c.italics.len(), 1);
     assert_eq!(texts(src, &c), vec!["x ``", "`` y"]);
 }
+
+// ================================================================
+// emphasis left open at the end of a paragraph
+// ================================================================
+
+// 01. An unclosed italic does not take the italic closed inside the bold
+#[test]
+fn integ_unclosed_01_inner_italic_kept() {
+    let src = b"*a **b *c* d** e\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(txt(src, c.italics[0]), "c");
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "b *c* d");
+}
+
+// 02. An unclosed bold does not take the bold closed inside the italic
+#[test]
+fn integ_unclosed_02_inner_bold_kept() {
+    let src = b"**a *b **c** d* e\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "c");
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(txt(src, c.italics[0]), "b **c** d");
+}
