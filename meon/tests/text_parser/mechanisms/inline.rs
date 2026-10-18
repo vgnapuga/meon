@@ -2946,13 +2946,15 @@ fn pending_10_frame_closed_inside_pair_keeps_its_text() {
 }
 
 // 11. A frame opened inside the pair is still open at its close: the pair
-//     crosses it, and the frame's later close finds its snapshot intact
+//     rolls its text back, and the frame's later close keeps only the text
+//     after the pair
 #[test]
 fn pending_11_frame_open_at_close_keeps_its_snapshot() {
     let src = b"~a {b~ {c} d}";
     let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a {b"]);
     assert_eq!(all(src, &st.objects), vec!["b~ {c} d", "c"]);
-    assert_eq!(all(src, &st.texts), vec!["~a "]);
+    assert!(st.texts.is_empty());
 }
 
 // 12. A key that starts before the opener owns that text: it is not emitted
@@ -2987,25 +2989,29 @@ macro_rules! run_pending_with_chained {
     }};
 }
 
-// 13. A pair crossing a chained match keeps the text before its opener, and
-//     never emits text from inside the match
+// 13. A pair crossing a chained match: the text before the pair's opener is
+//     emitted once, and no text lands inside the pair or the match
 #[test]
 fn pending_13_pair_crossing_chained_match() {
     // Closed inside the text phase.
     let src = b"x *a [b* c](u)";
     let st = run_pending_with_chained!(src, true, false);
     assert_eq!(st.links.len(), 1);
-    assert_eq!(all(src, &st.texts), vec!["x *a "]);
+    assert_eq!(all(src, &st.italics), vec!["a [b"]);
+    assert_eq!(all(src, &st.texts), vec!["x "]);
     // Closed inside the url phase.
     let src = b"x *a [b](c* d)";
     let st = run_pending_with_chained!(src, false, true);
     assert_eq!(st.links.len(), 1);
-    assert_eq!(all(src, &st.texts), vec!["x *a "]);
+    assert_eq!(all(src, &st.italics), vec!["a [b](c"]);
+    assert_eq!(all(src, &st.texts), vec!["x "]);
     // Opened inside the text phase, closed after the match.
     let src = b"[x *a](u) b*";
     let st = run_pending_with_chained!(src, true, false);
     let link_text: Vec<meon::span::Span> = st.links.iter().map(|l| l.text).collect();
+    assert_eq!(all(src, &st.italics), vec!["a](u) b"]);
     assert_text_clear_of(&st.texts, &link_text);
+    assert!(st.texts.is_empty());
 }
 
 // 14. The rollback keeps the text flushed before the slot opened
@@ -3053,6 +3059,28 @@ fn pending_17_run_without_arm_leaves_the_slot_alone() {
     let st = run_pending_with_stack!(src, 4);
     assert_eq!(all(src, &st.italics), vec!["a ~~ b"]);
     assert!(st.texts.is_empty());
+}
+
+// 18. A frame opened inside the pair and closed after it: the text before
+//     the opener is emitted, the pair's own text is not
+#[test]
+fn pending_18_frame_opened_inside_closed_after() {
+    let src = b"x ~a {b~ c} d";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a {b"]);
+    assert_eq!(all(src, &st.objects), vec!["b~ c"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d"]);
+}
+
+// 19. A frame open at the slot's open and closed inside the pair, with text
+//     flushed inside the pair after that close: the pair rolls it back
+#[test]
+fn pending_19_frame_closed_inside_then_text() {
+    let src = b"{a ~b} {c} d~ e";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.objects), vec!["a ~b", "c"]);
+    assert_eq!(all(src, &st.italics), vec!["b} {c} d"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
 }
 
 // ================================================================
@@ -3721,5 +3749,53 @@ fn chained_held_11_crossing_frame_lowers_snapshot() {
     assert_eq!(txt(src, st.links[0].text), "a} b ~c~ d");
     assert_eq!(all(src, &st.objects), vec!["x ~y~ [a"]);
     assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
+}
+
+// 12. A pair opened before a match and closed inside it: the match's text
+//     before its opener is the pair's
+#[test]
+fn chained_held_12_pending_pair_closed_inside_match() {
+    let src = b"x *a ~b~ c [d* e](u) f";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "d* e");
+    assert_eq!(all(src, &st.italics), vec!["a ~b~ c [d"]);
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " f"]);
+}
+
+// 13. A pair opened inside a match that completes before the pair closes:
+//     the text before the pair's opener is the match's
+#[test]
+fn chained_held_13_pending_pair_opened_inside_match() {
+    let src = b"[x ~y~ *a](u) b ~c~ d* e";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "x ~y~ *a");
+    assert_eq!(all(src, &st.italics), vec!["a](u) b ~c~ d"]);
+    assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
+}
+
+// 14. A pair whose ends lie in the two components of one match
+#[test]
+fn chained_held_14_pending_pair_across_components() {
+    let src = b"[a *b](c* d) e";
+    let st = run_chained_held!(src, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(all(src, &st.italics), vec!["b](c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
+}
+
+// 15. A frame open at the pair's open, with text flushed before the pair,
+//     closes inside it: the pair rolls back to the frame's snapshot
+#[test]
+fn chained_held_15_pending_pair_follows_crossing_frame() {
+    let src = b"{x ~y~ a *b} ~c~ d* e";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.objects), vec!["x ~y~ a *b"]);
+    assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.italics), vec!["b} ~c~ d"]);
     assert_eq!(all(src, &st.texts), vec![" e"]);
 }
