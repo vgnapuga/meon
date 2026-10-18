@@ -3978,3 +3978,80 @@ fn dead_close_02_shared_close_byte() {
     assert_eq!(all(src, &st.autolinks), vec!["b"]);
     assert_eq!(all(src, &st.texts), vec!["[a ", " ](c"]);
 }
+
+// ================================================================
+// key_value with `end` equal to `sep`
+// ================================================================
+//
+// `run_kv_sep_end!` declares `:` as `eq` and the `sep` byte ` ` as `end`;
+// `$allow` sets `allow_sep`. The `sep` bytes skipped before a value do not
+// close it.
+
+macro_rules! run_kv_sep_end {
+    ($src:expr, $allow:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b':', b'{', b'}') {
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+                key_value: KeyValue {
+                    eq = b':'; allow_sep = $allow; end = b' ';
+                    key => key, value => value,
+                } => key_values
+            }
+        );
+        st
+    }};
+}
+
+fn sep_end_pairs<'a>(src: &'a [u8], st: &ParseState) -> Vec<(&'a str, &'a str)> {
+    st.key_values
+        .iter()
+        .map(|kv| {
+            assert!(
+                kv.value.start <= kv.value.end,
+                "inverted value {:?}",
+                kv.value
+            );
+            (txt(src, kv.key), txt(src, kv.value))
+        })
+        .collect()
+}
+
+// 01. The space after `eq` is skipped, not taken as the end of the value
+#[test]
+fn sep_end_01_space_after_eq_is_skipped() {
+    let src = b"a: 1";
+    let st = run_kv_sep_end!(src, true);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "1")]);
+    assert!(st.texts.is_empty());
+}
+
+// 02. A space after the value ends it
+#[test]
+fn sep_end_02_space_after_value_ends_it() {
+    let src = b"a: 1 b:  2";
+    let st = run_kv_sep_end!(src, true);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "1"), ("b", "2")]);
+    assert!(st.texts.is_empty());
+}
+
+// 03. The same inside a container
+#[test]
+fn sep_end_03_inside_container() {
+    let src = b"{a: 1}";
+    let st = run_kv_sep_end!(src, true);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "1")]);
+    assert_eq!(all(src, &st.objects), vec!["a: 1"]);
+}
+
+// 04. Without `allow_sep` the space right after `eq` ends an empty value
+#[test]
+fn sep_end_04_without_allow_sep() {
+    let src = b"a: 1";
+    let st = run_kv_sep_end!(src, false);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "")]);
+    assert_eq!(all(src, &st.texts), vec!["1"]);
+}

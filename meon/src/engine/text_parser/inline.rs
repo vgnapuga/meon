@@ -167,16 +167,16 @@
 //! before the `sep` run trimmed when `allow_sep`, that span with its
 //! delimiters is the key, `sep` bytes inside it included. Otherwise the key
 //! is the word before `eq`: the scan stops at `sep`, `tab`, `eol` and at the
-//! end of an earlier opaque span. The value starts after
-//! `eq` (skipping `sep` when `allow_sep`) and is tracked by a stack frame; a
-//! second `eq` while a `key_value` frame is on top is value content, and so
-//! is the rest of an `eq` run. With the stack full, `eq` opens no frame and
-//! the key, `eq` and value stay text. The pair is pushed when the value
-//! closes: at `end`, whose run keeps its other bytes as text and starts the
-//! next key segment after itself, when the enclosing container closes, or
-//! at the end of the run. When the value is a container, the value span
-//! includes the brackets and the container's own span lies strictly inside
-//! it.
+//! end of an earlier opaque span. The value starts after `eq` (skipping
+//! `sep` when `allow_sep`) and is tracked by a stack frame; a second `eq`
+//! while a `key_value` frame is on top is value content, and so is the rest
+//! of an `eq` run. With the stack full, `eq` opens no frame and the key, `eq`
+//! and value stay text. The pair is pushed when the value closes: at `end`,
+//! whose run keeps its other bytes as text and starts the next key segment
+//! after itself, when the enclosing container closes, or at the end of the
+//! run. An `end` byte the value start skipped as `sep` closes nothing. When
+//! the value is a container, the value span includes the brackets and the
+//! container's own span lies strictly inside it.
 //!
 //! # Limitations
 //!
@@ -642,13 +642,15 @@ macro_rules! parse_inline {
             // fires only with a kv frame on top of the stack. The value    //
             // ends before the separator. With no kv frame on top the byte   //
             // is left alone (a bare array's `,` between elements is         //
-            // content).                                                      //
+            // content). When `end` is also `sep`, the bytes skipped before  //
+            // the value starts are not a terminator.                        //
             // -----------------------------------------------------------------//
             let mut _kv_hit = false;
             $(
                 if delim == $kv_end
                     && fdepth > 0
                     && frames[fdepth - 1].0 == $kv_end
+                    && delim_start >= kv_pending[fdepth - 1].2
                 {
                     let (_ks, _ke, _vs) = kv_pending[fdepth - 1];
                     $crate::paste::paste! {
