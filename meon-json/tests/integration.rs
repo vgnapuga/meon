@@ -1095,3 +1095,14 @@ fn test_83_empty_strings_do_not_swallow_members() {
         ]
     );
 }
+
+// 84. A member past the nesting cap keeps its key and `:` in the bare text of
+//     the still-open container.
+#[test]
+fn test_84_member_past_cap_keeps_its_key() {
+    let mut src = vec![b'{'; 64];
+    src.extend_from_slice(b"a b:1");
+    let c = JsonParser::parse(&src);
+    assert!(c.members.is_empty());
+    assert_eq!(texts(&c, &c.scalars), vec!["a b:1"]);
+}

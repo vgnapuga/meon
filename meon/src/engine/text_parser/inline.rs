@@ -154,9 +154,10 @@
 //! Otherwise the key is the word before `eq`: the scan stops at `sep`, `tab`,
 //! `eol` and at the end of an earlier opaque span. The value starts after
 //! `eq` (skipping `sep` when `allow_sep`) and is tracked by a stack frame; a
-//! second `eq` while a `key_value` frame is on top is value content. The
-//! pair is pushed when the value closes: at `end`, when the enclosing
-//! container closes, or at the end of the run. When the value is a
+//! second `eq` while a `key_value` frame is on top is value content. With
+//! the stack full, `eq` opens no frame and the key, `eq` and value stay
+//! text. The pair is pushed when the value closes: at `end`, when the
+//! enclosing container closes, or at the end of the run. When the value is a
 //! container, the value span includes the brackets and the container's own
 //! span lies strictly inside it.
 //!
@@ -1213,7 +1214,9 @@ macro_rules! parse_inline {
                     // Only open a new value frame if the top of stack is not
                     // already a kv frame. If it is, this `eq` is content of
                     // the still-open value (flat, separator-less multi-eq).
-                    if !_top_is_kv {
+                    // With the stack full no frame can track the pair: the
+                    // key, `eq` and value stay in the current text.
+                    if !_top_is_kv && fdepth < $maxn {
                         // Key: back-scan from `eq`, clamped to _kv_seg_start.
                         let mut key_end = delim_start as usize;
                         if $kv_allow {
@@ -1257,14 +1260,10 @@ macro_rules! parse_inline {
                                 push_il!($tx, $crate::span::Span::new(text_start as u32, ks as u32));
                             };
                         }
-                        if fdepth < $maxn {
-                            kv_pending[fdepth] = (ks as u32, key_end as u32, val_start as u32);
-                            frames[fdepth] = ($kv_end, 0u8, 0u32);
-                            held_base[fdepth] = hold_base!();
-                            fdepth += 1;
-                        }
-                        // else: depth cap reached — pair untracked, `eq`
-                        // absorbed.
+                        kv_pending[fdepth] = (ks as u32, key_end as u32, val_start as u32);
+                        frames[fdepth] = ($kv_end, 0u8, 0u32);
+                        held_base[fdepth] = hold_base!();
+                        fdepth += 1;
                         text_start = pos;
                     }
                     continue;

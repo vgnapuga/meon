@@ -3430,3 +3430,51 @@ fn drain_03_several_unclosed_frames() {
     assert!(st.bolds.is_empty());
     assert_eq!(all(src, &st.texts), vec!["a ", "b ", " d"]);
 }
+
+// ================================================================
+// key_value `eq` with the stack full
+// ================================================================
+//
+// `run_inline_kv_json!` declares `:` as `eq`, `,` as `end` and `{`/`}` as an
+// object with `parse_inside = true`. At `max_nest = 1` an open object fills
+// the stack, so no pair inside it can be tracked.
+
+// 01. In an object that never closes, the untracked pair stays text with its
+//     key and `eq`
+#[test]
+fn kv_cap_01_word_key_kept_in_unclosed_object() {
+    let src = b"{a b:1";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert!(st.key_values.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a b:1"]);
+}
+
+// 02. A quoted key stays its own span; `eq` and the value stay text
+#[test]
+fn kv_cap_02_quoted_key_kept_in_unclosed_object() {
+    let src = br#"{"k":1"#;
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert!(st.key_values.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["k"]);
+    assert_eq!(all(src, &st.texts), vec![":1"]);
+}
+
+// 03. An `end` byte after an untracked pair is text as well
+#[test]
+fn kv_cap_03_end_after_untracked_pair_is_text() {
+    let src = b"{a:1,b:2";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert!(st.key_values.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a:1,b:2"]);
+}
+
+// 04. With room for one more frame the same pair is tracked
+#[test]
+fn kv_cap_04_pair_tracked_below_cap() {
+    let src = b"{a b:1";
+    let (st, _) = run_inline_kv_json!(src, 2);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "b");
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+    assert_eq!(all(src, &st.texts), vec!["a "]);
+}
