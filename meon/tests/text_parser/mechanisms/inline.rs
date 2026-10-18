@@ -3478,3 +3478,71 @@ fn kv_cap_04_pair_tracked_below_cap() {
     assert_eq!(txt(src, st.key_values[0].value), "1");
     assert_eq!(all(src, &st.texts), vec!["a "]);
 }
+
+// ================================================================
+// runs of the chained open byte
+// ================================================================
+//
+// Only the last byte of the run opens the match; the bytes before it are
+// text, and the prefix is the byte before that last byte.
+
+// 01. Opaque components: the first `[` of `[[` stays text
+#[test]
+fn chained_run_01_opaque_double_open() {
+    let src = b"see [[a](u) here";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.texts), vec!["see [", " here"]);
+}
+
+// 02. A longer run keeps all bytes but the last
+#[test]
+fn chained_run_02_opaque_triple_open() {
+    let src = b"[[[a](u)";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(all(src, &st.texts), vec!["[["]);
+}
+
+// 03. A prefix before the run is not the prefix of the match
+#[test]
+fn chained_run_03_opaque_prefix_before_run() {
+    let src = b"![[a](u)";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert!(!st.links[0].is_image);
+    assert_eq!(all(src, &st.texts), vec!["!["]);
+}
+
+// 04. A transparent text component: the same split
+#[test]
+fn chained_run_04_transparent_double_open() {
+    let src = b"see [[a](u) here";
+    let st = run_pending_with_chained!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(all(src, &st.texts), vec!["see [", " here"]);
+}
+
+// 05. A transparent text component with a prefix before the run
+#[test]
+fn chained_run_05_transparent_prefix_before_run() {
+    let src = b"![[a](u)";
+    let st = run_pending_with_chained!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert!(!st.links[0].is_image);
+    assert_eq!(all(src, &st.texts), vec!["!["]);
+}
+
+// 06. With `balanced = true` the bytes before the last one are text too
+#[test]
+fn chained_run_06_balanced_text_component() {
+    let src = b"[[a](u)";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(all(src, &st.texts), vec!["["]);
+}

@@ -1437,3 +1437,27 @@ fn integ_unclosed_02_inner_bold_kept() {
     assert_eq!(c.italics.len(), 1);
     assert_eq!(txt(src, c.italics[0]), "b **c** d");
 }
+
+// ================================================================
+// a run of `[` before a link
+// ================================================================
+
+// 01. The `[` before the link's own opener stays text
+#[test]
+fn integ_bracket_run_01_extra_bracket_is_text() {
+    let src = b"see [[a](u) here\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert_eq!(txt(src, c.links[0].text), "a");
+    assert_eq!(texts(src, &c), vec!["see [", " here"]);
+}
+
+// 02. `![[a](u)` is a link after the text `![`, not an image
+#[test]
+fn integ_bracket_run_02_bang_before_run_is_text() {
+    let src = b"![[a](u)\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(texts(src, &c), vec!["!["]);
+}

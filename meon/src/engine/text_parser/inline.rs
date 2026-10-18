@@ -92,7 +92,11 @@
 //! - `chained` — two sequential phases (text, then url), one slot each. With
 //!   both components opaque it is a self-contained forward search; with a
 //!   transparent component it is a two-phase state machine that lets other
-//!   rules fire on the bytes it scans over.
+//!   rules fire on the bytes it scans over. Of a run of the open byte only
+//!   the last byte opens the match, and the prefix is the byte before it:
+//!   in `![[a](u)` the text is `![` and the match is `[a](u)`, not an image.
+//!   With `balanced = true` the bytes before it are text too, so they never
+//!   nest in the match.
 //!
 //! In the pending slot and in both forward searches a run whose count matches
 //! no declared arm is literal text: it opens nothing, and no close is searched
@@ -746,19 +750,18 @@ macro_rules! parse_inline {
                 if ($tpi || $upi) && !ch_in_text && !ch_in_url
                     && !_top_opaque_active && delim == $co
                 {
-                    let _is_prefix = delim_start > 0
-                        && src[delim_start as usize - 1] == $cp
+                    // The last byte of the run opens the match; the bytes
+                    // before it are text.
+                    let _open = pos - 1;
+                    let _is_prefix = _open > 0
+                        && src[_open - 1] == $cp
                         && {
                             let mut _bs: u32 = 0;
-                            let mut _i = delim_start as usize - 1;
+                            let mut _i = _open - 1;
                             while _i > $start && src[_i - 1] == $esc { _bs += 1; _i -= 1; }
                             _bs % 2 == 0
                         };
-                    let _real_start = if _is_prefix {
-                        delim_start as usize - 1
-                    } else {
-                        delim_start as usize
-                    };
+                    let _real_start = if _is_prefix { _open - 1 } else { _open };
                     if text_start < _real_start {
                         if !ch_in_text && !ch_in_url {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, _real_start as u32));
@@ -841,11 +844,13 @@ macro_rules! parse_inline {
             // --- chained, both components opaque: self-contained forward search ---
             $(
                 if delim == $co {
-                    let is_prefix = delim_start > 0
-                        && src[delim_start as usize - 1] == $cp
+                    // As above: the last byte of the run opens the match.
+                    let _open = pos - 1;
+                    let is_prefix = _open > 0
+                        && src[_open - 1] == $cp
                         && {
                             let mut _bs: u32 = 0;
-                            let mut _i = delim_start as usize - 1;
+                            let mut _i = _open - 1;
                             while _i > $start && src[_i - 1] == $esc { _bs += 1; _i -= 1; }
                             _bs % 2 == 0
                         };
@@ -919,11 +924,7 @@ macro_rules! parse_inline {
                                 _found
                             };
                             if let Some(cu_end) = close_url {
-                                let real_start = if is_prefix {
-                                    delim_start as usize - 1
-                                } else {
-                                    delim_start as usize
-                                };
+                                let real_start = if is_prefix { _open - 1 } else { _open };
                                 if text_start < real_start {
                                     if !ch_in_text && !ch_in_url {
                                         push_il!($tx, $crate::span::Span::new(
