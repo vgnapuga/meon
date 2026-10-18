@@ -403,7 +403,7 @@ pub fn report(label: &str, bytes: &[u8]) {
         .zip(&checks)
         .map(|((name, n), check)| {
             let mark = match check {
-                Some(None) => "✓",
+                Some(None) => "√",
                 Some(Some(_)) => "✗",
                 None => " ",
             };

@@ -2799,8 +2799,11 @@ fn dead_07_many_unclosed_openers_linear() {
 // ================================================================
 //
 // The off-stack pending slot tracks one symmetric opener at a time and never
-// nests. These pin that contract directly, since the slot's own code path is
-// the one the `run_inline!` grammar exercises for `*`.
+// nests. 01-06 pin the open/close contract and the rollback of text flushed
+// inside a pair with the `run_inline!` grammar (`*`); 07-09 add a stack rule
+// (`run_pending_with_stack!`), 10-13 check that a pair crossing another
+// construct keeps its text, 14-15 check the snapshot itself and 16 a pair
+// that emits no element.
 
 // 01. A different-count opener while one is pending replaces the slot:
 //     `**a *b* c**` yields the inner italic only, never the outer bold
@@ -2824,6 +2827,223 @@ fn pending_02_same_count_closes_then_reopens() {
     assert_eq!(st.italics.len(), 2);
     assert_eq!(txt(src, st.italics[0]), "a");
     assert_eq!(txt(src, st.italics[1]), "b");
+}
+
+// 03. Text flushed by a code span inside the pair belongs to the pair: the
+//     opener and the content are not also emitted as fallback text
+#[test]
+fn pending_03_inner_code_span_text_is_not_fallback() {
+    let src = b"x *a `c` b* y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a `c` b"]);
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 04. The same for the text flushed at an internal eol of a multi-line run
+#[test]
+fn pending_04_internal_eol_text_is_not_fallback() {
+    let src = b"x *a\nb* y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 05. A hard break inside the pair keeps its own span
+#[test]
+fn pending_05_hard_break_inside_pair_is_kept() {
+    let src = b"*a  \nb*";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a  \nb"]);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!((st.hard_breaks[0].start, st.hard_breaks[0].end), (2, 2));
+    assert!(st.texts.is_empty());
+}
+
+// 06. A pair that never closes leaves its opener and content as text, also
+//     when another rule fired inside it
+#[test]
+fn pending_06_unclosed_pair_keeps_its_text() {
+    let src = b"x *a `c` b";
+    let (st, _) = run_inline!(src);
+    assert!(st.italics.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x *a ", " b"]);
+}
+
+macro_rules! run_pending_with_stack {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
+            on_trigger(b'~', b'{', b'}') {
+                symmetric b'~' { parse_inside = true; balanced = false; 1 => italics }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+            }
+        );
+        st
+    }};
+}
+
+// 07. A stack frame that opens and closes inside the pair: the text flushed at
+//     its open belongs to the pair
+#[test]
+fn pending_07_frame_inside_pair_text_is_not_fallback() {
+    let src = b"~a {b} c~";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a {b} c"]);
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+    assert!(st.texts.is_empty());
+}
+
+// 08. A pair opened after an open absorbed past the cap and closed after the
+//     close it pairs with: the text before the pair stays, and no byte lands
+//     both in the fallback text and in the pair
+#[test]
+fn pending_08_pair_across_overflow_close_does_not_overlap() {
+    let src = b"{a{~b}c~d";
+    let st = run_pending_with_stack!(src, 1);
+    assert_eq!(all(src, &st.italics), vec!["b}c"]);
+    assert_eq!(all(src, &st.texts), vec!["a", "d"]);
+}
+
+/// Fails when a span is inverted, or when a fallback span overlaps one of
+/// `spans` - elements the checked pair does not own.
+fn assert_text_clear_of(texts: &[meon::span::Span], spans: &[meon::span::Span]) {
+    for t in texts {
+        assert!(t.start <= t.end, "inverted text span {t:?}");
+        for e in spans {
+            assert!(t.end <= e.start || e.end <= t.start, "{t:?} overlaps {e:?}");
+        }
+    }
+}
+
+// 09. A frame that opens and closes inside the pair, nested in a frame that
+//     encloses the whole pair: the rollback leaves the outer frame's
+//     snapshot intact
+#[test]
+fn pending_09_pair_inside_frame_with_inner_frame() {
+    let src = b"{x ~a {b} c~ y}";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a {b} c"]);
+    assert_eq!(all(src, &st.objects), vec!["x ~a {b} c~ y", "b"]);
+    assert!(st.texts.is_empty());
+}
+
+// 10. A frame open at the slot's open closes before the pair does: the pair
+//     crosses it, and the frame's text is not emitted again as fallback
+#[test]
+fn pending_10_frame_closed_inside_pair_keeps_its_text() {
+    let src = b"{a~b}{c~d";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.objects), vec!["a~b"]);
+    assert_text_clear_of(&st.texts, &st.objects);
+    let src = b"{~a} {b~ {c} d}";
+    let st = run_pending_with_stack!(src, 4);
+    assert_text_clear_of(&st.texts, &st.objects);
+}
+
+// 11. A frame opened inside the pair is still open at its close: the pair
+//     crosses it, and the frame's later close finds its snapshot intact
+#[test]
+fn pending_11_frame_open_at_close_keeps_its_snapshot() {
+    let src = b"~a {b~ {c} d}";
+    let st = run_pending_with_stack!(src, 4);
+    assert_eq!(all(src, &st.objects), vec!["b~ {c} d", "c"]);
+    assert_eq!(all(src, &st.texts), vec!["~a "]);
+}
+
+// 12. A key that starts before the opener owns that text: it is not emitted
+//     again as fallback
+#[test]
+fn pending_12_key_before_opener_is_not_fallback() {
+    let src = b"x k*=v\nb* y";
+    let (st, _) = run_inline!(src);
+    let keys: Vec<meon::span::Span> = st.key_values.iter().map(|kv| kv.key).collect();
+    assert_eq!(all(src, &keys), vec!["k*"]);
+    assert_text_clear_of(&st.texts, &keys);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+macro_rules! run_pending_with_chained {
+    ($src:expr, $tpi:tt, $upi:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'*', b'[', b']', b'(', b')') {
+                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                chained: Link {
+                    | b'[', b']' | { parse_inside = $tpi; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+            }
+        );
+        st
+    }};
+}
+
+// 13. A pair crossing a chained match keeps the text before its opener, and
+//     never emits text from inside the match
+#[test]
+fn pending_13_pair_crossing_chained_match() {
+    // Closed inside the text phase.
+    let src = b"x *a [b* c](u)";
+    let st = run_pending_with_chained!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(all(src, &st.texts), vec!["x *a "]);
+    // Closed inside the url phase.
+    let src = b"x *a [b](c* d)";
+    let st = run_pending_with_chained!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(all(src, &st.texts), vec!["x *a "]);
+    // Opened inside the text phase, closed after the match.
+    let src = b"[x *a](u) b*";
+    let st = run_pending_with_chained!(src, true, false);
+    let link_text: Vec<meon::span::Span> = st.links.iter().map(|l| l.text).collect();
+    assert_text_clear_of(&st.texts, &link_text);
+}
+
+// 14. The rollback keeps the text flushed before the slot opened
+#[test]
+fn pending_14_rollback_keeps_earlier_text() {
+    let src = b"p `c` x *a `c` b* y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a `c` b"]);
+    assert_eq!(all(src, &st.texts), vec!["p ", " x ", " y"]);
+}
+
+// 15. With merge_simple the rollback also restores the end of a span the
+//     pair's text was merged into
+#[test]
+fn pending_15_rollback_restores_merged_span() {
+    let src: &[u8] = b"p\nx *a\nb* y";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, true, b'\\', b' ', b'\t', b'\n', 1, true;
+        hard_break(b'\\', b' ', 2) => hard_breaks;
+        on_trigger(b'*') {
+            symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+        }
+    );
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["p\nx ", " y"]);
+}
+
+// 16. A pair whose count has no declared arm emits nothing, so nothing is
+//     rolled back: the text flushed inside it stays
+#[test]
+fn pending_16_pair_without_arm_keeps_its_text() {
+    let src = b"~~a {b} c~~ d";
+    let st = run_pending_with_stack!(src, 4);
+    assert!(st.italics.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+    assert!(st.texts.iter().any(|t| (t.start, t.end) == (0, 4)));
 }
 
 // ================================================================

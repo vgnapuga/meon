@@ -76,7 +76,13 @@
 //!
 //! - `symmetric` with `parse_inside = true, balanced = false` — a single
 //!   `pending` slot: the first run opens, the next run of the same byte and
-//!   count closes; a different-count run replaces the slot.
+//!   count closes; a different-count run replaces the slot. Text flushed
+//!   between the open and the close, by another rule or an internal `eol`, is
+//!   rolled back when the pair emits its element, as for a frame (see "Plain
+//!   text and open frames"). A pair that crosses another construct keeps that
+//!   text: a frame open at the slot's open and closed before its close, a
+//!   frame opened inside and still open at the close, a `key_value` key that
+//!   starts before the opener, a `chained` match in progress at either end.
 //! - `symmetric` with `parse_inside = false` — a forward search for the
 //!   closing run; the content is opaque to every other rule. With
 //!   `balanced = true` a doubled run is skipped as literal content.
@@ -394,6 +400,29 @@ macro_rules! parse_inline {
         // Single pending slot for `parse_inside = true`, `balanced = false`:
         // `(byte, open position, count)`.
         let mut pending: Option<(u8, u32, u32)> = None;
+        // Taken when the slot opens: the fallback snapshot (`hold_base!`), the
+        // text cursor and the stack depth. `_pending_low` is the lowest depth
+        // the stack has reached since (see `pop_frame!`). `_pending_clean`
+        // stays `true` while nothing reaches across the opener: no chained
+        // match in progress at the open, no `key_value` key starting before it.
+        let mut _pending_base: (u32, u32) = (0u32, 0u32);
+        let mut _pending_text_start: usize = $start;
+        let mut _pending_depth: usize = 0;
+        let mut _pending_low: usize = 0;
+        let mut _pending_clean: bool = true;
+        // Pop the top frame on a normal close, lower `_pending_low` when the
+        // stack drops below it, and roll the fallback vector back to the
+        // frame's snapshot.
+        #[allow(unused_macros)]
+        macro_rules! pop_frame {
+            () => {{
+                fdepth -= 1;
+                if fdepth < _pending_low {
+                    _pending_low = fdepth;
+                }
+                release_held!(held_base[fdepth]);
+            }};
+        }
 
         // Two-phase transparent state for `chained` (off the stack).
         let mut ch_in_text: bool = false;
@@ -543,8 +572,7 @@ macro_rules! parse_inline {
                             $kv_vf: $crate::span::Span::new(_vs, delim_start),
                         });
                     }
-                    fdepth -= 1;
-                    release_held!(held_base[fdepth]);
+                    pop_frame!();
                     _kv_seg_start = pos;
                     _kv_hit = true;
                 }
@@ -645,8 +673,7 @@ macro_rules! parse_inline {
                                                 }
                                             }
                                         )*
-                                        fdepth -= 1;
-                                        release_held!(held_base[fdepth]);
+                                        pop_frame!();
                                     }
                                 }
                             }
@@ -682,8 +709,7 @@ macro_rules! parse_inline {
                                                 }
                                             }
                                         )*
-                                        fdepth -= 1;
-                                        release_held!(held_base[fdepth]);
+                                        pop_frame!();
                                         asym_overflow = 0;
                                     }
                                     text_start = (_close_char_pos + 1) as usize;
@@ -934,8 +960,7 @@ macro_rules! parse_inline {
                                     _ => {}
                                 }
                                 if _closed {
-                                    fdepth -= 1;
-                                    release_held!(held_base[fdepth]);
+                                    pop_frame!();
                                     text_start = pos;
                                     continue;
                                 } else {
@@ -988,9 +1013,33 @@ macro_rules! parse_inline {
                             // Single pending slot: `parse_inside = true`, `balanced = false`.
                             if let Some((pb, op, oc)) = pending {
                                 if pb == $sb && oc == count {
-                                    if (text_start as u32) < op {
+                                    // Text flushed since the open (by another rule
+                                    // or an internal eol) belongs to this pair:
+                                    // when the pair emits an element, roll that
+                                    // text back and emit the text before the
+                                    // opener once. Not when the pair crosses
+                                    // another construct: a frame open at the
+                                    // slot's open that has closed since owns the
+                                    // text before the opener, a frame opened since
+                                    // and still open holds a snapshot of its own
+                                    // above it, a key starting before the opener
+                                    // owns part of that text, and inside a chained
+                                    // match it cannot be emitted.
+                                    let _has_arm = match count { $( $sn => true, )* _ => false };
+                                    let _intact = _has_arm
+                                        && _pending_low >= _pending_depth
+                                        && fdepth == _pending_depth
+                                        && _pending_clean
+                                        && !ch_in_text
+                                        && !ch_in_url;
+                                    let mut _before = text_start;
+                                    if _intact {
+                                        release_held!(_pending_base);
+                                        _before = _pending_text_start;
+                                    }
+                                    if (_before as u32) < op {
                                         if !ch_in_text && !ch_in_url {
-                                            push_il!($tx, $crate::span::Span::new(text_start as u32, op));
+                                            push_il!($tx, $crate::span::Span::new(_before as u32, op));
                                         };
                                     }
                                     let clean = $crate::span::Span::new(op + count, delim_start);
@@ -1001,6 +1050,11 @@ macro_rules! parse_inline {
                                 }
                             }
                             pending = Some(($sb, delim_start, count));
+                            _pending_base = hold_base!();
+                            _pending_text_start = text_start;
+                            _pending_depth = fdepth;
+                            _pending_low = fdepth;
+                            _pending_clean = !ch_in_text && !ch_in_url;
                         }
                     } else {
                         let cs = pos;
@@ -1167,6 +1221,11 @@ macro_rules! parse_inline {
                                 && src[ks - 1] != $eol
                             {
                                 ks -= 1;
+                            }
+                        }
+                        if let Some((_, _op, _)) = pending {
+                            if (ks as u32) < _op {
+                                _pending_clean = false;
                             }
                         }
                         let mut val_start = pos;
