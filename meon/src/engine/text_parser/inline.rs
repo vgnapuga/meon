@@ -101,7 +101,11 @@
 //!   the last byte opens the match, and the prefix is the byte before it:
 //!   in `![[a](u)` the text is `![` and the match is `[a](u)`, not an image.
 //!   With `balanced = true` the bytes before it are text too, so they never
-//!   nest in the match.
+//!   nest in the match. Inside a transparent match the bytes of a close run
+//!   act one by one. With `balanced = true` each open byte of the component
+//!   nests one level and each close byte leaves one; the first close byte
+//!   with no level left closes the component, the url component opens only
+//!   on the byte right after it, and the rest of the run is read again.
 //!
 //! In the pending slot and in both forward searches a run whose count matches
 //! no declared arm is literal text: it opens nothing, and no close is searched
@@ -156,19 +160,22 @@
 //! # `key_value`
 //!
 //! The rule triggers on `eq`. The key is found by scanning back from `eq`,
-//! clamped to the start of the current key segment (the position after the
-//! last container open or `end` byte). When an opaque span (a quoted key)
-//! ends right before `eq`, or before the `sep` run trimmed when `allow_sep`,
-//! that span with its delimiters is the key, `sep` bytes inside it included.
-//! Otherwise the key is the word before `eq`: the scan stops at `sep`, `tab`,
-//! `eol` and at the end of an earlier opaque span. The value starts after
+//! clamped to the start of the current key segment: the position after the
+//! last container open run, or after the `end` run that closed the previous
+//! value. When an opaque span (a quoted key) ends right before `eq`, or
+//! before the `sep` run trimmed when `allow_sep`, that span with its
+//! delimiters is the key, `sep` bytes inside it included. Otherwise the key
+//! is the word before `eq`: the scan stops at `sep`, `tab`, `eol` and at the
+//! end of an earlier opaque span. The value starts after
 //! `eq` (skipping `sep` when `allow_sep`) and is tracked by a stack frame; a
-//! second `eq` while a `key_value` frame is on top is value content. With
-//! the stack full, `eq` opens no frame and the key, `eq` and value stay
-//! text. The pair is pushed when the value closes: at `end`, when the
-//! enclosing container closes, or at the end of the run. When the value is a
-//! container, the value span includes the brackets and the container's own
-//! span lies strictly inside it.
+//! second `eq` while a `key_value` frame is on top is value content, and so
+//! is the rest of an `eq` run. With the stack full, `eq` opens no frame and
+//! the key, `eq` and value stay text. The pair is pushed when the value
+//! closes: at `end`, whose run keeps its other bytes as text and starts the
+//! next key segment after itself, when the enclosing container closes, or
+//! at the end of the run. When the value is a container, the value span
+//! includes the brackets and the container's own span lies strictly inside
+//! it.
 //!
 //! # Limitations
 //!
@@ -492,10 +499,11 @@ macro_rules! parse_inline {
         // run. The forward searches below (asymmetric with `balanced = false`
         // and `parse_inside = false`; opaque `chained` components with
         // `balanced = false`) scan from the current position to `parse_end`.
-        // `pos` only moves forward and `parse_end` is fixed, so a failed
-        // search for a byte cannot succeed later in this run: the byte is
-        // recorded and later openers of the same kind are rejected without a
-        // rescan. One bit per byte value.
+        // `parse_end` is fixed, and `pos` moves back only to read the rest of
+        // a delimiter run again, never before the start of a search already
+        // made, so a failed search for a byte cannot succeed later in this
+        // run: the byte is recorded and later openers of the same kind are
+        // rejected without a rescan. One bit per byte value.
         let mut _dead_close: [u64; 4] = [0u64; 4];
         #[allow(unused_macros)]
         macro_rules! dead_close_has {
@@ -626,7 +634,11 @@ macro_rules! parse_inline {
                 }
             )*
             if _kv_hit {
-                text_start = pos;
+                // The first byte of the run ends the value; the rest of the
+                // run is read again as content. The next key segment starts
+                // past the whole run.
+                text_start = delim_start as usize + 1;
+                pos = text_start;
                 continue;
             }
 
@@ -811,35 +823,47 @@ macro_rules! parse_inline {
                     ch_real_start = _real_start as u32;
                     _chained_handled = true;
                 } else if ch_in_text && delim == $co && $tbal {
-                    ch_text_depth += 1;
+                    // Each byte of the run nests one level.
+                    ch_text_depth += count;
                     _chained_handled = true;
                 } else if ch_in_text && delim == $cc {
-                    if $tbal && ch_text_depth > 0 {
-                        ch_text_depth -= 1;
+                    // Each byte of the run closes one nested level; the next
+                    // one closes the text component, and the url component
+                    // must open on the byte right after it.
+                    if count <= ch_text_depth {
+                        ch_text_depth -= count;
                     } else {
-                        let _ct_end = delim_start;
+                        let _ct_end = delim_start + ch_text_depth;
+                        let _next = _ct_end as usize + 1;
+                        ch_text_depth = 0;
                         ch_in_text = false;
-                        if pos < parse_end && src[pos] == $uo {
+                        if _next < parse_end && src[_next] == $uo {
                             ch_in_url = true;
                             ch_url_opaque = !$upi;
                             ch_url_depth = 0;
-                            ch_url_start = (pos + 1) as u32;
+                            ch_url_start = (_next + 1) as u32;
                             ch_saved_text_end = _ct_end;
-                            pos += 1;
+                            pos = _next + 1;
+                        } else {
+                            // The match fails and its bytes, opener included,
+                            // stay text. The rest of the run is read again.
+                            pos = _next;
                         }
-                        // Otherwise the match fails and its bytes, opener
-                        // included, stay text.
                     }
                     _chained_handled = true;
                 } else if ch_in_url && delim == $uo && $ubal {
-                    ch_url_depth += 1;
+                    ch_url_depth += count;
                     _chained_handled = true;
                 } else if ch_in_url && delim == $uc {
-                    if $ubal && ch_url_depth > 0 {
-                        ch_url_depth -= 1;
+                    // As for the text component; the rest of the run after
+                    // the closing byte is read again.
+                    if count <= ch_url_depth {
+                        ch_url_depth -= count;
                     } else {
-                        let _cu_end = delim_start;
+                        let _cu_end = delim_start + ch_url_depth;
+                        ch_url_depth = 0;
                         ch_in_url = false;
+                        pos = _cu_end as usize + 1;
                         // The match covers the text flushed inside it: roll it
                         // back and emit the text before the opener once, unless
                         // a frame open at the match's open has closed inside
@@ -1285,7 +1309,10 @@ macro_rules! parse_inline {
                                 _pending_clean = false;
                             }
                         }
-                        let mut val_start = pos;
+                        // The first byte of the run is `eq`; the rest of the
+                        // run is value content.
+                        let _eq_end = delim_start as usize + 1;
+                        let mut val_start = _eq_end;
                         if $kv_allow {
                             while val_start < parse_end && src[val_start] == $sep {
                                 val_start += 1;
@@ -1298,7 +1325,7 @@ macro_rules! parse_inline {
                         frames[fdepth] = ($kv_end, 0u8, 0u32);
                         held_base[fdepth] = hold_base!();
                         fdepth += 1;
-                        text_start = pos;
+                        text_start = _eq_end;
                     }
                     continue;
                 }

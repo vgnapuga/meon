@@ -1106,3 +1106,25 @@ fn test_84_member_past_cap_keeps_its_key() {
     assert!(c.members.is_empty());
     assert_eq!(texts(&c, &c.scalars), vec!["a b:1"]);
 }
+
+// 85. A doubled `:` starts the value at the second one.
+#[test]
+fn test_85_doubled_colon_is_value_content() {
+    let c = JsonParser::parse(br#"{"a"::1}"#);
+    assert_eq!(members(&c), vec![(r#""a""#.to_string(), ":1".to_string())]);
+}
+
+// 86. A doubled `,` in an object that never closes keeps the second one as
+//     bare text, and the next member keeps its own key.
+#[test]
+fn test_86_doubled_comma_keeps_bare_text() {
+    let c = JsonParser::parse(br#"{"a":1,,"b":2"#);
+    assert_eq!(
+        members(&c),
+        vec![
+            (r#""a""#.to_string(), "1".to_string()),
+            (r#""b""#.to_string(), "2".to_string()),
+        ]
+    );
+    assert_eq!(texts(&c, &c.scalars), vec![","]);
+}

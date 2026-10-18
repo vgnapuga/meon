@@ -3799,3 +3799,139 @@ fn chained_held_15_pending_pair_follows_crossing_frame() {
     assert_eq!(all(src, &st.italics), vec!["b} ~c~ d"]);
     assert_eq!(all(src, &st.texts), vec![" e"]);
 }
+
+// ================================================================
+// runs of a delimiter byte that a rule reads byte by byte
+// ================================================================
+//
+// `run_chained_runs!` declares a chained rule with both components
+// transparent; `$tbal` and `$ubal` set their `balanced`. Inside a match the
+// bytes of a close run act one by one, and with `balanced = true` each open
+// byte nests one level. `run_inline_kv_json!` declares `:` as `eq` and `,` as
+// `end`.
+
+macro_rules! run_chained_runs {
+    ($src:expr, $tbal:tt, $ubal:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'[', b']', b'(', b')') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = $tbal; } => text,
+                    | b'(', b')' | { parse_inside = true; balanced = $ubal; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+            }
+        );
+        st
+    }};
+}
+
+// 01. The url component must open right after the byte that closes the text
+//     component, not after the whole close run
+#[test]
+fn byte_runs_01_text_close_run_without_url() {
+    let src = b"x [a]](u) y";
+    let st = run_chained_runs!(src, false, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["x [a]](u) y"]);
+}
+
+// 02. The bytes of a url close run after the closing one stay text
+#[test]
+fn byte_runs_02_url_close_run_rest_is_text() {
+    let src = b"x [a](u)) y";
+    let st = run_chained_runs!(src, false, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.texts), vec!["x ", ") y"]);
+}
+
+// 03. In a balanced text component each byte of an open run nests one level
+#[test]
+fn byte_runs_03_balanced_text_open_run() {
+    let src = b"x [a [[b] c] d](u) y";
+    let st = run_chained_runs!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a [[b] c] d");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 04. A close run leaves the nested level and closes the component in one go
+#[test]
+fn byte_runs_04_balanced_text_close_run() {
+    let src = b"x [a [b]](u) y";
+    let st = run_chained_runs!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a [b]");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 05. The same for a balanced url component
+#[test]
+fn byte_runs_05_balanced_url_runs() {
+    let src = b"x [a](b ((c) d) e) y";
+    let st = run_chained_runs!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "b ((c) d) e");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+    let src = b"x [a](b (c)) y";
+    let st = run_chained_runs!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "b (c)");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 06. The rest of an `eq` run is value content
+#[test]
+fn byte_runs_06_eq_run_rest_is_value() {
+    let src = br#"{"a"::1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[0].value), ":1");
+}
+
+// 07. The rest of an `end` run is text, and the next key starts after it
+#[test]
+fn byte_runs_07_end_run_rest_is_text() {
+    for (src, keys) in [
+        (&br#""a":1,,"b":2"#[..], [r#""a""#, r#""b""#]),
+        (b"a:1,,b:2", ["a", "b"]),
+    ] {
+        let (st, _) = run_inline_kv_json!(src, 8);
+        let kvs: Vec<(&str, &str)> = st
+            .key_values
+            .iter()
+            .map(|kv| (txt(src, kv.key), txt(src, kv.value)))
+            .collect();
+        assert_eq!(kvs, vec![(keys[0], "1"), (keys[1], "2")]);
+        assert_eq!(all(src, &st.texts), vec![","]);
+    }
+}
+
+// 08. After a failed match the rest of the close run is read again: here the
+//     text component opens and closes on the same byte, so the second byte
+//     opens a new match
+#[test]
+fn byte_runs_08_failed_match_rereads_close_run() {
+    let src = br#"x "a""b"(u) y"#;
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'"', b'(', b')') {
+            chained: Link {
+                | b'"', b'"' | { parse_inside = true; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = true; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.texts), vec![r#"x "a""#, " y"]);
+}
