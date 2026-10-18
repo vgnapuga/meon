@@ -4076,3 +4076,36 @@ fn dead_close_04_opener_past_found_close() {
     assert_eq!(txt(src, st.links[0].url), "c");
     assert_eq!(all(src, &st.texts), vec!["[a] "]);
 }
+
+// 05. A balanced component's search that meets no close byte records it:
+//     the later openers fail without a rescan, and their text stays
+#[test]
+fn dead_close_05_balanced_search_without_close() {
+    let src = b"[a [b [c";
+    let st = run_chained_balanced!(src, true, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["[a [b [c"]);
+}
+
+// 06. One that meets close bytes without balancing records nothing: a later
+//     opener inside it still balances
+#[test]
+fn dead_close_06_balanced_text_search_meets_close() {
+    let src = b"[a [b](c) d";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+    assert_eq!(all(src, &st.texts), vec!["[a ", " d"]);
+}
+
+// 07. The same for a balanced url component
+#[test]
+fn dead_close_07_balanced_url_search_meets_close() {
+    let src = b"[a](b [c](d)";
+    let st = run_chained_balanced!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "c");
+    assert_eq!(txt(src, st.links[0].url), "d");
+    assert_eq!(all(src, &st.texts), vec!["[a](b "]);
+}

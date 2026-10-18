@@ -111,14 +111,17 @@
 //! no declared arm is literal text: it opens nothing, and no close is searched
 //! for, so nothing after it is skipped.
 //!
-//! Every forward search skips escaped close candidates. The `memchr`-style
-//! searches (off-stack `asymmetric`, opaque `chained` components with
-//! `balanced = false`) remember a close byte they did not find and where
-//! they started: a later search for that byte from there on stops at that
-//! start, so later openers of the same kind are rejected without a rescan.
-//! The text component of an opaque `chained` rule also remembers the close
-//! it found when the match fails after it, for the openers before that
-//! close.
+//! Every forward search skips escaped close candidates. The forward
+//! searches (off-stack `asymmetric`, opaque `chained` components) remember
+//! a close byte they did not find and where they started: a later search
+//! for that byte from there on stops at that start, so later openers of the
+//! same kind are rejected without a rescan. The text component of an opaque
+//! `chained` rule with `balanced = false` also remembers the close it found
+//! when the match fails after it, for the openers before that close. With
+//! `balanced = true` a component's search counts depth, and one that meets
+//! close bytes without returning to depth zero is not remembered: a later
+//! opener inside it can still balance. Openers like that, `k` of them
+//! before the end of an `n`-byte run, cost `O(k·n)`.
 //!
 //! # `asymmetric`
 //!
@@ -501,9 +504,9 @@ macro_rules! parse_inline {
 
         // Close bytes known to be absent (unescaped) from part of the run.
         // The forward searches below (asymmetric with `balanced = false` and
-        // `parse_inside = false`; opaque `chained` components with
-        // `balanced = false`) scan up to `parse_end`, which is fixed, so a
-        // failed search tells that its byte is absent from its start on.
+        // `parse_inside = false`; opaque `chained` components) scan up to
+        // `parse_end`, which is fixed, so a search that meets no close byte
+        // tells that it is absent from its start on.
         // `_dead_close` holds, one bit per byte value, the bytes absent from
         // the scan position on: their search started there, and `pos` moves
         // back only to read the rest of a delimiter run again, never before a
@@ -1002,17 +1005,26 @@ macro_rules! parse_inline {
                         };
                     let mut _i = pos;
                     let close_text: Option<usize> = if $tbal {
+                        // Past the point where the close byte is known absent
+                        // the depth cannot return to zero. A search that meets
+                        // no close byte records it.
+                        let _lim = dead_limit!($cc, pos);
                         let mut _depth: i32 = 1;
+                        let mut _met = false;
                         let mut _found: Option<usize> = None;
-                        while _i < parse_end {
+                        while _i < _lim {
                             if !$crate::parse_inline!(@is_escaped src, _i, $start, $esc) {
                                 if src[_i] == $co { _depth += 1; }
                                 else if src[_i] == $cc {
+                                    _met = true;
                                     _depth -= 1;
                                     if _depth == 0 { _found = Some(_i); break; }
                                 }
                             }
                             _i += 1;
+                        }
+                        if !_met {
+                            dead_close_set!($cc, pos);
                         }
                         _found
                     } else if let Some(_at) = found_close!($cc, pos) {
@@ -1039,17 +1051,24 @@ macro_rules! parse_inline {
                         if next < parse_end && src[next] == $uo {
                             let mut _j = next + 1;
                             let close_url: Option<usize> = if $ubal {
+                                // As for the text component.
+                                let _lim = dead_limit!($uc, next + 1);
                                 let mut _depth: i32 = 1;
+                                let mut _met = false;
                                 let mut _found: Option<usize> = None;
-                                while _j < parse_end {
+                                while _j < _lim {
                                     if !$crate::parse_inline!(@is_escaped src, _j, $start, $esc) {
                                         if src[_j] == $uo { _depth += 1; }
                                         else if src[_j] == $uc {
+                                            _met = true;
                                             _depth -= 1;
                                             if _depth == 0 { _found = Some(_j); break; }
                                         }
                                     }
                                     _j += 1;
+                                }
+                                if !_met {
+                                    dead_close_set!($uc, next + 1);
                                 }
                                 _found
                             } else {
