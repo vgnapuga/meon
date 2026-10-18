@@ -69,8 +69,10 @@
 //! open. When the frame closes the vector is rolled back to that length: the
 //! frame's span covers those bytes. When the frame is still open at the end
 //! of the run it is discarded and the text stays: everything after an
-//! unmatched opener is plain text. Text inside an in-progress `chained` match
-//! is not flushed; it belongs to the match.
+//! unmatched opener is plain text. A `chained` match with a transparent
+//! component holds its text the same way: the text inside it, opener
+//! included, is written as usual and rolled back when the match completes,
+//! and it stays when the match fails or is still open at the end of the run.
 //!
 //! # Off-stack constructs
 //!
@@ -82,7 +84,8 @@
 //!   text and open frames"). A pair that crosses another construct keeps that
 //!   text: a frame open at the slot's open and closed before its close, a
 //!   frame opened inside and still open at the close, a `key_value` key that
-//!   starts before the opener, a `chained` match in progress at either end.
+//!   starts before the opener, a transparent `chained` match or component
+//!   that the pair enters or leaves.
 //! - `symmetric` with `parse_inside = false` — a forward search for the
 //!   closing run; the content is opaque to every other rule. With
 //!   `balanced = true` a doubled run is skipped as literal content.
@@ -414,16 +417,30 @@ macro_rules! parse_inline {
         // Taken when the slot opens: the fallback snapshot (`hold_base!`), the
         // text cursor and the stack depth. `_pending_low` is the lowest depth
         // the stack has reached since (see `pop_frame!`). `_pending_clean`
-        // stays `true` while nothing reaches across the opener: no chained
-        // match in progress at the open, no `key_value` key starting before it.
+        // stays `true` while no `key_value` key starts before the opener.
+        // `_pending_ch` is where the open stands to a chained match (see
+        // `ch_state!`).
         let mut _pending_base: (u32, u32) = (0u32, 0u32);
         let mut _pending_text_start: usize = $start;
         let mut _pending_depth: usize = 0;
         let mut _pending_low: usize = 0;
         let mut _pending_clean: bool = true;
-        // Pop the top frame on a normal close, lower `_pending_low` when the
-        // stack drops below it, and roll the fallback vector back to the
-        // frame's snapshot.
+        let mut _pending_ch: (bool, u32, bool) = (false, 0u32, false);
+        // Taken when a transparent `chained` match opens, as for the pending
+        // slot: the fallback snapshot the match rolls back to when it
+        // completes, the text cursor and the stack depth. `_ch_low` is the
+        // lowest depth the stack has reached since (see `pop_frame!`).
+        // `_ch_seq` counts the matches opened, telling two of them apart.
+        let mut _ch_base: (u32, u32) = (0u32, 0u32);
+        let mut _ch_seq: u32 = 0;
+        let mut _ch_text_start: usize = $start;
+        let mut _ch_depth: usize = 0;
+        let mut _ch_low: usize = 0;
+        // Pop the top frame on a normal close, lower `_pending_low` and
+        // `_ch_low` when the stack drops below them, and roll the fallback
+        // vector back to the frame's snapshot. A frame open since before a
+        // chained match rolls back below the match's own snapshot, which
+        // then follows it down.
         #[allow(unused_macros)]
         macro_rules! pop_frame {
             () => {{
@@ -431,7 +448,13 @@ macro_rules! parse_inline {
                 if fdepth < _pending_low {
                     _pending_low = fdepth;
                 }
+                if fdepth < _ch_low {
+                    _ch_low = fdepth;
+                }
                 release_held!(held_base[fdepth]);
+                if held_base[fdepth] < _ch_base {
+                    _ch_base = held_base[fdepth];
+                }
             }};
         }
 
@@ -448,6 +471,18 @@ macro_rules! parse_inline {
         let mut ch_url_depth: u32 = 0;
         let mut ch_url_start: u32 = 0;
         let mut ch_saved_text_end: u32 = 0;
+        // Where the scan stands to a transparent `chained` match: inside one
+        // or not, which one, and in which component.
+        #[allow(unused_macros)]
+        macro_rules! ch_state {
+            () => {
+                (
+                    ch_in_text || ch_in_url,
+                    if ch_in_text || ch_in_url { _ch_seq } else { 0u32 },
+                    ch_in_url,
+                )
+            };
+        }
 
         // Close bytes known to be absent (unescaped) from the rest of the
         // run. The forward searches below (asymmetric with `balanced = false`
@@ -535,9 +570,7 @@ macro_rules! parse_inline {
                         }
                     }
                     if text_start < _ep {
-                        if !ch_in_text && !ch_in_url {
-                            push_il!($tx, $crate::span::Span::new(text_start as u32, _ep as u32));
-                        }
+                        push_il!($tx, $crate::span::Span::new(text_start as u32, _ep as u32));
                     }
                     if _ehb {
                         $crate::paste::paste! {
@@ -604,16 +637,14 @@ macro_rules! parse_inline {
                 // --- open side ---
                 $(
                     if ($abal || $api) && delim == $ao {
-                        // Outside a chained match the text before the run is
-                        // flushed and the text cursor moves to the run. An open
-                        // byte the stack takes moves the cursor past itself; one
-                        // it refuses stays as literal text after the flushed part.
-                        if !ch_in_text && !ch_in_url {
-                            if text_start < delim_start as usize {
-                                push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
-                            }
-                            text_start = delim_start as usize;
+                        // The text before the run is flushed and the text
+                        // cursor moves to the run. An open byte the stack takes
+                        // moves the cursor past itself; one it refuses stays as
+                        // literal text after the flushed part.
+                        if text_start < delim_start as usize {
+                            push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
                         }
+                        text_start = delim_start as usize;
                         let _cap: usize = if $abal { $maxn } else { 1usize };
                         for _k in 0..count {
                             let _char_pos = delim_start + _k;
@@ -702,10 +733,8 @@ macro_rules! parse_inline {
                                         // is dropped; the text before it is
                                         // plain text of the frame on the stack.
                                         if text_start < _close_char_pos as usize {
-                                            if !ch_in_text && !ch_in_url {
-                                                push_il!($tx, $crate::span::Span::new(
-                                                    text_start as u32, _close_char_pos));
-                                            }
+                                            push_il!($tx, $crate::span::Span::new(
+                                                text_start as u32, _close_char_pos));
                                         }
                                         asym_overflow -= 1;
                                     } else {
@@ -762,28 +791,27 @@ macro_rules! parse_inline {
                             _bs % 2 == 0
                         };
                     let _real_start = if _is_prefix { _open - 1 } else { _open };
-                    if text_start < _real_start {
-                        if !ch_in_text && !ch_in_url {
-                            push_il!($tx, $crate::span::Span::new(text_start as u32, _real_start as u32));
-                        };
-                    }
+                    // The text cursor stays: text flushed inside the match,
+                    // opener included, is rolled back to this snapshot when
+                    // the match completes and stays when it fails.
+                    _ch_base = hold_base!();
+                    _ch_seq = _ch_seq.wrapping_add(1);
+                    _ch_text_start = text_start;
+                    _ch_depth = fdepth;
+                    _ch_low = fdepth;
                     ch_in_text = true;
                     ch_text_opaque = !$tpi;
                     ch_text_depth = 0;
                     ch_text_start = pos as u32;
                     ch_is_prefix = _is_prefix;
                     ch_real_start = _real_start as u32;
-                    text_start = pos;
                     _chained_handled = true;
                 } else if ch_in_text && delim == $co && $tbal {
                     ch_text_depth += 1;
-                    text_start = pos;
                     _chained_handled = true;
                 } else if ch_in_text && delim == $cc {
                     if $tbal && ch_text_depth > 0 {
                         ch_text_depth -= 1;
-                        text_start = pos;
-                        _chained_handled = true;
                     } else {
                         let _ct_end = delim_start;
                         ch_in_text = false;
@@ -794,21 +822,18 @@ macro_rules! parse_inline {
                             ch_url_start = (pos + 1) as u32;
                             ch_saved_text_end = _ct_end;
                             pos += 1;
-                            text_start = pos;
-                            _chained_handled = true;
                         } else {
-                            if (ch_real_start as usize) < pos {
-                                if !ch_in_text && !ch_in_url {
-                                    push_il!($tx, $crate::span::Span::new(ch_real_start, pos as u32));
-                                };
+                            // The match fails and its bytes, opener included,
+                            // stay text. Nothing was rolled back, so a pending
+                            // pair opened inside it now stands outside any match.
+                            if _pending_ch == (true, _ch_seq, false) {
+                                _pending_ch = (false, 0u32, false);
                             }
-                            text_start = pos;
-                            _chained_handled = true;
                         }
                     }
+                    _chained_handled = true;
                 } else if ch_in_url && delim == $uo && $ubal {
                     ch_url_depth += 1;
-                    text_start = pos;
                     _chained_handled = true;
                 } else if ch_in_url && delim == $uc {
                     if $ubal && ch_url_depth > 0 {
@@ -816,10 +841,18 @@ macro_rules! parse_inline {
                     } else {
                         let _cu_end = delim_start;
                         ch_in_url = false;
-                        if text_start < ch_real_start as usize {
-                            if !ch_in_text && !ch_in_url {
-                                push_il!($tx, $crate::span::Span::new(text_start as u32, ch_real_start));
-                            };
+                        // The match covers the text flushed inside it: roll it
+                        // back and emit the text before the opener once, unless
+                        // a frame open at the match's open has closed inside
+                        // it and owns that text. A frame opened since and still
+                        // open gets the snapshot of the vector as it now ends.
+                        release_held!(_ch_base);
+                        if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
+                            push_il!($tx, $crate::span::Span::new(_ch_text_start as u32, ch_real_start));
+                        }
+                        let _after = hold_base!();
+                        for _k in _ch_low..fdepth {
+                            held_base[_k] = _after;
                         }
                         $crate::paste::paste! {
                             $state.[<push_ $cf>]($ch_ty {
@@ -828,8 +861,8 @@ macro_rules! parse_inline {
                                 $cu: $crate::span::Span::new(ch_url_start, _cu_end),
                             });
                         }
+                        text_start = pos;
                     }
-                    text_start = pos;
                     _chained_handled = true;
                 }
             )*
@@ -926,10 +959,8 @@ macro_rules! parse_inline {
                             if let Some(cu_end) = close_url {
                                 let real_start = if is_prefix { _open - 1 } else { _open };
                                 if text_start < real_start {
-                                    if !ch_in_text && !ch_in_url {
-                                        push_il!($tx, $crate::span::Span::new(
-                                        text_start as u32, real_start as u32));
-                                    };
+                                    push_il!($tx, $crate::span::Span::new(
+                                    text_start as u32, real_start as u32));
                                 }
                                 $crate::paste::paste! {
                                     $state.[<push_ $cf>]($ch_ty {
@@ -980,10 +1011,8 @@ macro_rules! parse_inline {
                                 match count {
                                     $( $sn => {
                                         if text_start < delim_start as usize {
-                                            if !ch_in_text && !ch_in_url {
-                                                push_il!($tx, $crate::span::Span::new(
-                                                text_start as u32, delim_start));
-                                            };
+                                            push_il!($tx, $crate::span::Span::new(
+                                            text_start as u32, delim_start));
                                         }
                                         let _vidx = $state.$sf.len() as u32;
                                         push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
@@ -999,20 +1028,16 @@ macro_rules! parse_inline {
                                     continue;
                                 } else {
                                     if text_start < delim_start as usize {
-                                        if !ch_in_text && !ch_in_url {
-                                            push_il!($tx, $crate::span::Span::new(
-                                            text_start as u32, delim_start));
-                                        };
+                                        push_il!($tx, $crate::span::Span::new(
+                                        text_start as u32, delim_start));
                                     }
                                     text_start = delim_start as usize;
                                     continue;
                                 }
                             } else {
                                 if text_start < delim_start as usize {
-                                    if !ch_in_text && !ch_in_url {
-                                        push_il!($tx, $crate::span::Span::new(
-                                        text_start as u32, delim_start));
-                                    };
+                                    push_il!($tx, $crate::span::Span::new(
+                                    text_start as u32, delim_start));
                                 }
                                 text_start = delim_start as usize;
                                 continue;
@@ -1035,22 +1060,20 @@ macro_rules! parse_inline {
                                     // text before the opener, a frame opened since
                                     // and still open holds a snapshot of its own
                                     // above it, a key starting before the opener
-                                    // owns part of that text, and inside a chained
-                                    // match it cannot be emitted.
+                                    // owns part of that text, and a chained match
+                                    // or component the pair enters or leaves
+                                    // crosses it.
                                     let _intact = _pending_low >= _pending_depth
                                         && fdepth == _pending_depth
                                         && _pending_clean
-                                        && !ch_in_text
-                                        && !ch_in_url;
+                                        && _pending_ch == ch_state!();
                                     let mut _before = text_start;
                                     if _intact {
                                         release_held!(_pending_base);
                                         _before = _pending_text_start;
                                     }
                                     if (_before as u32) < op {
-                                        if !ch_in_text && !ch_in_url {
-                                            push_il!($tx, $crate::span::Span::new(_before as u32, op));
-                                        };
+                                        push_il!($tx, $crate::span::Span::new(_before as u32, op));
                                     }
                                     let clean = $crate::span::Span::new(op + count, delim_start);
                                     match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
@@ -1064,7 +1087,8 @@ macro_rules! parse_inline {
                             _pending_text_start = text_start;
                             _pending_depth = fdepth;
                             _pending_low = fdepth;
-                            _pending_clean = !ch_in_text && !ch_in_url;
+                            _pending_clean = true;
+                            _pending_ch = ch_state!();
                         }
                     } else {
                         // A run with no arm for its count is literal text, not
@@ -1127,10 +1151,8 @@ macro_rules! parse_inline {
                         };
                         if let Some((p, end)) = close {
                             if text_start < delim_start as usize {
-                                if !ch_in_text && !ch_in_url {
-                                    push_il!($tx, $crate::span::Span::new(
-                                    text_start as u32, delim_start));
-                                };
+                                push_il!($tx, $crate::span::Span::new(
+                                text_start as u32, delim_start));
                             }
                             let clean = $crate::span::Span::new(cs as u32, p as u32);
                             match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
@@ -1193,10 +1215,8 @@ macro_rules! parse_inline {
                     };
                     if let Some(cp) = close_pos {
                         if text_start < delim_start as usize {
-                            if !ch_in_text && !ch_in_url {
-                                push_il!($tx, $crate::span::Span::new(
-                                text_start as u32, delim_start));
-                            };
+                            push_il!($tx, $crate::span::Span::new(
+                            text_start as u32, delim_start));
                         }
                         let clean = $crate::span::Span::new(cs as u32, cp as u32);
                         match count { $( $an => { push_il!($af, clean); } )* _ => {} }
@@ -1257,9 +1277,7 @@ macro_rules! parse_inline {
                             }
                         }
                         if text_start < ks {
-                            if !ch_in_text && !ch_in_url {
-                                push_il!($tx, $crate::span::Span::new(text_start as u32, ks as u32));
-                            };
+                            push_il!($tx, $crate::span::Span::new(text_start as u32, ks as u32));
                         }
                         kv_pending[fdepth] = (ks as u32, key_end as u32, val_start as u32);
                         frames[fdepth] = ($kv_end, 0u8, 0u32);

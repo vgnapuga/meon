@@ -3265,8 +3265,8 @@ fn asym_refused_02_unbalanced_cap_keeps_text_once() {
     assert!(st.objects.is_empty());
 }
 
-// 03. Inside a transparent chained match that never closes, a refused open
-//     does not hide the text before it from the end-of-run flush
+// 03. Inside a transparent chained match that never closes, the text around
+//     a refused open is the text the same run gives without the match
 #[test]
 fn asym_refused_03_inside_open_chained_match_keeps_text() {
     let src: &[u8] = b"see [x<y<z";
@@ -3284,7 +3284,7 @@ fn asym_refused_03_inside_open_chained_match_keeps_text() {
         }
     );
     assert!(st.links.is_empty());
-    assert!(st.texts.iter().any(|s| s.start <= 7 && s.end == 10));
+    assert_eq!(all(src, &st.texts), vec!["see [x", "y", "<z"]);
 }
 
 // ================================================================
@@ -3545,4 +3545,181 @@ fn chained_run_06_balanced_text_component() {
     assert_eq!(st.links.len(), 1);
     assert_eq!(txt(src, st.links[0].text), "a");
     assert_eq!(all(src, &st.texts), vec!["["]);
+}
+
+// ================================================================
+// transparent chained match: the text inside it
+// ================================================================
+//
+// `run_chained_held!` declares a chained rule with a transparent text
+// component and `(`/`)` among the triggers, so the match can complete; `$upi`
+// sets the url component's opacity. `~` is a stack rule (into `codes`), `*`
+// the pending slot (into `italics`) and `{`/`}` a transparent frame (into
+// `objects`). Text inside a match is held like text in an open frame: rolled
+// back when the match completes, kept when it fails.
+
+macro_rules! run_chained_held {
+    ($src:expr, $upi:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'{', b'}', b'~', b'*', b'[', b']', b'(', b')') {
+                symmetric b'~' { parse_inside = true; balanced = true; 1 => codes }
+                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+            }
+        );
+        st
+    }};
+}
+
+// 01. A frame opened inside a failed match and closed after it does not take
+//     the opener with its rollback
+#[test]
+fn chained_held_01_failed_match_frame_closed_after() {
+    let src = b"x [{a]b} y";
+    let st = run_chained_held!(src, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["a]b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [", " y"]);
+}
+
+// 02. The same with a stack-symmetric frame
+#[test]
+fn chained_held_02_failed_match_symmetric_closed_after() {
+    let src = b"x [~a]b~ y";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.codes), vec!["a]b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [", " y"]);
+}
+
+// 03. A failed match writes no text over an element closed inside it
+#[test]
+fn chained_held_03_failed_match_element_inside() {
+    let src = b"x [a ~b~ c] d";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [a ", " c] d"]);
+}
+
+// 04. A match still open at the end of the run keeps the text before its
+//     inner elements
+#[test]
+fn chained_held_04_match_open_at_run_end() {
+    let src = b"x [a ~b~ c";
+    let st = run_chained_held!(src, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [a ", " c"]);
+}
+
+// 05. A failed match gives the spans the same run gives without its opener
+#[test]
+fn chained_held_05_failed_match_is_no_match() {
+    for src in [
+        &b"x [a {b} c] d"[..],
+        b"x [a *b] c* d",
+        b"x [a *b] ~c~ d* e",
+        b"x [{a]b} y",
+        b"[~a]b~",
+        b"x [a ~b~ c",
+        b"x [a *b ~c~ d* e] f",
+    ] {
+        let plain: Vec<u8> = src
+            .iter()
+            .map(|&b| if b == b'[' { b'q' } else { b })
+            .collect();
+        let (a, b) = (
+            run_chained_held!(src, false),
+            run_chained_held!(&plain, false),
+        );
+        let spans = |v: &[meon::span::Span]| v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>();
+        assert!(a.links.is_empty());
+        assert_eq!(
+            spans(&a.texts),
+            spans(&b.texts),
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+        assert_eq!(spans(&a.codes), spans(&b.codes));
+        assert_eq!(spans(&a.italics), spans(&b.italics));
+        assert_eq!(spans(&a.objects), spans(&b.objects));
+    }
+}
+
+// 06. A completed match covers the text inside it; an element inside stays
+#[test]
+fn chained_held_06_completed_match_element_inside() {
+    let src = b"x [a ~b~ c](u) d";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a ~b~ c");
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d"]);
+}
+
+// 07. A frame opened inside a completed match and closed after it rolls back
+//     only the text after the match
+#[test]
+fn chained_held_07_frame_opened_inside_closed_after() {
+    let src = b"x [{a](u) b} c";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "{a");
+    assert_eq!(all(src, &st.objects), vec!["a](u) b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " c"]);
+}
+
+// 08. A frame open before the match and closed inside it owns the text
+//     before the opener
+#[test]
+fn chained_held_08_frame_opened_before_closed_inside() {
+    let src = b"x {a [b} c](u) d";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b} c");
+    assert_eq!(all(src, &st.objects), vec!["a [b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d"]);
+}
+
+// 09. A transparent url component holds its text the same way
+#[test]
+fn chained_held_09_transparent_url() {
+    let src = b"x [a](b ~c~ d) e";
+    let st = run_chained_held!(src, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "b ~c~ d");
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " e"]);
+}
+
+// 10. A pending pair inside one component of a match nests in it
+#[test]
+fn chained_held_10_pending_pair_inside_match() {
+    let src = b"x [a *b ~c~ d* e] f";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["b ~c~ d"]);
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x [a ", " e] f"]);
+}
+
+// 11. A frame open before the match and closed inside it, with text flushed
+//     on both sides of its close: the match's rollback follows the frame's
+#[test]
+fn chained_held_11_crossing_frame_lowers_snapshot() {
+    let src = b"{x ~y~ [a} b ~c~ d](u) e";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a} b ~c~ d");
+    assert_eq!(all(src, &st.objects), vec!["x ~y~ [a"]);
+    assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
 }
