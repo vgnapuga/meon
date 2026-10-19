@@ -1,10 +1,12 @@
 //! Integration tests for [`meon::ParseContext`] and the generated
 //! `find_context_*` standalone iterators on the Markdown grammar.
 //!
-//! The contract under test: a context-aware finder is the context-free finder
-//! minus candidates whose position falls inside an opaque region (fenced
-//! block, code span, autolink). Enclosing spans may still *contain* opaque
-//! regions.
+//! The contract under test: a context-aware finder agrees with the full
+//! parse where the context models the source. Candidates inside an opaque
+//! region (fenced block, code span, autolink) or among a line's markers are
+//! skipped, a pair stays inside one inline run, and a line-family item is
+//! kept when the full parse gives its line to the item's rule. Enclosing
+//! spans may still *contain* opaque regions.
 
 use meon_md::MarkdownParser;
 use meon_md::span::Span;
@@ -178,5 +180,148 @@ fn test_12_agreement_with_full_parse() {
     assert_eq!(
         MarkdownParser::find_context_bullet_items(src, &ctx).count(),
         full.bullet_items.len(),
+    );
+}
+
+// ---- Agreement with the full parse on line structure ------------------- //
+
+fn pairs<'a>(it: impl IntoIterator<Item = &'a Span>) -> Vec<(u32, u32)> {
+    it.into_iter().map(|s| (s.start, s.end)).collect()
+}
+
+fn item_spans<T>(it: impl IntoIterator<Item = (T, Span)>) -> Vec<(u32, u32)> {
+    it.into_iter().map(|(_, s)| (s.start, s.end)).collect()
+}
+
+/// Every context-aware finder agrees with the full parse on `src`.
+fn assert_agrees(src: &[u8]) {
+    let ctx = MarkdownParser::context(src);
+    let full = MarkdownParser::parse(src);
+    let text = String::from_utf8_lossy(src);
+    assert_eq!(
+        spans(MarkdownParser::find_context_italics(src, &ctx)),
+        pairs(&full.italics),
+        "italics in {text:?}"
+    );
+    assert_eq!(
+        spans(MarkdownParser::find_context_bolds(src, &ctx)),
+        pairs(&full.bolds),
+        "bolds in {text:?}"
+    );
+    assert_eq!(
+        spans(MarkdownParser::find_context_bold_italics(src, &ctx)),
+        pairs(&full.bold_italics),
+        "bold_italics in {text:?}"
+    );
+    assert_eq!(
+        spans(MarkdownParser::find_context_blockquotes(src, &ctx)),
+        pairs(&full.blockquotes),
+        "blockquotes in {text:?}"
+    );
+    assert_eq!(
+        item_spans(MarkdownParser::find_context_headings(src, &ctx)),
+        item_spans(full.headings.iter().copied()),
+        "headings in {text:?}"
+    );
+    assert_eq!(
+        item_spans(MarkdownParser::find_context_thematic_breaks(src, &ctx)),
+        item_spans(full.thematic_breaks.iter().copied()),
+        "thematic_breaks in {text:?}"
+    );
+    assert_eq!(
+        item_spans(MarkdownParser::find_context_bullet_items(src, &ctx)),
+        item_spans(full.bullet_items.iter().copied()),
+        "bullet_items in {text:?}"
+    );
+    assert_eq!(
+        item_spans(MarkdownParser::find_context_ordered_items(src, &ctx)),
+        item_spans(full.ordered_items.iter().copied()),
+        "ordered_items in {text:?}"
+    );
+}
+
+// 13. Headings and list items whose content opens with a code span are kept
+#[test]
+fn test_13_items_opening_with_code() {
+    assert_agrees(b"## `fn parse()`\n");
+    assert_agrees(b"- `--foo` enables foo\n");
+    assert_agrees(b"1. `x` y\n");
+}
+
+// 14. A bullet's marker is no emphasis delimiter, and a bullet wins over a
+//     thematic break made of the same bytes
+#[test]
+fn test_14_bullet_markers() {
+    assert_agrees(b"* item with *emphasis*\n");
+    assert_agrees(b"* * *\n- - -\n***\n");
+}
+
+// 15. A fenced block inside a blockquote is opaque
+#[test]
+fn test_15_fence_inside_blockquote() {
+    assert_agrees(b"> ```\n> let p = *x * *y;\n> **not bold**\n> ```\n> *real*\n");
+    assert_agrees(b"> ```\n> *x*\nplain *y*\n");
+}
+
+// 16. An unclosed backtick does not reach into the list item, heading or
+//     blockquote on the next line
+#[test]
+fn test_16_unclosed_backtick_before_block_line() {
+    assert_agrees(b"Options for `cmd:\n- `--foo` enables **foo**\n");
+    assert_agrees(b"The `bar\n## Heading with `code`\n");
+    assert_agrees(b"- run `make\n- then `make install`\n");
+    assert_agrees(b"`x\n> y`\n> > z\n");
+}
+
+// 17. Emphasis does not pair across a line some rule claims, and on such a
+//     line it stays on the line
+#[test]
+fn test_17_emphasis_runs() {
+    assert_agrees(b"**a\n- b**\n");
+    assert_agrees(b"*a\n# b*\n");
+    assert_agrees(b"- **a\nb**\n");
+    assert_agrees(b"**a `x\ny\nz` b**\n");
+}
+
+// 18. A mixed document
+#[test]
+fn test_18_mixed_document() {
+    assert_agrees(
+        b"# Title with `code`\n\
+          \n\
+          Intro *text* and **bold** with `ticks\n\
+          - item `one`\n\
+          - item *two*\n\
+          \n\
+          > quote **here**\n\
+          > ```\n\
+          > *code* in a quote\n\
+          > ```\n\
+          > > nested *quote*\n\
+          \n\
+          1. first\n\
+          2) second `x`\n\
+          \n\
+          * * *\n\
+          \n\
+          ```\n\
+          # not a heading\n\
+          ```\n\
+          ---\n",
+    );
+}
+
+// 19. Blockquote frames come innermost-first, so each is looked up on its
+//     own: a context whose region covers the outer frame's marker but ends
+//     before the inner one drops the outer frame only
+#[test]
+fn test_19_blockquote_frames_any_order() {
+    let src = b"`x\n> y`\n> > z\n";
+    let ctx =
+        meon::ParseContext::build(src, b'\\', meon::LineModel::default(), &[(b'`', 1)], &[], 0);
+    assert_eq!(ctx.spans(), &[Span::new(0, 7)]);
+    assert_eq!(
+        spans(MarkdownParser::find_context_blockquotes(src, &ctx)),
+        vec![(10, 14)],
     );
 }

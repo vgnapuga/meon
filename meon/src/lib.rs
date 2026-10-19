@@ -19,7 +19,8 @@
 //!   without parsing the whole document,
 //! - a **`context(source)` builder** producing the [`ParseContext`] opaque-region
 //!   map, plus **`find_context_*` iterators** that skip candidates inside
-//!   fenced blocks and `parse_inside = false` constructs.
+//!   fenced blocks and `parse_inside = false` constructs and read lines the
+//!   way the full parse does.
 //!
 //! All span endpoints are `u32` byte offsets into the original source slice.
 //! Input must not exceed [`span::MAX_INPUT_LEN`] (4 GiB).
@@ -80,6 +81,8 @@ pub use engine::text_parser::standalone::{
 };
 
 pub use engine::text_parser::standalone::{
-    context::{ContextCursor, ParseContext},
+    context::{
+        BlockRule, BlockSimpleRule, ContextCursor, LineModel, LineRule, ParseContext, RuleIndex,
+    },
     context_iter::{ContextAsymmetricExactIter, ContextSymmetricExactIter},
 };

@@ -96,22 +96,24 @@ pub mod symmetric;
 ///
 /// Each rule kind maps to one iterator type and one generated method:
 ///
-/// | DSL rule                                    | Generated method | Iterator                |
-/// |---------------------------------------------|------------------|-------------------------|
-/// | `symmetric_exact(byte, count)`              | `find_<field>`   | [`SymmetricExactIter`]  |
-/// | `asymmetric_exact(open, close, count)`      | `find_<field>`   | [`AsymmetricExactIter`] |
-/// | `chained(o1,c1,o2,c2,prefix,Type,pf,ff,sf)` | `find_<field>`   | [`ChainedIter`]         |
-/// | `kv(eq, end, allow, Type, kf, vf)`          | `find_<field>`   | [`KvIter`]              |
-/// | `line_marker(byte, max, Type, var)`         | `find_<field>`   | [`LineMarkerIter`]      |
-/// | `line_uniform([bytes], min, Type, var)`     | `find_<field>`   | [`LineUniformIter`]     |
-/// | `fence(byte, min)`                          | `find_<field>`   | [`FenceIter`]           |
-/// | `cont(byte)`                                | `find_<field>`   | [`ContIter`]            |
-/// | `block_marker([bytes], Type, var)`          | `find_<field>`   | [`BlockMarkerIter`]     |
-/// | `block_numbered([ends], Type, nvar, kvar)`  | `find_<field>`   | [`BlockNumberedIter`]   |
+/// | DSL rule                                         | Generated method | Iterator                |
+/// |--------------------------------------------------|------------------|-------------------------|
+/// | `symmetric_exact(byte, count)`                   | `find_<field>`   | [`SymmetricExactIter`]  |
+/// | `asymmetric_exact(open, close, count)`           | `find_<field>`   | [`AsymmetricExactIter`] |
+/// | `chained(o1,c1,o2,c2,prefix,Type,pf,ff,sf)`      | `find_<field>`   | [`ChainedIter`]         |
+/// | `kv(eq, end, allow, Type, kf, vf)`               | `find_<field>`   | [`KvIter`]              |
+/// | `line_marker(byte, max, Type, var, rule)`        | `find_<field>`   | [`LineMarkerIter`]      |
+/// | `line_uniform([bytes], min, Type, var, rule)`    | `find_<field>`   | [`LineUniformIter`]     |
+/// | `fence(byte, min)`                               | `find_<field>`   | [`FenceIter`]           |
+/// | `cont(byte)`                                     | `find_<field>`   | [`ContIter`]            |
+/// | `block_marker([bytes], Type, var, rule)`         | `find_<field>`   | [`BlockMarkerIter`]     |
+/// | `block_numbered([ends], Type, nvar, kvar, rule)` | `find_<field>`   | [`BlockNumberedIter`]   |
 ///
 /// The `sep`, `eol`, `tab`, and `escape` context bytes are forwarded from the
 /// grammar's header to each iterator automatically — they do not appear in the
-/// individual rule entries.
+/// individual rule entries. `rule` is a line-family rule's index in
+/// declaration order within its section (`block` or `lines`), which its
+/// `find_context_*` finder hands to `ContextCursor::admits`.
 ///
 /// # Standalone semantics
 ///
@@ -135,33 +137,62 @@ pub mod symmetric;
 #[macro_export]
 macro_rules! define_standalone_fns {
     // Entry with a `context { ... }` header (emitted by `define_parser!` from
-    // the grammar's fence rules and `parse_inside = false` inline rules).
+    // the grammar's line rules and its `parse_inside = false` inline rules).
     // Emits `context()` alongside the finders.
     (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal, max_nest=$maxn:literal ;
-     context { fences [ $( ($fb:literal, $fm:literal, $fcap:literal) ),* ]
-               sym    [ $( ($sb:literal, $sc:literal, $scap:literal) ),* ]
-               asym   [ $( ($ao:literal, $acl:literal, $an:literal, $acap:literal) ),* ] }
+     context { caps         [ $( $cap:literal ),* ]
+               sym          [ $( ($sb:literal, $sc:literal) ),* ]
+               asym         [ $( ($ao:literal, $acl:literal, $an:literal) ),* ]
+               block_simple [ $( $bsk:ident ( $($bsa:tt)* ) ),* ]
+               block        [ $( $bk:ident ( $($ba:tt)* ) ),* ]
+               lines        [ $( $lk:ident ( $($la:tt)* ) ),* ] }
      $($rest:tt)*) => {
         /// Build the [`ParseContext`](crate::ParseContext) for `source`:
         /// every fenced block and every `parse_inside = false` inline
         /// construct of this grammar, resolved leftmost-first in one
-        /// streaming pass. The region vector is preallocated from the same
-        /// `[cap]` divisors that size the content vectors. Feed the result to
-        /// the `find_context_*` methods.
+        /// streaming pass that reads lines through this grammar's line rules.
+        /// The region vector is preallocated from the same `[cap]` divisors
+        /// that size the content vectors. Feed the result to the
+        /// `find_context_*` methods.
         pub fn context(source: &[u8]) -> $crate::ParseContext {
-            let _cap_hint: usize = 0
-                $( + source.len() / ($fcap as usize) )*
-                $( + source.len() / ($scap as usize) )*
-                $( + source.len() / ($acap as usize) )*;
+            const LINES: $crate::LineModel = $crate::LineModel {
+                eol: $eol,
+                sep: $sep,
+                tab: $tab,
+                max_nest: $maxn as usize,
+                block_simple: &[ $( $crate::define_standalone_fns!(@block_simple $bsk ( $($bsa)* )) ),* ],
+                block: &[ $( $crate::define_standalone_fns!(@block $bk ( $($ba)* )) ),* ],
+                lines: &[ $( $crate::define_standalone_fns!(@lines $lk ( $($la)* )) ),* ],
+            };
+            let _cap_hint: usize = 0 $( + source.len() / ($cap as usize) )*;
             $crate::ParseContext::build(
-                source, $eol, $esc, $sep, $tab,
-                &[ $( ($fb, $fm as u8) ),* ],
+                source, $esc, LINES,
                 &[ $( ($sb, $sc as u32) ),* ],
                 &[ $( ($ao, $acl, $an as u32) ),* ],
                 _cap_hint,
             )
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
+    };
+
+    // One line rule of the `context()` header, as a `LineModel` entry.
+    (@block_simple fence($byte:literal, $min:literal)) => {
+        $crate::BlockSimpleRule::Fence { byte: $byte, min: $min as u8 }
+    };
+    (@block_simple cont($byte:literal)) => {
+        $crate::BlockSimpleRule::Cont { byte: $byte }
+    };
+    (@block marker($($byte:literal),+)) => {
+        $crate::BlockRule::Marker { bytes: &[$($byte),+] }
+    };
+    (@block num($($end:literal),+)) => {
+        $crate::BlockRule::Num { ends: &[$($end),+] }
+    };
+    (@lines marker($byte:literal, $max:literal)) => {
+        $crate::LineRule::Marker { byte: $byte, max: $max as u8 }
+    };
+    (@lines uniform([$($byte:literal),+], $min:literal)) => {
+        $crate::LineRule::Uniform { bytes: &[$($byte),+], min: $min as u32 }
     };
 
     // Entry without a context header: finders only, no `context()`.
@@ -274,7 +305,7 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     line_marker($byte:literal, $max:literal, $ty:ty, $var:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     line_marker($byte:literal, $max:literal, $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
@@ -289,14 +320,14 @@ macro_rules! define_standalone_fns {
                 let mut _cur = ctx.cursor();
                 $crate::LineMarkerIter::new(source, $byte, $max as u8, $eol, $sep,
                     |$var| $ty { $($body)* })
-                    .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
+                    .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Line($rule)))
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     line_uniform([$($byte:literal),+], $min:literal, $ty:ty, $var:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     line_uniform([$($byte:literal),+], $min:literal, $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
@@ -317,7 +348,7 @@ macro_rules! define_standalone_fns {
                     |b| ::core::matches!(b, $($byte)|+),
                     |$var| $ty { $($body)* },
                 )
-                .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
+                .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Line($rule)))
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
@@ -346,6 +377,8 @@ macro_rules! define_standalone_fns {
                 source: &'s [u8],
                 ctx: &'s $crate::ParseContext,
             ) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + 's {
+                // Frames come innermost-first, so their starts are not in
+                // order: the cursor steps back to an outer frame's start.
                 let mut _cur = ctx.cursor();
                 $crate::ContIter::new(source, $byte, $eol, $sep, $tab, $maxn as usize)
                     .filter(move |s| !_cur.is_covered(s.start as usize))
@@ -355,7 +388,7 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     block_marker([$($byte:literal),+], $ty:ty, $var:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     block_marker([$($byte:literal),+], $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
@@ -376,14 +409,14 @@ macro_rules! define_standalone_fns {
                     |b| ::core::matches!(b, $($byte)|+),
                     |$var| $ty { $($body)* },
                 )
-                .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
+                .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Block($rule)))
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     block_numbered([$($end:literal),+], $ty:ty, $nvar:ident, $kvar:ident) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     block_numbered([$($end:literal),+], $ty:ty, $nvar:ident, $kvar:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
@@ -404,7 +437,7 @@ macro_rules! define_standalone_fns {
                     |b| ::core::matches!(b, $($end)|+),
                     |$nvar, $kvar| $ty { $($body)* },
                 )
-                .filter(move |(_, s)| !_cur.is_covered(s.start as usize))
+                .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Block($rule)))
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }

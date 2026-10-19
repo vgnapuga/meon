@@ -3,20 +3,21 @@
 //!
 //! Each is the same streaming matcher as its context-free sibling
 //! ([`super::symmetric::SymmetricExactIter`] /
-//! [`super::asymmetric::AsymmetricExactIter`]) with two context-driven
-//! additions:
+//! [`super::asymmetric::AsymmetricExactIter`]), reading the source through a
+//! [`ParseContext`](super::context::ParseContext) the way the full parse
+//! does:
 //!
-//! - a candidate delimiter whose position lies inside a
-//!   [`ParseContext`](super::context::ParseContext) opaque region is skipped,
-//!   and the scan resumes after that region;
-//! - a *multi-line* opaque region (a fenced block — inline regions never
-//!   contain an `eol`) encountered during the close search aborts the pending
-//!   opener: a block construct ends the paragraph in the full parse, so a
-//!   pair never spans a fence.
-//!
-//! Like the context-free siblings, matching is paragraph-bounded: a pair may
-//! span single line breaks, and an empty line (two consecutive `eol` bytes)
-//! or the end of input aborts a pending opener.
+//! - a candidate delimiter whose position lies inside an opaque region is
+//!   skipped, and the scan resumes after that region;
+//! - a candidate among a line's markers (a bullet, a heading's `#` run, a
+//!   blockquote's `>`) is no delimiter: the full parse scans only the content
+//!   after them;
+//! - the close search stays inside the opener's inline run, with lines read
+//!   through the context's [`LineModel`](super::context::LineModel): from a
+//!   paragraph line the run goes on through the following paragraph lines,
+//!   up to an empty line (two consecutive `eol` bytes), a line some rule
+//!   claims — a fence, a blockquote line, a list item, a heading — or the end
+//!   of input; from any other line it is the rest of that line.
 //!
 //! The context suppresses **candidate positions**, not enclosing spans: a
 //! returned span may legally *contain* an opaque region (`**a `code` b**`
@@ -25,11 +26,13 @@
 //! Line-family rules (`line`, `line_simple`, `cont`, `block`, `num`) do not
 //! need dedicated context-aware iterators: their matches are
 //! position-independent per line, so the generated `find_context_*` methods
-//! reuse the context-free iterator and post-filter items whose span start is
-//! covered — which is candidate-exact for whole-line constructs.
+//! reuse the context-free iterator and keep the items whose line the context
+//! admits (see
+//! [`ContextCursor::admits`](super::context::ContextCursor::admits)) or, for
+//! `cont`, whose marker no region covers.
 
 use super::common::{Span, count_escape, next_in_paragraph};
-use super::context::{ContextCursor, ParseContext};
+use super::context::{ContextCursor, LineReader, ParseContext};
 
 /// Context-aware variant of [`super::symmetric::SymmetricExactIter`].
 ///
@@ -43,12 +46,18 @@ pub struct ContextSymmetricExactIter<'a> {
     escape: u8,
     pos: usize,
     cur: ContextCursor<'a>,
+    lines: LineReader<'a>,
+    /// May the delimiter byte fall among a line's markers?
+    marked: bool,
+    /// Is the delimiter byte also a `cont` marker?
+    straddles: bool,
 }
 
 impl<'a> ContextSymmetricExactIter<'a> {
     /// Create a context-aware symmetric exact-delimiter iterator. Parameters
     /// as in the context-free sibling, plus the prebuilt `ctx` (borrowed for
-    /// the iterator's lifetime).
+    /// the iterator's lifetime). `ctx` splits lines with the `eol` of its
+    /// [`LineModel`](super::context::LineModel); pass the same byte.
     pub fn new(
         src: &'a [u8],
         byte: u8,
@@ -65,6 +74,9 @@ impl<'a> ContextSymmetricExactIter<'a> {
             escape,
             pos: 0,
             cur: ctx.cursor(),
+            lines: ctx.reader(),
+            marked: ctx.reader().marks(byte),
+            straddles: ctx.lines().is_cont(byte),
         }
     }
 }
@@ -98,26 +110,40 @@ impl Iterator for ContextSymmetricExactIter<'_> {
                 end += 1;
             }
 
+            // A line's markers are no delimiters. Only a run that opens is
+            // checked: a run of another length is no opener either way,
+            // unless the delimiter byte is also a `cont` marker, when the
+            // run may begin among the markers and go on into content.
             if c != self.count {
-                self.pos = end;
+                self.pos = if self.straddles && self.lines.in_markers(src, p) {
+                    p + 1
+                } else {
+                    end
+                };
+                continue;
+            }
+            if self.marked && self.lines.in_markers(src, p) {
+                self.pos = p + 1;
                 continue;
             }
 
-            // Close scan, paragraph-bounded and opaque-aware. Fork the cursor
-            // for the lookahead: close candidates are `>= p`, for which the
-            // parent cursor's index is already valid.
+            // Close scan inside the opener's inline run, opaque-aware. Fork
+            // the cursor for the lookahead: close candidates are `>= p`, for
+            // which the parent cursor's index is already valid. The opener's
+            // line is read when the scan first meets its end.
+            let mut para: Option<bool> = None;
+            let lines = &mut self.lines;
             let cs = end;
             let mut j = cs;
             let mut ccur = self.cur;
             let eol = self.eol;
             let close = loop {
-                // A region opening at a line start is either a fenced block
-                // (multi-line: the paragraph ends, the opener dies) or an
-                // inline region leading the line (skipped wholesale).
-                let enter_line = |ls: usize| match ccur.covering_end(ls) {
-                    Some(ce) if memchr::memchr(eol, &src[ls..ce]).is_some() => None,
-                    Some(ce) => Some(ce),
-                    None => Some(ls),
+                // Only a paragraph line goes on with a paragraph run; an
+                // opaque region leading it is skipped wholesale.
+                let enter_line = |ls: usize| {
+                    lines
+                        .crosses(src, p, ls, &mut para)
+                        .then(|| ccur.covering_end(ls).unwrap_or(ls))
                 };
                 let Some(q) = next_in_paragraph(src, j, self.byte, eol, enter_line) else {
                     break None;
@@ -164,11 +190,17 @@ pub struct ContextAsymmetricExactIter<'a> {
     escape: u8,
     pos: usize,
     cur: ContextCursor<'a>,
+    lines: LineReader<'a>,
+    /// May the delimiter byte fall among a line's markers?
+    marked: bool,
+    /// Is the delimiter byte also a `cont` marker?
+    straddles: bool,
 }
 
 impl<'a> ContextAsymmetricExactIter<'a> {
     /// Create a context-aware asymmetric exact-delimiter iterator. Parameters
-    /// as in the context-free sibling, plus the prebuilt `ctx`.
+    /// as in the context-free sibling, plus the prebuilt `ctx`, as in
+    /// [`ContextSymmetricExactIter::new`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         src: &'a [u8],
@@ -188,6 +220,9 @@ impl<'a> ContextAsymmetricExactIter<'a> {
             escape,
             pos: 0,
             cur: ctx.cursor(),
+            lines: ctx.reader(),
+            marked: ctx.reader().marks(open),
+            straddles: ctx.lines().is_cont(open),
         }
     }
 }
@@ -218,20 +253,34 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
                 end += 1;
             }
 
+            // A line's markers are no delimiters. Only a run that opens is
+            // checked: a run of another length is no opener either way,
+            // unless the delimiter byte is also a `cont` marker, when the
+            // run may begin among the markers and go on into content.
             if c != self.count {
-                self.pos = end;
+                self.pos = if self.straddles && self.lines.in_markers(src, p) {
+                    p + 1
+                } else {
+                    end
+                };
+                continue;
+            }
+            if self.marked && self.lines.in_markers(src, p) {
+                self.pos = p + 1;
                 continue;
             }
 
+            let mut para: Option<bool> = None;
+            let lines = &mut self.lines;
             let cs = end;
             let mut j = cs;
             let mut ccur = self.cur;
             let eol = self.eol;
             let close = loop {
-                let enter_line = |ls: usize| match ccur.covering_end(ls) {
-                    Some(ce) if memchr::memchr(eol, &src[ls..ce]).is_some() => None,
-                    Some(ce) => Some(ce),
-                    None => Some(ls),
+                let enter_line = |ls: usize| {
+                    lines
+                        .crosses(src, p, ls, &mut para)
+                        .then(|| ccur.covering_end(ls).unwrap_or(ls))
                 };
                 let Some(q) = next_in_paragraph(src, j, self.close, eol, enter_line) else {
                     break None;
@@ -260,18 +309,40 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
 mod tests {
     use super::*;
 
+    use crate::engine::text_parser::standalone::context::{
+        BlockRule, BlockSimpleRule, LineModel, LineRule,
+    };
+
+    /// meon-md's line rules.
+    const MD_LINES: LineModel = LineModel {
+        eol: b'\n',
+        sep: b' ',
+        tab: b'\t',
+        max_nest: 4,
+        block_simple: &[
+            BlockSimpleRule::Fence { byte: b'`', min: 3 },
+            BlockSimpleRule::Cont { byte: b'>' },
+        ],
+        block: &[
+            BlockRule::Marker { bytes: b"-*+" },
+            BlockRule::Num { ends: b".)" },
+        ],
+        lines: &[
+            LineRule::Marker { byte: b'#', max: 6 },
+            LineRule::Uniform {
+                bytes: b"-*_",
+                min: 3,
+            },
+        ],
+    };
+
     fn md_context(src: &[u8]) -> ParseContext {
-        ParseContext::build(
-            src,
-            b'\n',
-            b'\\',
-            b' ',
-            b'\t',
-            &[(b'`', 3)],
-            &[(b'`', 1)],
-            &[(b'<', b'>', 1)],
-            0,
-        )
+        ParseContext::build(src, b'\\', MD_LINES, &[(b'`', 1)], &[(b'<', b'>', 1)], 0)
+    }
+
+    fn sym(src: &[u8], count: u32) -> Vec<Span> {
+        let ctx = md_context(src);
+        ContextSymmetricExactIter::new(src, b'*', count, b'\n', b'\\', &ctx).collect()
     }
 
     // 01. Empty context: identical behaviour to the context-free iterator
@@ -476,5 +547,83 @@ mod tests {
         let spans: Vec<_> =
             ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(1, 8)]);
+    }
+
+    // ---- Line structure ---------------------------------------------- //
+
+    // 18. A line's markers are no delimiters: an asterisk bullet, a thematic
+    //     break made of the delimiter byte
+    #[test]
+    fn test_18_markers_are_no_delimiters() {
+        assert_eq!(sym(b"* item with *emphasis*", 1), vec![Span::new(13, 21)]);
+        assert_eq!(sym(b"***\n***a***", 3), vec![Span::new(7, 8)]);
+    }
+
+    // 19. A pair does not go on from a paragraph line into a line a rule
+    //     claims; between paragraph lines it does
+    #[test]
+    fn test_19_paragraph_run_ends_at_block_line() {
+        assert!(sym(b"**a\n- b**", 2).is_empty());
+        assert!(sym(b"**a\n# b**", 2).is_empty());
+        assert!(sym(b"**a\n> b**", 2).is_empty());
+        assert_eq!(sym(b"**a\nb**", 2), vec![Span::new(2, 5)]);
+    }
+
+    // 20. From a block line the run is the rest of that line
+    #[test]
+    fn test_20_block_line_run_is_one_line() {
+        assert!(sym(b"- **a\nb**", 2).is_empty());
+        assert!(sym(b"> **a\n> b**", 2).is_empty());
+        assert_eq!(sym(b"- **a** **b\n- c**", 2), vec![Span::new(4, 5)]);
+    }
+
+    // 21. An opaque region over several paragraph lines, leading a line the
+    //     close search enters, is skipped like any other
+    #[test]
+    fn test_21_multi_line_region_is_skipped() {
+        assert_eq!(sym(b"**a `x\ny\nz` b**", 2), vec![Span::new(2, 13)]);
+    }
+
+    // 22. Everything inside a fence within a blockquote is suppressed
+    #[test]
+    fn test_22_fence_inside_blockquote() {
+        assert_eq!(
+            sym(b"> ```\n> *x* *y*\n> ```\n*z*", 1),
+            vec![Span::new(23, 24)]
+        );
+    }
+
+    // 23. The asymmetric iterator reads lines the same way
+    #[test]
+    fn test_23_asymmetric_line_structure() {
+        let asym = |src: &[u8]| -> Vec<Span> {
+            let ctx = md_context(src);
+            ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx).collect()
+        };
+        assert!(asym(b"{a\n# b} c").is_empty());
+        assert!(asym(b"- {a\nb}").is_empty());
+        assert_eq!(asym(b"{a\nb} c"), vec![Span::new(1, 4)]);
+    }
+
+    // 24. A delimiter run that begins among a line's markers goes on into
+    //     content when the delimiter byte is also a `cont` marker, and a
+    //     bullet on a later line is a marker there too
+    #[test]
+    fn test_24_runs_across_markers() {
+        const PIPES: LineModel = LineModel {
+            eol: b'\n',
+            sep: b' ',
+            tab: b'\t',
+            max_nest: 1,
+            block_simple: &[BlockSimpleRule::Cont { byte: b'|' }],
+            block: &[],
+            lines: &[],
+        };
+        let src = b"||x|\n";
+        let ctx = ParseContext::build(src, b'\\', PIPES, &[], &[], 0);
+        let spans: Vec<_> =
+            ContextSymmetricExactIter::new(src, b'|', 1, b'\n', b'\\', &ctx).collect();
+        assert_eq!(spans, vec![Span::new(2, 3)]);
+        assert_eq!(sym(b"x\n* *y*\n", 1), vec![Span::new(5, 6)]);
     }
 }
