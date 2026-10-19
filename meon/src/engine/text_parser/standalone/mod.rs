@@ -40,8 +40,8 @@
 //! | [`ContIter`] | `cont(byte)` | `Span` |
 //! | [`BlockMarkerIter`] | `block { (pattern) }` | `(T, Span)` |
 //! | [`BlockNumberedIter`] | `block { num(...) }` | `(T, Span)` |
-//! | [`ContextSymmetricExactIter`] | `symmetric byte { parse_inside = false; N => field }` | `Span` |
-//! | [`ContextAsymmetricExactIter`] | `asymmetric open, close { parse_inside = false; N => field }` | `Span` |
+//! | [`ContextSymmetricExactIter`] | `symmetric byte { parse_inside = true; N => field }` | `Span` |
+//! | [`ContextAsymmetricExactIter`] | `asymmetric open, close { parse_inside = true; N => field }` | `Span` |
 //!
 //! [`SymmetricExactIter`]: symmetric::SymmetricExactIter
 //! [`AsymmetricExactIter`]: asymmetric::AsymmetricExactIter
@@ -137,19 +137,23 @@ pub mod symmetric;
 #[macro_export]
 macro_rules! define_standalone_fns {
     // Entry with a `context { ... }` header (emitted by `define_parser!` from
-    // the grammar's line rules and its `parse_inside = false` inline rules).
-    // Emits `context()` alongside the finders.
+    // the grammar's line rules, its `parse_inside = false` symmetric and
+    // asymmetric rules, and its `chained` rules with both components
+    // `parse_inside = false`). Emits `context()` alongside the finders.
     (sep=$sep:literal, eol=$eol:literal, tab=$tab:literal, escape=$esc:literal, max_nest=$maxn:literal ;
      context { caps         [ $( $cap:literal ),* ]
                sym          [ $( ($sb:literal, $sc:literal) ),* ]
                asym         [ $( ($ao:literal, $acl:literal, $an:literal) ),* ]
+               chained      [ $( ($cto:literal, $ctc:literal, $ctb:literal,
+                                  $cuo:literal, $cuc:literal, $cub:literal) ),* ]
                block_simple [ $( $bsk:ident ( $($bsa:tt)* ) ),* ]
                block        [ $( $bk:ident ( $($ba:tt)* ) ),* ]
                lines        [ $( $lk:ident ( $($la:tt)* ) ),* ] }
      $($rest:tt)*) => {
         /// Build the [`ParseContext`](crate::ParseContext) for `source`:
-        /// every fenced block and every `parse_inside = false` inline
-        /// construct of this grammar, resolved leftmost-first in one
+        /// every fenced block and every opaque inline construct of this
+        /// grammar — a `parse_inside = false` rule, or a `chained` match
+        /// whose components both are — resolved leftmost-first in one
         /// streaming pass that reads lines through this grammar's line rules.
         /// The region vector is preallocated from the same `[cap]` divisors
         /// that size the content vectors. Feed the result to the
@@ -169,6 +173,12 @@ macro_rules! define_standalone_fns {
                 source, $esc, LINES,
                 &[ $( ($sb, $sc as u32) ),* ],
                 &[ $( ($ao, $acl, $an as u32) ),* ],
+                &[ $( $crate::ChainSpec {
+                    text: ($cto, $ctc),
+                    text_balanced: $ctb,
+                    url: ($cuo, $cuc),
+                    url_balanced: $cub,
+                } ),* ],
                 _cap_hint,
             )
         }

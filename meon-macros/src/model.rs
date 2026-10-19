@@ -48,6 +48,13 @@ pub(crate) fn standalone_field(rule: &StandaloneRule) -> &Ident {
     }
 }
 
+/// The settings of one `chained` component.
+#[derive(Clone, Copy)]
+pub(crate) struct ChainedFlags {
+    pub(crate) parse_inside: bool,
+    pub(crate) balanced: bool,
+}
+
 /// One standalone finder to generate.
 ///
 /// Each variant mirrors a grammar construct and carries exactly the literals,
@@ -86,6 +93,14 @@ pub(crate) enum StandaloneRule {
         pf: Ident,
         ff: Ident,
         sf: Ident,
+        /// The `parse_inside` and `balanced` flags of the text component.
+        /// With both components `parse_inside = false` the rule is a context
+        /// source.
+        text_flags: ChainedFlags,
+        /// The `parse_inside` and `balanced` flags of the url component.
+        url_flags: ChainedFlags,
+        /// See [`StandaloneRule::SymmetricExact::cap`].
+        cap: Literal,
     },
     KeyValue {
         field: Ident,

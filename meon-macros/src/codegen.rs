@@ -55,12 +55,14 @@ pub(crate) fn build_standalone_dsl(
     rules: &[StandaloneRule],
 ) -> TS2 {
     // The context spec: the capacity divisors of every fence and opaque
-    // rule, the `parse_inside = false` symmetric/asymmetric rules, and the
+    // rule, the `parse_inside = false` symmetric/asymmetric rules, the
+    // `chained` rules with both components `parse_inside = false`, and the
     // grammar's line rules, each section in declaration order. Consumed by
     // `define_standalone_fns!` to emit `context()`.
     let mut ctx_caps: Vec<TS2> = Vec::new();
     let mut ctx_sym: Vec<TS2> = Vec::new();
     let mut ctx_asym: Vec<TS2> = Vec::new();
+    let mut ctx_chained: Vec<TS2> = Vec::new();
     let mut ctx_block_simple: Vec<TS2> = Vec::new();
     let mut ctx_block: Vec<TS2> = Vec::new();
     let mut ctx_lines: Vec<TS2> = Vec::new();
@@ -94,6 +96,20 @@ pub(crate) fn build_standalone_dsl(
                 ctx_caps.push(quote! { #cap });
                 ctx_asym.push(quote! { (#open, #close, #count) });
             }
+            StandaloneRule::Chained {
+                open1,
+                close1,
+                open2,
+                close2,
+                text_flags,
+                url_flags,
+                cap,
+                ..
+            } if !text_flags.parse_inside && !url_flags.parse_inside => {
+                let (tb, ub) = (text_flags.balanced, url_flags.balanced);
+                ctx_caps.push(quote! { #cap });
+                ctx_chained.push(quote! { (#open1, #close1, #tb, #open2, #close2, #ub) });
+            }
             StandaloneRule::BlockMarker { bytes, .. } => {
                 ctx_block.push(quote! { marker(#(#bytes),*) });
             }
@@ -114,6 +130,7 @@ pub(crate) fn build_standalone_dsl(
             caps [ #(#ctx_caps),* ]
             sym [ #(#ctx_sym),* ]
             asym [ #(#ctx_asym),* ]
+            chained [ #(#ctx_chained),* ]
             block_simple [ #(#ctx_block_simple),* ]
             block [ #(#ctx_block),* ]
             lines [ #(#ctx_lines),* ]
@@ -145,7 +162,7 @@ pub(crate) fn build_standalone_dsl(
             let o = opacity(*opaque);
             quote! { asymmetric_exact(#open, #close, #count, #o) => #field; }
         }
-        StandaloneRule::Chained { field, open1, close1, open2, close2, prefix, ty, pf, ff, sf } =>
+        StandaloneRule::Chained { field, open1, close1, open2, close2, prefix, ty, pf, ff, sf, .. } =>
             quote! { chained(#open1, #close1, #open2, #close2, #prefix, #ty, #pf, #ff, #sf) => #field; },
         StandaloneRule::KeyValue { field, eq, end, allow_sep, ty, kf, vf } => {
             let allow = if *allow_sep { quote!(true) } else { quote!(false) };

@@ -569,4 +569,37 @@ mod tests {
             &s[idx..idx + 20]
         );
     }
+
+    // 21. A `chained` rule with both components opaque feeds `context()`; one
+    //     with a transparent component does not
+    #[test]
+    fn test_21_chained_context_source() {
+        let grammar = |text_inside: bool| {
+            quote! {
+                Demo {
+                    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                    inline {
+                        on_trigger(b'[') {
+                            chained: Link {
+                                | b'[', b']' | { parse_inside = #text_inside; balanced = false; } => text,
+                                | b'(', b')' | { parse_inside = false; balanced = true; } => url,
+                                prefix | b'!' | => is_image,
+                            } => links [70]
+                        }
+                        fallback => texts [10];
+                    }
+                }
+            }
+        };
+        let compact = |s: String| s.split_whitespace().collect::<String>();
+        let opaque = compact(expand_str(grammar(false)));
+        assert!(
+            opaque.contains("chained[(b'[',b']',false,b'(',b')',true)]"),
+            "{opaque}"
+        );
+        assert!(opaque.contains("caps[70]"), "{opaque}");
+        let mixed = compact(expand_str(grammar(true)));
+        assert!(mixed.contains("chained[]"), "{mixed}");
+        assert!(mixed.contains("caps[]"), "{mixed}");
+    }
 }

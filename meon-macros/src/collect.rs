@@ -35,7 +35,7 @@ use proc_macro2::{Delimiter, Ident, Literal, Span as PS, TokenStream as TS2, Tok
 
 use crate::cursor::Cursor;
 use crate::error::{Error, Result};
-use crate::model::{CF, StandaloneRule};
+use crate::model::{CF, ChainedFlags, StandaloneRule};
 
 /// Walk the `inline { ... }` section.
 pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
@@ -145,8 +145,8 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     let ty = c.collect_until_brace();
                     let inner = c.next_group(Delimiter::Brace, "chained inner")?;
                     let (f, cap) = c.arrow_field_cap("chained")?;
-                    cf.inline.push((f.clone(), ty.clone(), cap));
-                    collect_chained_standalone(inner.stream(), ty, f, cf)?;
+                    cf.inline.push((f.clone(), ty.clone(), cap.clone()));
+                    collect_chained_standalone(inner.stream(), ty, f, cap, cf)?;
                 }
                 "key_value" => {
                     c.advance();
@@ -294,13 +294,22 @@ fn collect_asymmetric_standalone(
     Ok(())
 }
 
-/// Extract the two delimiter pairs and prefix of a `chained` block.
-fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF) -> Result<()> {
+/// Extract the two delimiter pairs, their settings and the prefix of a
+/// `chained` block.
+fn collect_chained_standalone(
+    ts: TS2,
+    ty: TS2,
+    outer_field: Ident,
+    cap: Literal,
+    cf: &mut CF,
+) -> Result<()> {
     let mut c = Cursor::new(ts);
     let mut open1: Option<Literal> = None;
     let mut close1: Option<Literal> = None;
     let mut open2: Option<Literal> = None;
     let mut close2: Option<Literal> = None;
+    let mut flags1: Option<ChainedFlags> = None;
+    let mut flags2: Option<ChainedFlags> = None;
     let mut prefix_lit: Option<Literal> = None;
     let mut ff: Option<Ident> = None;
     let mut sf: Option<Ident> = None;
@@ -319,18 +328,20 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                     }
                 }
                 let settings = c.next_group(Delimiter::Brace, "chained settings")?;
-                require_flag(
-                    settings.stream(),
-                    "parse_inside",
-                    settings.span(),
-                    "chained component",
-                )?;
-                require_flag(
-                    settings.stream(),
-                    "balanced",
-                    settings.span(),
-                    "chained component",
-                )?;
+                let flags = ChainedFlags {
+                    parse_inside: require_flag(
+                        settings.stream(),
+                        "parse_inside",
+                        settings.span(),
+                        "chained component",
+                    )?,
+                    balanced: require_flag(
+                        settings.stream(),
+                        "balanced",
+                        settings.span(),
+                        "chained component",
+                    )?,
+                };
                 if c.is_fat_arrow() {
                     c.pos += 2;
                     let fi = c.next_ident("chained field")?;
@@ -338,10 +349,12 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                     if open1.is_none() {
                         open1 = Some(o);
                         close1 = Some(cl);
+                        flags1 = Some(flags);
                         ff = Some(fi);
                     } else {
                         open2 = Some(o);
                         close2 = Some(cl);
+                        flags2 = Some(flags);
                         sf = Some(fi);
                     }
                 }
@@ -373,8 +386,22 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
         }
     }
 
-    match (open1, close1, open2, close2, prefix_lit, pf, ff, sf) {
-        (Some(o1), Some(c1), Some(o2), Some(c2), Some(p), Some(pfi), Some(ffi), Some(sfi)) => {
+    match (
+        (open1, close1, flags1),
+        (open2, close2, flags2),
+        prefix_lit,
+        pf,
+        ff,
+        sf,
+    ) {
+        (
+            (Some(o1), Some(c1), Some(f1)),
+            (Some(o2), Some(c2), Some(f2)),
+            Some(p),
+            Some(pfi),
+            Some(ffi),
+            Some(sfi),
+        ) => {
             cf.standalone.push(StandaloneRule::Chained {
                 field: outer_field,
                 open1: o1,
@@ -386,6 +413,9 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                 pf: pfi,
                 ff: ffi,
                 sf: sfi,
+                text_flags: f1,
+                url_flags: f2,
+                cap,
             });
             Ok(())
         }
@@ -839,6 +869,42 @@ mod tests {
         assert_eq!(cf.inline.len(), 1);
         assert_eq!(cf.inline[0].0.to_string(), "links");
         assert_eq!(standalone_field(&cf.standalone[0]).to_string(), "links");
+        let StandaloneRule::Chained {
+            text_flags,
+            url_flags,
+            cap,
+            ..
+        } = &cf.standalone[0]
+        else {
+            panic!("expected a Chained rule");
+        };
+        assert!(!text_flags.parse_inside && !text_flags.balanced);
+        assert!(!url_flags.parse_inside && !url_flags.balanced);
+        assert_eq!(cap.to_string(), "100");
+    }
+
+    // 05b. The settings of each chained component are kept apart
+    #[test]
+    fn test_05b_chained_component_flags() {
+        let cf = ci(quote! {
+            on_trigger(b'[') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = true; } => text,
+                    | b'(', b')' | { balanced = false; parse_inside = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links [50]
+            }
+        });
+        let StandaloneRule::Chained {
+            text_flags,
+            url_flags,
+            ..
+        } = &cf.standalone[0]
+        else {
+            panic!("expected a Chained rule");
+        };
+        assert!(text_flags.parse_inside && text_flags.balanced);
+        assert!(!url_flags.parse_inside && !url_flags.balanced);
     }
 
     // 06. on_trigger: key_value block produces a typed inline field and a KeyValue rule

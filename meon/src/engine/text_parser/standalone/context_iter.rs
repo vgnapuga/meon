@@ -310,7 +310,7 @@ mod tests {
     use super::*;
 
     use crate::engine::text_parser::standalone::context::{
-        BlockRule, BlockSimpleRule, LineModel, LineRule,
+        BlockRule, BlockSimpleRule, ChainSpec, LineModel, LineRule,
     };
 
     /// meon-md's line rules.
@@ -337,7 +337,21 @@ mod tests {
     };
 
     fn md_context(src: &[u8]) -> ParseContext {
-        ParseContext::build(src, b'\\', MD_LINES, &[(b'`', 1)], &[(b'<', b'>', 1)], 0)
+        const LINKS: ChainSpec = ChainSpec {
+            text: (b'[', b']'),
+            text_balanced: false,
+            url: (b'(', b')'),
+            url_balanced: false,
+        };
+        ParseContext::build(
+            src,
+            b'\\',
+            MD_LINES,
+            &[(b'`', 1)],
+            &[(b'<', b'>', 1)],
+            &[LINKS],
+            0,
+        )
     }
 
     fn sym(src: &[u8], count: u32) -> Vec<Span> {
@@ -620,10 +634,19 @@ mod tests {
             lines: &[],
         };
         let src = b"||x|\n";
-        let ctx = ParseContext::build(src, b'\\', PIPES, &[], &[], 0);
+        let ctx = ParseContext::build(src, b'\\', PIPES, &[], &[], &[], 0);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'|', 1, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(2, 3)]);
         assert_eq!(sym(b"x\n* *y*\n", 1), vec![Span::new(5, 6)]);
+    }
+
+    // 25. A delimiter inside a link is no candidate, and a pair's close
+    //     search skips over a link
+    #[test]
+    fn test_25_links_are_opaque() {
+        assert_eq!(sym(b"[*a*](b) *c*", 1), vec![Span::new(10, 11)]);
+        assert_eq!(sym(b"*a [b*](c) d*", 1), vec![Span::new(1, 12)]);
+        assert_eq!(sym(b"[**a**](b)", 2), vec![]);
     }
 }

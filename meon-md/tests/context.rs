@@ -317,11 +317,51 @@ fn test_18_mixed_document() {
 #[test]
 fn test_19_blockquote_frames_any_order() {
     let src = b"`x\n> y`\n> > z\n";
-    let ctx =
-        meon::ParseContext::build(src, b'\\', meon::LineModel::default(), &[(b'`', 1)], &[], 0);
+    let ctx = meon::ParseContext::build(
+        src,
+        b'\\',
+        meon::LineModel::default(),
+        &[(b'`', 1)],
+        &[],
+        &[],
+        0,
+    );
     assert_eq!(ctx.spans(), &[Span::new(0, 7)]);
     assert_eq!(
         spans(MarkdownParser::find_context_blockquotes(src, &ctx)),
         vec![(10, 14)],
     );
+}
+
+// 20. Links are opaque: emphasis inside link text or url is not found, and a
+//     pair's close search steps over a link
+#[test]
+fn test_20_links_are_opaque() {
+    let src = b"[**Docs**](https://docs.rs) and *real*\n";
+    let ctx = MarkdownParser::context(src);
+    assert_eq!(ctx.spans(), &[Span::new(0, 27)]);
+    assert_eq!(spans(MarkdownParser::find_context_bolds(src, &ctx)), vec![]);
+    assert_eq!(spans(MarkdownParser::find_bolds(src)), vec![(3, 7)]);
+    assert_agrees(src);
+    assert_agrees(b"* [***GitHub***](https://github.com/x)\n* **crate**\n");
+    assert_agrees(b"*a [b*](c) d*\n");
+    assert_agrees(b"![*img*](u) [x] *y* [z](w\n");
+}
+
+// 21. Links and code spans resolve leftmost-first
+#[test]
+fn test_21_links_and_code_spans() {
+    assert_agrees(b"[a `b](c) *d* `\n");
+    assert_agrees(b"[a `b](c)` *d*\n");
+    assert_agrees(b"`[a`](b) *c*\n");
+    assert_agrees(b"[a `*b*`] (c)\n");
+}
+
+// 22. A link lies in one inline run
+#[test]
+fn test_22_links_in_inline_runs() {
+    assert_agrees(b"see [the\n*docs*](u) *now*\n");
+    assert_agrees(b"[a\n# *b*](c)\n");
+    assert_agrees(b"- [a *b*\n](c) *d*\n");
+    assert_agrees(b"> [a](b\n> *c*)\n");
 }

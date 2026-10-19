@@ -6,8 +6,8 @@
 //!
 //! Context-free standalone iterators (`find_*`) are documented to diverge from
 //! the full parse: they match delimiters inside fenced blocks and inside
-//! opaque inline constructs (code spans, strings, autolinks — any rule with
-//! `parse_inside = false`), because they carry no cross-element state.
+//! opaque inline constructs (code spans, strings, autolinks, links — any rule
+//! with `parse_inside = false`), because they carry no cross-element state.
 //!
 //! A [`ParseContext`] closes most of that gap. It is built by **one**
 //! streaming pass over the source — a single unified needle search per
@@ -53,10 +53,15 @@
 //!    fence covers to the end of input.
 //! 2. Any other hit is an **opaque inline rule** trigger, matched inside the
 //!    inline run that holds it, escape-aware throughout, exactly-count on
-//!    both sides for symmetric rules. A hit among a line's markers is not a
-//!    trigger. A matched construct covers its full extent, delimiters
-//!    included, and the scan resumes after it — so overlapping opaque
-//!    candidates resolve leftmost-first, like the full parser's trigger loop.
+//!    both sides for symmetric rules. A `chained` rule whose components are
+//!    both opaque opens at the last byte of a run of its open byte; the text
+//!    close, the url open right after it and the url close must all lie in
+//!    the run, and the match covers the open byte through the url close. A
+//!    hit among a line's markers is not a trigger. A matched construct covers
+//!    its full extent, delimiters included, and the scan resumes after it —
+//!    so overlapping opaque candidates resolve leftmost-first, like the full
+//!    parser's trigger loop. A `chained` match that fails resumes the scan
+//!    right after its open run, so its text is scanned like any other.
 //!
 //! The result is a sorted, non-overlapping `Vec<Span>` of opaque regions,
 //! preallocated from the grammar's own capacity divisors (the same `[cap]`
@@ -78,6 +83,12 @@
 //!   iterator's, kept by the position of their marker: a frame whose marker
 //!   sits inside a fence is dropped whole, even when its run goes on past the
 //!   fence.
+//! - A `chained` rule with a transparent component is no context source. The
+//!   full parse makes an opaque component of its match opaque while the match
+//!   is in it — up to the end of the inline run when that component never
+//!   closes — and those bytes are not covered here. In a grammar that also
+//!   has an opaque `chained` rule, an opaque match the full parse never
+//!   reaches inside such a match is still covered.
 //! - This construction's own closing search is escape-aware (matching the
 //!   full parser); the context-free `find_*` close search is not.
 
@@ -87,6 +98,21 @@ use super::common::{Span, count_escape, find_line_end, next_in_paragraph};
 pub type SymSpec = (u8, u32);
 /// One opaque asymmetric rule: `(open byte, close byte, exact open count)`.
 pub type AsymSpec = (u8, u8, u32);
+
+/// One opaque `chained` rule: both its components are `parse_inside = false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainSpec {
+    /// The text component's open and close bytes.
+    pub text: (u8, u8),
+    /// The text component's `balanced` flag: each unescaped open byte nests
+    /// one level.
+    pub text_balanced: bool,
+    /// The url component's open and close bytes; the open byte must follow
+    /// the text close.
+    pub url: (u8, u8),
+    /// The url component's `balanced` flag.
+    pub url_balanced: bool,
+}
 
 /// Maximum distinct needle bytes: up to 3 fence bytes plus up to 8 opaque
 /// triggers, deduplicated.
@@ -820,6 +846,8 @@ impl ParseContext {
     ///   of the pass.
     /// - `sym` — every `symmetric` arm with `parse_inside = false`.
     /// - `asym` — every `asymmetric` arm with `parse_inside = false`.
+    /// - `chained` — every `chained` rule whose components are both
+    ///   `parse_inside = false`.
     /// - `cap_hint` — preallocation hint for the region vector; the generated
     ///   `Parser::context` derives it from the grammar's `[cap]` divisors
     ///   (`0` is always safe and merely re-grows).
@@ -832,6 +860,7 @@ impl ParseContext {
         lines: LineModel,
         sym: &[SymSpec],
         asym: &[AsymSpec],
+        chained: &[ChainSpec],
         cap_hint: usize,
     ) -> Self {
         let len = source.len();
@@ -842,11 +871,12 @@ impl ParseContext {
         // together — so every iteration issues exactly ONE search
         // (memchr/2/3, or SWAR beyond three distinct bytes), never several.
         let mut needle_buf = [0u8; MAX_NEEDLES];
-        let nn = build_needles(lines.block_simple, sym, asym, &mut needle_buf);
+        let nn = build_needles(lines.block_simple, sym, asym, chained, &mut needle_buf);
         let needles = &needle_buf[..nn];
 
         let classes = lines.classes();
         let mut reader = LineReader::new(&lines, &classes);
+        let mut chain_memo = vec![ChainMemo::default(); chained.len()];
         let mut pos: usize = 0;
         while pos < len {
             let Some(r) = find_needle(needles, &source[pos..]) else {
@@ -904,7 +934,7 @@ impl ParseContext {
 
             // Inline opaque rule owning this byte, if any (a pure fence byte
             // that opens nothing is ordinary content).
-            let Some((is_sym, ri)) = rule_for(b, sym, asym) else {
+            let Some(rule) = rule_for(b, sym, asym, chained) else {
                 pos = p + 1;
                 continue;
             };
@@ -914,13 +944,18 @@ impl ParseContext {
                 continue;
             }
 
-            let count = if is_sym { sym[ri].1 } else { asym[ri].2 };
             let mut run_end = p;
             let mut c = 0u32;
             while run_end < len && source[run_end] == b {
                 c += 1;
                 run_end += 1;
             }
+            let count = match rule {
+                Opaque::Sym(ri) => sym[ri].1,
+                Opaque::Asym(ri) => asym[ri].2,
+                // Of a run of the open byte the last byte opens the match.
+                Opaque::Chain(_) => c,
+            };
 
             // A line's markers are no triggers. Only a run that opens is
             // checked, and only for a byte markers may consist of (a fence
@@ -947,21 +982,35 @@ impl ParseContext {
             let mut para: Option<bool> = None;
             let enter_line = |ls: usize| reader.crosses(source, p, ls, &mut para).then_some(ls);
 
-            if is_sym {
-                match sym_close(source, run_end, b, count, escape, eol, enter_line) {
-                    Some(close_end) => {
-                        spans.push(Span::new(p as u32, close_end as u32));
-                        pos = close_end;
+            match rule {
+                Opaque::Sym(_) => {
+                    match sym_close(source, run_end, b, count, escape, eol, enter_line) {
+                        Some(close_end) => {
+                            spans.push(Span::new(p as u32, close_end as u32));
+                            pos = close_end;
+                        }
+                        None => pos = run_end,
                     }
-                    None => pos = run_end,
                 }
-            } else {
-                match asym_close(source, run_end, asym[ri].1, escape, eol, enter_line) {
-                    Some(cp) => {
-                        spans.push(Span::new(p as u32, (cp + 1) as u32));
-                        pos = cp + 1;
+                Opaque::Asym(ri) => {
+                    match asym_close(source, run_end, asym[ri].1, escape, eol, enter_line) {
+                        Some(cp) => {
+                            spans.push(Span::new(p as u32, (cp + 1) as u32));
+                            pos = cp + 1;
+                        }
+                        None => pos = run_end,
                     }
-                    None => pos = run_end,
+                }
+                Opaque::Chain(ri) => {
+                    let memo = &mut chain_memo[ri];
+                    match chain_match(source, run_end, &chained[ri], escape, eol, enter_line, memo)
+                    {
+                        Some(end) => {
+                            spans.push(Span::new((run_end - 1) as u32, end as u32));
+                            pos = end;
+                        }
+                        None => pos = run_end,
+                    }
                 }
             }
         }
@@ -974,14 +1023,16 @@ impl ParseContext {
     }
 }
 
-/// Deduplicated union of every fence byte, symmetric marker and asymmetric
-/// opener, written into `buf`. Returns the count written. Overflow beyond
-/// [`MAX_NEEDLES`] is silently dropped (a dropped needle only means its rule
-/// is missed, never unsound); no known grammar comes close.
+/// Deduplicated union of every fence byte, symmetric marker, asymmetric
+/// opener and `chained` text opener, written into `buf`. Returns the count
+/// written. Overflow beyond [`MAX_NEEDLES`] is silently dropped (a dropped
+/// needle only means its rule is missed, never unsound); no known grammar
+/// comes close.
 fn build_needles(
     block_simple: &[BlockSimpleRule],
     sym: &[SymSpec],
     asym: &[AsymSpec],
+    chained: &[ChainSpec],
     buf: &mut [u8; MAX_NEEDLES],
 ) -> usize {
     let mut n = 0;
@@ -1001,6 +1052,9 @@ fn build_needles(
     }
     for &(o, _, _) in asym {
         push(o, &mut n);
+    }
+    for spec in chained {
+        push(spec.text.0, &mut n);
     }
     n
 }
@@ -1034,22 +1088,27 @@ fn find_needle(needles: &[u8], hay: &[u8]) -> Option<usize> {
     }
 }
 
-/// The opaque inline rule owning trigger byte `b`, as `(is_symmetric, index)`.
-/// Ties cannot occur across rules — the engine assumes a byte has one meaning
-/// per grammar.
+/// An opaque inline rule, by its index in its rule set.
+#[derive(Debug, Clone, Copy)]
+enum Opaque {
+    Sym(usize),
+    Asym(usize),
+    Chain(usize),
+}
+
+/// The opaque inline rule owning trigger byte `b`, looked up in the order of
+/// the full parser's forward searches: `chained`, `symmetric`, `asymmetric`.
+/// The engine assumes a byte has one meaning per grammar, so the order only
+/// matters for a grammar that breaks that.
 #[inline]
-fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec]) -> Option<(bool, usize)> {
-    for (ri, &(sb, _)) in sym.iter().enumerate() {
-        if sb == b {
-            return Some((true, ri));
-        }
+fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec], chained: &[ChainSpec]) -> Option<Opaque> {
+    if let Some(ri) = chained.iter().position(|spec| spec.text.0 == b) {
+        return Some(Opaque::Chain(ri));
     }
-    for (ri, &(o, _, _)) in asym.iter().enumerate() {
-        if o == b {
-            return Some((false, ri));
-        }
+    if let Some(ri) = sym.iter().position(|&(sb, _)| sb == b) {
+        return Some(Opaque::Sym(ri));
     }
-    None
+    asym.iter().position(|&(o, _, _)| o == b).map(Opaque::Asym)
 }
 
 /// The run count of a fence of `byte` opening at `pos` on `[pos, le)`, if one
@@ -1186,6 +1245,136 @@ fn asym_close(
     }
 }
 
+/// What the searches of one `chained` rule learned, for the openers after
+/// them: the full parse keeps the same, so a run of unclosed openers costs
+/// one search, not one per opener.
+#[derive(Debug, Clone, Copy, Default)]
+struct ChainMemo {
+    /// `(start, stop)`: no unescaped text close byte lies in `[start, stop)`,
+    /// and `stop` ends the inline run.
+    text_dead: Option<(usize, usize)>,
+    /// `(start, close)`: the first unescaped text close byte from `start` on
+    /// is at `close`, and the match after it failed. Kept for a text
+    /// component with `balanced = false` only.
+    text_found: Option<(usize, usize)>,
+    /// As `text_dead`, for the url close byte.
+    url_dead: Option<(usize, usize)>,
+}
+
+/// The end of the `chained` match whose text component starts at `from`,
+/// right after the open byte, or `None` when it fails: the text close, the
+/// url open on the byte right after it, and the url close, all in the
+/// opener's inline run (`enter_line` as for [`next_in_paragraph`]).
+fn chain_match(
+    src: &[u8],
+    from: usize,
+    spec: &ChainSpec,
+    escape: u8,
+    eol: u8,
+    mut enter_line: impl FnMut(usize) -> Option<usize>,
+    memo: &mut ChainMemo,
+) -> Option<usize> {
+    let (open, close) = spec.text;
+    let found = memo.text_found.filter(|&(s, c)| s <= from && from <= c);
+    let dead = memo.text_dead.filter(|&(s, e)| s <= from && from < e);
+    let ct = match (found, dead) {
+        (Some((_, c)), _) => c,
+        (None, Some(_)) => return None,
+        (None, None) => {
+            let bal = spec.text_balanced;
+            match component_close(src, from, open, close, bal, escape, eol, &mut enter_line) {
+                Ok(c) => c,
+                Err((stop, met)) => {
+                    if !met {
+                        memo.text_dead = Some((from, stop));
+                    }
+                    return None;
+                }
+            }
+        }
+    };
+    let (uo, uc) = spec.url;
+    let next = ct + 1;
+    if next < src.len() && src[next] == uo {
+        let url_from = next + 1;
+        if !memo
+            .url_dead
+            .is_some_and(|(s, e)| s <= url_from && url_from < e)
+        {
+            let bal = spec.url_balanced;
+            match component_close(src, url_from, uo, uc, bal, escape, eol, &mut enter_line) {
+                Ok(cu) => return Some(cu + 1),
+                Err((stop, met)) => {
+                    if !met {
+                        memo.url_dead = Some((url_from, stop));
+                    }
+                }
+            }
+        }
+    }
+    // The match failed after its text close: an opener before that close
+    // finds the same one.
+    if !spec.text_balanced {
+        memo.text_found = Some((from, ct));
+    }
+    None
+}
+
+/// The close byte of a `chained` component whose content starts at `from`,
+/// in the inline run `enter_line` bounds: the first unescaped `close`, or,
+/// with `balanced`, the one that brings the depth back to zero, each
+/// unescaped `open` nesting one level. On failure, where the run ends and
+/// whether an unescaped `close` was met on the way.
+#[allow(clippy::too_many_arguments)]
+fn component_close(
+    src: &[u8],
+    from: usize,
+    open: u8,
+    close: u8,
+    balanced: bool,
+    escape: u8,
+    eol: u8,
+    mut enter_line: impl FnMut(usize) -> Option<usize>,
+) -> Result<usize, (usize, bool)> {
+    let len = src.len();
+    let mut depth = 1u32;
+    let mut met = false;
+    let mut j = from;
+    loop {
+        let hit = if balanced {
+            memchr::memchr3(open, close, eol, &src[j..])
+        } else {
+            memchr::memchr2(close, eol, &src[j..])
+        };
+        let Some(r) = hit else {
+            return Err((len, met));
+        };
+        let q = j + r;
+        if src[q] == eol {
+            if q + 1 >= len || src[q + 1] == eol {
+                return Err((q, met));
+            }
+            match enter_line(q + 1) {
+                Some(next) => j = next,
+                None => return Err((q, met)),
+            }
+            continue;
+        }
+        if count_escape(src, q, escape) % 2 == 0 {
+            if balanced && src[q] == open {
+                depth += 1;
+            } else {
+                met = true;
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(q);
+                }
+            }
+        }
+        j = q + 1;
+    }
+}
+
 /// A lookup cursor over a [`ParseContext`], made for forward scans.
 ///
 /// Amortized O(1) per query **when queries arrive in non-decreasing position
@@ -1295,9 +1484,26 @@ mod tests {
         }
     }
 
+    /// meon-md's `[text](url)` links.
+    const MD_LINKS: ChainSpec = ChainSpec {
+        text: (b'[', b']'),
+        text_balanced: false,
+        url: (b'(', b')'),
+        url_balanced: false,
+    };
+
     fn md_context(src: &[u8]) -> ParseContext {
-        // meon-md's opaque rule set: ``` fences, `code` spans, <autolinks>.
-        ParseContext::build(src, b'\\', MD_LINES, &[(b'`', 1)], &[(b'<', b'>', 1)], 0)
+        // meon-md's opaque rule set: ``` fences, `code` spans, <autolinks>,
+        // [links](url).
+        ParseContext::build(
+            src,
+            b'\\',
+            MD_LINES,
+            &[(b'`', 1)],
+            &[(b'<', b'>', 1)],
+            &[MD_LINKS],
+            0,
+        )
     }
 
     fn kinds(src: &[u8], model: LineModel) -> Vec<LineKind> {
@@ -1314,7 +1520,7 @@ mod tests {
     // 01. Empty rule set / empty source produce an empty context
     #[test]
     fn test_01_empty() {
-        let m = ParseContext::build(b"abc", b'\\', LineModel::default(), &[], &[], 0);
+        let m = ParseContext::build(b"abc", b'\\', LineModel::default(), &[], &[], &[], 0);
         assert!(m.spans().is_empty());
         let m = md_context(b"");
         assert!(m.spans().is_empty());
@@ -1457,7 +1663,7 @@ mod tests {
     #[test]
     fn test_17_json_strings() {
         let src = br#"{"a": "x, {not open}", "b": 1}"#;
-        let m = ParseContext::build(src, b'\\', LineModel::default(), &[(b'"', 1)], &[], 0);
+        let m = ParseContext::build(src, b'\\', LineModel::default(), &[(b'"', 1)], &[], &[], 0);
         // "a" -> [1,4), "x, {not open}" -> [6,21), "b" -> [23,26)
         assert_eq!(
             m.spans(),
@@ -1471,7 +1677,7 @@ mod tests {
     fn test_18_distinct_fence_byte() {
         let src = b"`c`\n~~~\n`hidden`\n~~~\n`d`";
         const LINES: LineModel = fences(&[BlockSimpleRule::Fence { byte: b'~', min: 3 }]);
-        let m = ParseContext::build(src, b'\\', LINES, &[(b'`', 1)], &[], 0);
+        let m = ParseContext::build(src, b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
         assert_eq!(
             m.spans(),
             &[Span::new(0, 3), Span::new(4, 20), Span::new(21, 24)]
@@ -1488,7 +1694,7 @@ mod tests {
             let sym: Vec<SymSpec> = alphabet[..n].iter().map(|&b| (b, 1)).collect();
             let last = alphabet[n - 1];
             let src = [last, b'h', b'i', last, b' ', b'.'];
-            let m = ParseContext::build(&src, b'\\', LineModel::default(), &sym, &[], 0);
+            let m = ParseContext::build(&src, b'\\', LineModel::default(), &sym, &[], &[], 0);
             assert_eq!(m.spans(), &[Span::new(0, 4)], "needle count {n}");
         }
     }
@@ -1499,7 +1705,7 @@ mod tests {
     fn test_20_needle_overflow_dropped() {
         let alphabet = *b"qwzjvxkyfgdm";
         let sym: Vec<SymSpec> = alphabet.iter().map(|&b| (b, 1)).collect();
-        let m = ParseContext::build(b"mam qbq", b'\\', LineModel::default(), &sym, &[], 0);
+        let m = ParseContext::build(b"mam qbq", b'\\', LineModel::default(), &sym, &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(4, 7)]);
     }
 
@@ -1512,7 +1718,7 @@ mod tests {
             BlockSimpleRule::Fence { byte: b'`', min: 3 },
             BlockSimpleRule::Fence { byte: b'~', min: 3 },
         ]);
-        let m = ParseContext::build(src, b'\\', LINES, &[], &[], 0);
+        let m = ParseContext::build(src, b'\\', LINES, &[], &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(7, 16), Span::new(17, 26)]);
     }
 
@@ -1707,7 +1913,15 @@ mod tests {
             max_nest: 2,
             ..fences(&[])
         };
-        let m = ParseContext::build(b"| a | b |\n| | c |\n", b'\\', PIPES, &[(b'|', 1)], &[], 0);
+        let m = ParseContext::build(
+            b"| a | b |\n| | c |\n",
+            b'\\',
+            PIPES,
+            &[(b'|', 1)],
+            &[],
+            &[],
+            0,
+        );
         assert_eq!(m.spans(), &[Span::new(4, 9)]);
         // With room for one frame only, the second `|` is content: a run
         // that begins among the markers goes on into content.
@@ -1715,7 +1929,7 @@ mod tests {
             max_nest: 1,
             ..PIPES
         };
-        let m = ParseContext::build(b"||x|\n", b'\\', one, &[(b'|', 1)], &[], 0);
+        let m = ParseContext::build(b"||x|\n", b'\\', one, &[(b'|', 1)], &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(1, 4)]);
     }
 
@@ -1729,11 +1943,11 @@ mod tests {
             block: &[BlockRule::Marker { bytes: b"+" }],
             ..fences(&[])
         };
-        let m = ParseContext::build(b"+ a +\n", b'\\', PLUS, &[(b'+', 1)], &[], 0);
+        let m = ParseContext::build(b"+ a +\n", b'\\', PLUS, &[(b'+', 1)], &[], &[], 0);
         assert!(m.spans().is_empty());
         let mut flat = MD_LINES;
         flat.max_nest = 0;
-        let m = ParseContext::build(b"```\n`x`\n```\n", b'\\', flat, &[(b'`', 1)], &[], 0);
+        let m = ParseContext::build(b"```\n`x`\n```\n", b'\\', flat, &[(b'`', 1)], &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(4, 7)]);
     }
 
@@ -1778,7 +1992,15 @@ mod tests {
     fn test_38_nested_fence_needs_room() {
         let mut lines = MD_LINES;
         lines.max_nest = 1;
-        let m = ParseContext::build(b"> ```\n> `x`\n> ```\n", b'\\', lines, &[(b'`', 1)], &[], 0);
+        let m = ParseContext::build(
+            b"> ```\n> `x`\n> ```\n",
+            b'\\',
+            lines,
+            &[(b'`', 1)],
+            &[],
+            &[],
+            0,
+        );
         assert_eq!(m.spans(), &[Span::new(8, 11)]);
     }
 
@@ -1835,7 +2057,7 @@ mod tests {
         // With `max_nest = 0` no block item opens.
         let mut flat = MD_LINES;
         flat.max_nest = 0;
-        let m = ParseContext::build(b"- x\n", b'\\', flat, &[], &[], 0);
+        let m = ParseContext::build(b"- x\n", b'\\', flat, &[], &[], &[], 0);
         assert!(
             !m.cursor()
                 .admits(b"- x\n", Span::new(2, 3), RuleIndex::Block(0))
@@ -1885,5 +2107,132 @@ mod tests {
             let line = r.lead(&src, p).expect("only markers before");
             assert_eq!(line.ls, tail);
         }
+    }
+
+    // ---- Opaque `chained` rules ----------------------------------------- //
+
+    fn regions(src: &[u8]) -> Vec<(u32, u32)> {
+        md_context(src)
+            .spans()
+            .iter()
+            .map(|s| (s.start, s.end))
+            .collect()
+    }
+
+    fn chain_regions(src: &[u8], spec: ChainSpec) -> Vec<(u32, u32)> {
+        ParseContext::build(src, b'\\', MD_LINES, &[(b'`', 1)], &[], &[spec], 0)
+            .spans()
+            .iter()
+            .map(|s| (s.start, s.end))
+            .collect()
+    }
+
+    // 43. A link covers its open byte through the url close
+    #[test]
+    fn test_43_link_region() {
+        assert_eq!(regions(b"a [b *c*](d) e"), vec![(2, 12)]);
+        assert_eq!(regions(b"[a](b)[c](d)"), vec![(0, 6), (6, 12)]);
+    }
+
+    // 44. Links and code spans resolve leftmost-first; inside a link the
+    //     search for its closes is raw
+    #[test]
+    fn test_44_link_leftmost_first() {
+        assert_eq!(regions(b"`[a`](b)"), vec![(0, 4)]);
+        assert_eq!(regions(b"[a `b](c)` d"), vec![(0, 9)]);
+        assert_eq!(regions(b"<[a>](b)"), vec![(0, 4)]);
+    }
+
+    // 45. A link that fails resumes the scan right after its open run
+    #[test]
+    fn test_45_failed_link_resumes_after_open() {
+        // No url open right after the text close.
+        assert_eq!(regions(b"[a `b`] (c)"), vec![(3, 6)]);
+        // No text close.
+        assert_eq!(regions(b"[a `b`"), vec![(3, 6)]);
+        // No url close: the code span inside the url is found.
+        assert_eq!(regions(b"[a](`x`"), vec![(4, 7)]);
+    }
+
+    // 46. Of a run of open bytes the last opens; an escaped open byte does
+    //     not, and the prefix byte stays outside the region
+    #[test]
+    fn test_46_link_open_run_escape_prefix() {
+        assert_eq!(regions(b"[[a](b)"), vec![(1, 7)]);
+        assert!(regions(b"\\[a](b)").is_empty());
+        assert_eq!(regions(b"\\[[a](b)"), vec![(2, 8)]);
+        assert_eq!(regions(b"![a](b)"), vec![(1, 7)]);
+        // An escaped text close is skipped.
+        assert_eq!(regions(b"[a\\](b)](c)"), vec![(0, 11)]);
+        // An escaped url close is skipped.
+        assert_eq!(regions(b"[a](b\\)c)"), vec![(0, 9)]);
+    }
+
+    // 47. Every part of a link lies in the opener's inline run
+    #[test]
+    fn test_47_link_inline_run() {
+        assert_eq!(regions(b"[a\nb](c)"), vec![(0, 8)]);
+        assert_eq!(regions(b"[a](b\nc)"), vec![(0, 8)]);
+        assert!(regions(b"[a\n\nb](c)").is_empty());
+        assert!(regions(b"[a](b\n\nc)").is_empty());
+        // A heading line ends the paragraph run.
+        assert!(regions(b"[a\n# b](c)").is_empty());
+        // A bullet line's run is the line.
+        assert!(regions(b"- [a\nb](c)").is_empty());
+        assert_eq!(regions(b"- [a](b)\n"), vec![(2, 8)]);
+        // The url open must follow the text close on the same line.
+        assert!(regions(b"[a]\n(b)").is_empty());
+    }
+
+    // 48. With `balanced`, each unescaped open byte nests one level
+    #[test]
+    fn test_48_link_balanced() {
+        let bal = ChainSpec {
+            text_balanced: true,
+            url_balanced: true,
+            ..MD_LINKS
+        };
+        assert_eq!(chain_regions(b"[a [b] c](d (e) f)", bal), vec![(0, 18)]);
+        assert!(chain_regions(b"[a [b] c](d (e) f)", MD_LINKS).is_empty());
+        assert_eq!(chain_regions(b"[a \\[b](c)", bal), vec![(0, 10)]);
+        // A close byte met without reaching depth zero is no proof of
+        // absence: a later opener inside still balances.
+        assert_eq!(chain_regions(b"[a [b](c)", bal), vec![(3, 9)]);
+        assert_eq!(chain_regions(b"[a](b (c) [d](e)", bal), vec![(10, 16)]);
+        // A balanced text close serves no other opener: one nested inside
+        // closes earlier.
+        assert_eq!(chain_regions(b"[a [b](x) c] d", bal), vec![(3, 9)]);
+    }
+
+    // 49. What a failed search learns holds only where it holds: up to the
+    //     end of the inline run for an absent close byte, up to the close it
+    //     found for a match that failed after it
+    #[test]
+    fn test_49_link_memo_windows() {
+        // Absent text close up to the empty line, then a new run.
+        assert_eq!(regions(b"[a [b\n\n[c](d)"), vec![(7, 13)]);
+        // The first opener's match fails after `]`; the second opener lies
+        // past that close and searches anew.
+        assert_eq!(regions(b"[a] [b](c)"), vec![(4, 10)]);
+        // The first opener's text close serves the second one too, and the
+        // url open follows neither.
+        assert!(regions(b"[a [b] c").is_empty());
+        // An unbalanced text component ends at its first close: the link
+        // takes the inner opener in.
+        assert_eq!(regions(b"[a [b](c)"), vec![(0, 9)]);
+        // Absent url close up to the empty line, then a new run.
+        assert_eq!(regions(b"[a](b\n\n[c](d)"), vec![(7, 13)]);
+        assert!(regions(b"[a](b [c](d").is_empty());
+    }
+
+    // 50. A long run of unclosed openers is read once
+    #[test]
+    fn test_50_link_unclosed_openers() {
+        let mut src = b"[x ".repeat(20_000);
+        src.extend_from_slice(b"`c`");
+        assert_eq!(regions(&src), vec![(60_000, 60_003)]);
+        let mut src = b"[x](".repeat(20_000);
+        src.extend_from_slice(b"`c`");
+        assert_eq!(regions(&src), vec![(80_000, 80_003)]);
     }
 }
