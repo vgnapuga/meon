@@ -38,6 +38,7 @@ pub struct OrderedItem {
 define_content!(TestContent {
     inline {
         links:      Link     [100],
+        refs:       Link     [100],
         key_values: KeyValue [20],
     }
     inline_simple {

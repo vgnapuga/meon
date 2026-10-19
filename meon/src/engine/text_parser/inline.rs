@@ -105,7 +105,11 @@
 //!   act one by one. With `balanced = true` each open byte of the component
 //!   nests one level and each close byte leaves one; the first close byte
 //!   with no level left closes the component, the url component opens only
-//!   on the byte right after it, and the rest of the run is read again.
+//!   on the byte right after it, and the rest of the run is read again. With
+//!   `balanced = false` the rule's open byte inside its own match is text.
+//!   The other `chained` rules leave the match alone: they match inside its
+//!   transparent components, like any other rule, and not inside its opaque
+//!   ones.
 //!
 //! In the pending slot and in both forward searches a run whose count matches
 //! no declared arm is literal text: it opens nothing, and no close is searched
@@ -894,6 +898,8 @@ macro_rules! parse_inline {
             // ---------------------------------------------------------- //
             // chained, transparent phases (off the stack).               //
             // ---------------------------------------------------------- //
+            // The phase state belongs to the rule with a transparent
+            // component; the other `chained` rules leave it alone.
             let mut _chained_handled = false;
             $(
                 if ($tpi || $upi) && !ch_in_text && !ch_in_url
@@ -926,11 +932,11 @@ macro_rules! parse_inline {
                     ch_is_prefix = _is_prefix;
                     ch_real_start = _real_start as u32;
                     _chained_handled = true;
-                } else if ch_in_text && delim == $co && $tbal {
+                } else if ($tpi || $upi) && ch_in_text && delim == $co && $tbal {
                     // Each byte of the run nests one level.
                     ch_text_depth += count;
                     _chained_handled = true;
-                } else if ch_in_text && delim == $cc {
+                } else if ($tpi || $upi) && ch_in_text && delim == $cc {
                     // Each byte of the run closes one nested level; the next
                     // one closes the text component, and the url component
                     // must open on the byte right after it.
@@ -955,10 +961,10 @@ macro_rules! parse_inline {
                         }
                     }
                     _chained_handled = true;
-                } else if ch_in_url && delim == $uo && $ubal {
+                } else if ($tpi || $upi) && ch_in_url && delim == $uo && $ubal {
                     ch_url_depth += count;
                     _chained_handled = true;
-                } else if ch_in_url && delim == $uc {
+                } else if ($tpi || $upi) && ch_in_url && delim == $uc {
                     // As for the text component; the rest of the run after
                     // the closing byte is read again.
                     if count <= ch_url_depth {
@@ -1010,8 +1016,10 @@ macro_rules! parse_inline {
             }
 
             // --- chained, both components opaque: self-contained forward search ---
+            // A rule with a transparent component has its open bytes read by
+            // the phases above: inside its own match they open nothing.
             $(
-                if delim == $co {
+                if !$tpi && !$upi && delim == $co {
                     // As above: the last byte of the run opens the match.
                     let _open = pos - 1;
                     let is_prefix = _open > 0
@@ -1033,9 +1041,11 @@ macro_rules! parse_inline {
                         let mut _found: Option<usize> = None;
                         while _i < _lim {
                             if !$crate::parse_inline!(@is_escaped src, _i, $start, $esc) {
+                                // A close byte that is also the open byte
+                                // nests, yet the byte is present.
+                                if src[_i] == $cc { _met = true; }
                                 if src[_i] == $co { _depth += 1; }
                                 else if src[_i] == $cc {
-                                    _met = true;
                                     _depth -= 1;
                                     if _depth == 0 { _found = Some(_i); break; }
                                 }
@@ -1077,9 +1087,9 @@ macro_rules! parse_inline {
                                 let mut _found: Option<usize> = None;
                                 while _j < _lim {
                                     if !$crate::parse_inline!(@is_escaped src, _j, $start, $esc) {
+                                        if src[_j] == $uc { _met = true; }
                                         if src[_j] == $uo { _depth += 1; }
                                         else if src[_j] == $uc {
-                                            _met = true;
                                             _depth -= 1;
                                             if _depth == 0 { _found = Some(_j); break; }
                                         }

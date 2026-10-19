@@ -1361,10 +1361,11 @@ fn component_close(
             continue;
         }
         if count_escape(src, q, escape) % 2 == 0 {
+            // A close byte that is also the open byte nests, yet it is met.
+            met |= src[q] == close;
             if balanced && src[q] == open {
                 depth += 1;
             } else {
-                met = true;
                 depth -= 1;
                 if depth == 0 {
                     return Ok(q);
@@ -2234,5 +2235,27 @@ mod tests {
         let mut src = b"[x](".repeat(20_000);
         src.extend_from_slice(b"`c`");
         assert_eq!(regions(&src), vec![(80_000, 80_003)]);
+    }
+
+    // 51. A balanced component whose open and close bytes are one byte never
+    //     closes, and another rule's search still finds that byte
+    #[test]
+    fn test_51_link_same_open_and_close_byte() {
+        let quoted = ChainSpec {
+            text: (b'"', b'"'),
+            text_balanced: true,
+            ..MD_LINKS
+        };
+        let src = b"\"a <b\"";
+        let m = ParseContext::build(
+            src,
+            b'\\',
+            LineModel::default(),
+            &[],
+            &[(b'<', b'"', 1)],
+            &[quoted],
+            0,
+        );
+        assert_eq!(m.spans(), &[Span::new(3, 6)]);
     }
 }

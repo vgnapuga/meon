@@ -4245,3 +4245,184 @@ fn line_end_09_marker_byte_differs_from_escape() {
         );
     }
 }
+
+// ================================================================
+// chained rules of both kinds in one grammar
+// ================================================================
+//
+// `run_chained_kinds!` declares a chained rule with a transparent text
+// component (into `links`), `$upi` setting its url component's opacity, and
+// an opaque one on `{`/`}` and `<`/`>` (into `refs`), `$rbal` setting its
+// components' `balanced`. `~` is a stack rule (into `codes`). The phase
+// state of a transparent match is its own rule's: the other rule's bytes
+// neither close nor nest it, and the rule's own open byte inside its match
+// opens nothing.
+
+macro_rules! run_chained_kinds {
+    ($src:expr, $upi:tt, $rbal:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'~', b'[', b']', b'(', b')', b'{', b'}', b'<', b'>') {
+                symmetric b'~' { parse_inside = true; balanced = true; 1 => codes }
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+                chained: Link {
+                    | b'{', b'}' | { parse_inside = false; balanced = $rbal; } => text,
+                    | b'<', b'>' | { parse_inside = false; balanced = $rbal; } => url,
+                    prefix | b'@' | => is_image,
+                } => refs
+            }
+        );
+        st
+    }};
+}
+
+fn components(src: &[u8], v: &[Link]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|l| (txt(src, l.text).to_string(), txt(src, l.url).to_string()))
+        .collect()
+}
+
+// 01. The rule's open byte inside its transparent text opens nothing: the
+//     text after it is read by the other rules
+#[test]
+fn chained_kinds_01_open_byte_inside_text() {
+    let src = b"x [a [~b~](c) d](e) y";
+    let st = run_chained_kinds!(src, true, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a [~b~".into(), "c".into())]
+    );
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d](e) y"]);
+}
+
+// 02. The same inside a transparent url component
+#[test]
+fn chained_kinds_02_open_byte_inside_url() {
+    let src = b"x [a](u [~b~](c) v) y";
+    let st = run_chained_kinds!(src, true, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u [~b~](c".into())]
+    );
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " v) y"]);
+}
+
+// 03. The other rule's close byte does not close the text component
+#[test]
+fn chained_kinds_03_other_close_byte() {
+    let src = b"x [a } b](u) y";
+    let st = run_chained_kinds!(src, false, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a } b".into(), "u".into())]
+    );
+    assert!(st.refs.is_empty());
+}
+
+// 04. The other rule's open byte does not nest the text component
+#[test]
+fn chained_kinds_04_other_open_byte() {
+    let src = b"x [a { b](u) y";
+    let st = run_chained_kinds!(src, false, true);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a { b".into(), "u".into())]
+    );
+    assert!(st.refs.is_empty());
+}
+
+// 05. The other rule matches inside the transparent text component
+#[test]
+fn chained_kinds_05_other_rule_inside_text() {
+    let src = b"x [a {r}<s> b](u) y";
+    for rbal in [false, true] {
+        let st = if rbal {
+            run_chained_kinds!(src, false, true)
+        } else {
+            run_chained_kinds!(src, false, false)
+        };
+        assert_eq!(components(src, &st.refs), vec![("r".into(), "s".into())]);
+        assert_eq!(
+            components(src, &st.links),
+            vec![("a {r}<s> b".into(), "u".into())]
+        );
+    }
+}
+
+// 06. ... and not inside the opaque url component
+#[test]
+fn chained_kinds_06_other_rule_inside_opaque_url() {
+    let src = b"x [a](u {r}<s>) y";
+    let st = run_chained_kinds!(src, false, false);
+    assert!(st.refs.is_empty());
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u {r}<s>".into())]
+    );
+}
+
+// 07. A balanced component whose open and close bytes are one byte never
+//     closes, but the byte is there: another rule's search still finds it
+#[test]
+fn chained_kinds_07_same_open_and_close_byte() {
+    for (src, want) in [(&b"\"a <b\""[..], vec!["b"]), (b"[a]\"x <b\"", vec!["b"])] {
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'"', b'<', b'[') {
+                asymmetric b'<', b'"' { balanced = false; parse_inside = false; 1 => autolinks }
+                chained: Link {
+                    | b'"', b'"' | { parse_inside = false; balanced = true; } => text,
+                    | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+                chained: Link {
+                    | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                    | b'"', b'"' | { parse_inside = false; balanced = true; } => url,
+                    prefix | b'@' | => is_image,
+                } => refs
+            }
+        );
+        assert!(st.links.is_empty() && st.refs.is_empty());
+        assert_eq!(
+            all(src, &st.autolinks),
+            want,
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+    }
+}
+
+// 08. The other rule's url close byte does not close the url component
+#[test]
+fn chained_kinds_08_other_url_close_byte() {
+    let src = b"x [a](u > v) y";
+    let st = run_chained_kinds!(src, true, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u > v".into())]
+    );
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 09. The other rule's url open byte does not nest the url component
+#[test]
+fn chained_kinds_09_other_url_open_byte() {
+    let src = b"x [a](u < v) y";
+    let st = run_chained_kinds!(src, true, true);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u < v".into())]
+    );
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
