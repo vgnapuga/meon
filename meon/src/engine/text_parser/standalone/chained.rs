@@ -16,6 +16,11 @@ use super::common::*;
 ///
 /// Escape sequences are respected on `open1` and on the prefix byte.
 ///
+/// What a failed search learns is kept for the openers after it: a close
+/// byte absent up to the end of the paragraph, and a first-component close
+/// whose match failed after it. A run of unclosed openers costs one search,
+/// not one per opener.
+///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
 pub struct ChainedIter<'a, T, F>
@@ -32,6 +37,16 @@ where
     escape: u8,
     make: F,
     pos: usize,
+    /// Where the paragraph of the last failed `close1` search ends: no
+    /// `close1` lies between that search's start and here. Openers, and the
+    /// url starts after them, only move forward, so each window below began
+    /// before every later opener.
+    text_dead: usize,
+    /// The first `close1` after the start of the last match that failed
+    /// after it: an opener before it finds the same one.
+    text_found: usize,
+    /// As `text_dead`, for `close2`.
+    url_dead: usize,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -79,6 +94,9 @@ where
             escape,
             make,
             pos: 0,
+            text_dead: 0,
+            text_found: 0,
+            url_dead: 0,
             _t: std::marker::PhantomData,
         }
     }
@@ -107,21 +125,45 @@ where
                 && count_escape(src, p - 1, self.escape) % 2 == 0;
 
             let text_start = p + 1;
-            let Some(c1) = next_in_paragraph(src, text_start, self.close1, self.eol, Some) else {
+            let c1 = if text_start <= self.text_found {
+                self.text_found
+            } else if text_start < self.text_dead {
                 self.pos = p + 1;
                 continue;
+            } else {
+                match scan_paragraph(src, text_start, self.close1, self.eol, Some) {
+                    Ok(c1) => c1,
+                    Err(stop) => {
+                        self.text_dead = stop;
+                        self.pos = p + 1;
+                        continue;
+                    }
+                }
             };
 
             // The two components must be byte-adjacent — a line break between
             // them never matches.
             let nxt = c1 + 1;
             if nxt >= len || src[nxt] != self.open2 {
+                self.text_found = c1;
                 self.pos = p + 1;
                 continue;
             }
 
             let url_start = nxt + 1;
-            let Some(c2) = next_in_paragraph(src, url_start, self.close2, self.eol, Some) else {
+            let c2 = if url_start < self.url_dead {
+                None
+            } else {
+                match scan_paragraph(src, url_start, self.close2, self.eol, Some) {
+                    Ok(c2) => Some(c2),
+                    Err(stop) => {
+                        self.url_dead = stop;
+                        None
+                    }
+                }
+            };
+            let Some(c2) = c2 else {
+                self.text_found = c1;
                 self.pos = p + 1;
                 continue;
             };
@@ -347,5 +389,38 @@ mod tests {
             Some((false, Span::new(1, 11), Span::new(13, 16)))
         );
         assert_eq!(iter.next(), None);
+    }
+
+    fn links(src: &[u8]) -> Vec<(u32, u32, u32, u32)> {
+        ChainedIter::new(src, b'[', b']', b'(', b')', b'!', b'\n', b'\\', stub_make)
+            .map(|(_, t, u)| (t.start, t.end, u.start, u.end))
+            .collect()
+    }
+
+    // 18. What a failed search learns holds only where it holds: up to the
+    //     end of the paragraph for an absent close byte, up to the close it
+    //     found for a match that failed after it
+    #[test]
+    fn test_18_failed_search_windows() {
+        // No first close up to the empty line, then a new paragraph.
+        assert_eq!(links(b"[a [b\n\n[c](d)"), vec![(8, 9, 11, 12)]);
+        // A match failed after `]`; an opener past that close searches anew.
+        assert_eq!(links(b"[a] [b](c)"), vec![(5, 6, 8, 9)]);
+        // The first opener's close serves the second one too.
+        assert!(links(b"[a [b] c").is_empty());
+        // No url close up to the empty line, then a new paragraph.
+        assert_eq!(links(b"[a](b\n\n[c](d)"), vec![(8, 9, 11, 12)]);
+        assert!(links(b"[a](b [c](d").is_empty());
+    }
+
+    // 19. A long run of unclosed openers is read once
+    #[test]
+    fn test_19_unclosed_openers() {
+        let mut src = b"[a ".repeat(20_000);
+        src.extend_from_slice(b"\n\n[b](c)");
+        assert_eq!(links(&src), vec![(60_003, 60_004, 60_006, 60_007)]);
+        let mut src = b"[a](".repeat(20_000);
+        src.extend_from_slice(b"\n\n[b](c)");
+        assert_eq!(links(&src), vec![(80_003, 80_004, 80_006, 80_007)]);
     }
 }

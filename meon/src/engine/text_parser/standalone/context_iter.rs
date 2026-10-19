@@ -31,7 +31,7 @@
 //! [`ContextCursor::admits`](super::context::ContextCursor::admits)) or, for
 //! `cont`, whose marker no region covers.
 
-use super::common::{Span, count_escape, next_in_paragraph};
+use super::common::{Span, count_escape, next_in_paragraph, scan_paragraph};
 use super::context::{ContextCursor, LineReader, ParseContext};
 
 /// Context-aware variant of [`super::symmetric::SymmetricExactIter`].
@@ -195,6 +195,12 @@ pub struct ContextAsymmetricExactIter<'a> {
     marked: bool,
     /// Is the delimiter byte also a `cont` marker?
     straddles: bool,
+    /// Where the inline run of the last failed close search ends: no close
+    /// candidate the search accepts lies between that search's start and
+    /// here, so an opener of the run before it finds no close either.
+    /// Openers only move forward, so the search started before every later
+    /// opener.
+    dead: usize,
 }
 
 impl<'a> ContextAsymmetricExactIter<'a> {
@@ -223,6 +229,7 @@ impl<'a> ContextAsymmetricExactIter<'a> {
             lines: ctx.reader(),
             marked: ctx.reader().marks(open),
             straddles: ctx.lines().is_cont(open),
+            dead: 0,
         }
     }
 }
@@ -270,9 +277,13 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
                 continue;
             }
 
+            let cs = end;
+            if cs < self.dead {
+                self.pos = end;
+                continue;
+            }
             let mut para: Option<bool> = None;
             let lines = &mut self.lines;
-            let cs = end;
             let mut j = cs;
             let mut ccur = self.cur;
             let eol = self.eol;
@@ -282,22 +293,24 @@ impl Iterator for ContextAsymmetricExactIter<'_> {
                         .crosses(src, p, ls, &mut para)
                         .then(|| ccur.covering_end(ls).unwrap_or(ls))
                 };
-                let Some(q) = next_in_paragraph(src, j, self.close, eol, enter_line) else {
-                    break None;
+                let q = match scan_paragraph(src, j, self.close, eol, enter_line) {
+                    Ok(q) => q,
+                    Err(stop) => break Err(stop),
                 };
                 if let Some(ce) = ccur.covering_end(q) {
                     j = ce;
                     continue;
                 }
-                break Some(q);
+                break Ok(q);
             };
 
             match close {
-                Some(cp) => {
+                Ok(cp) => {
                     self.pos = cp + 1;
                     return Some(Span::new(cs as u32, cp as u32));
                 }
-                None => {
+                Err(stop) => {
+                    self.dead = stop;
                     self.pos = end;
                 }
             }
@@ -648,5 +661,33 @@ mod tests {
         assert_eq!(sym(b"[*a*](b) *c*", 1), vec![Span::new(10, 11)]);
         assert_eq!(sym(b"*a [b*](c) d*", 1), vec![Span::new(1, 12)]);
         assert_eq!(sym(b"[**a**](b)", 2), vec![]);
+    }
+
+    fn asym(src: &[u8], lines: LineModel) -> Vec<(u32, u32)> {
+        let ctx = ParseContext::build(src, b'\\', lines, &[(b'`', 1)], &[], &[], 0);
+        ContextAsymmetricExactIter::new(src, b'{', b'}', 1, b'\n', b'\\', &ctx)
+            .map(|s| (s.start, s.end))
+            .collect()
+    }
+
+    // 26. A failed close search holds for the openers after it up to the end
+    //     of its inline run only: a line some rule claims starts a run of its
+    //     own
+    #[test]
+    fn test_26_failed_search_kept_to_run_end() {
+        let plain = LineModel::default();
+        assert_eq!(asym(b"{a {b\n\n{c}", plain), vec![(8, 9)]);
+        assert_eq!(asym(b"{a\n# {b}", MD_LINES), vec![(6, 7)]);
+        assert_eq!(asym(b"- {a {b\n{c}", MD_LINES), vec![(9, 10)]);
+        // A close inside a region is no close.
+        assert_eq!(asym(b"{a `}` {b\n\n{c}", plain), vec![(12, 13)]);
+    }
+
+    // 27. A long run of unclosed openers is read once
+    #[test]
+    fn test_27_unclosed_openers() {
+        let mut src = b"{a ".repeat(20_000);
+        src.extend_from_slice(b"\n\n{b}");
+        assert_eq!(asym(&src, LineModel::default()), vec![(60_003, 60_004)]);
     }
 }

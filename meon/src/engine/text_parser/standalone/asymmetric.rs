@@ -14,7 +14,10 @@ use super::common::*;
 /// pending opener.
 ///
 /// Escape sequences are respected on the opening run. The closing byte is
-/// found by a plain scan (no escape check on close).
+/// found by a plain scan (no escape check on close). A search that finds no
+/// close is remembered up to the end of its paragraph, so the openers after
+/// it there are rejected without a search of their own: the scan stays
+/// linear however many openers go unclosed.
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -26,6 +29,10 @@ pub struct AsymmetricExactIter<'a> {
     eol: u8,
     escape: u8,
     pos: usize,
+    /// Where the paragraph of the last failed close search ends: no `close`
+    /// lies between that search's start and here. Openers only move forward,
+    /// so the search started before every later opener.
+    dead: usize,
 }
 
 impl<'a> AsymmetricExactIter<'a> {
@@ -50,6 +57,7 @@ impl<'a> AsymmetricExactIter<'a> {
             eol,
             escape,
             pos: 0,
+            dead: 0,
         }
     }
 }
@@ -85,14 +93,17 @@ impl Iterator for AsymmetricExactIter<'_> {
             // is ordinary content, two in a row (an empty line) — or the end
             // of input — abort the pending opener.
             let cs = end;
-            let close = next_in_paragraph(src, cs, self.close, self.eol, Some);
-
-            match close {
-                Some(cp) => {
+            if cs < self.dead {
+                self.pos = end;
+                continue;
+            }
+            match scan_paragraph(src, cs, self.close, self.eol, Some) {
+                Ok(cp) => {
                     self.pos = cp + 1;
                     return Some(Span::new(cs as u32, cp as u32));
                 }
-                None => {
+                Err(stop) => {
+                    self.dead = stop;
                     self.pos = end;
                 }
             }
@@ -277,5 +288,28 @@ mod tests {
 
         assert_eq!(iter.next(), Some(Span::new(7, 8)));
         assert_eq!(iter.next(), None);
+    }
+
+    fn spans(src: &[u8]) -> Vec<(u32, u32)> {
+        AsymmetricExactIter::new(src, b'<', b'>', 1, b'\n', b'\\')
+            .map(|s| (s.start, s.end))
+            .collect()
+    }
+
+    // 18. An opener after one whose search failed finds no close in the same
+    //     paragraph, and searches anew in the next
+    #[test]
+    fn test_18_failed_search_kept_to_paragraph_end() {
+        assert_eq!(spans(b"<a <b\n\n<c>"), vec![(8, 9)]);
+        assert_eq!(spans(b"<a\n<b\n\n<c <d>"), vec![(8, 12)]);
+        assert_eq!(spans(b"<a <b>"), vec![(1, 5)]);
+    }
+
+    // 19. A long run of unclosed openers is read once
+    #[test]
+    fn test_19_unclosed_openers() {
+        let mut src = b"<a ".repeat(20_000);
+        src.extend_from_slice(b"\n\n<b>");
+        assert_eq!(spans(&src), vec![(60_003, 60_004)]);
     }
 }

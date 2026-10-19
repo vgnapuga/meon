@@ -4,7 +4,8 @@
 //!
 //! - [`find_line_end`] — locate the end of the current line.
 //! - [`next_in_paragraph`] — the paragraph-bounded close search shared by
-//!   every inline iterator and by the context builder.
+//!   every inline iterator and by the context builder, and
+//!   [`scan_paragraph`], the same search telling where a failed one stopped.
 //! - [`count_escape`] — count consecutive escape bytes preceding a position,
 //!   used to determine whether a delimiter is escaped (odd count) or not (even).
 //! - [`probe_matcher`] / [`find_any_of`] — turn an arbitrary byte predicate
@@ -42,19 +43,43 @@ pub fn next_in_paragraph(
     from: usize,
     needle: u8,
     eol: u8,
-    mut enter_line: impl FnMut(usize) -> Option<usize>,
+    enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Option<usize> {
+    scan_paragraph(src, from, needle, eol, enter_line).ok()
+}
+
+/// [`next_in_paragraph`], telling on failure where the paragraph ends:
+/// `Err(stop)` when no `needle` lies in `[from, stop)` and `stop` ends the
+/// paragraph — the first `eol` of an empty line, the `eol` before a line
+/// `enter_line` refuses, or the end of input. Bytes `enter_line` skips are
+/// not searched.
+///
+/// A close search that fails can keep `[from, stop)`: an opener of the same
+/// rule in it lies in the same paragraph, and its own search would fail
+/// too. That turns a run of unclosed openers from one search each into one
+/// search in all.
+#[inline(always)]
+pub fn scan_paragraph(
+    src: &[u8],
+    from: usize,
+    needle: u8,
+    eol: u8,
+    mut enter_line: impl FnMut(usize) -> Option<usize>,
+) -> Result<usize, usize> {
     let len = src.len();
     let mut j = from;
     loop {
-        let q = j + memchr::memchr2(needle, eol, &src[j..])?;
+        let Some(r) = memchr::memchr2(needle, eol, &src[j..]) else {
+            return Err(len);
+        };
+        let q = j + r;
         if src[q] != eol {
-            return Some(q);
+            return Ok(q);
         }
         if q + 1 >= len || src[q + 1] == eol {
-            return None;
+            return Err(q);
         }
-        j = enter_line(q + 1)?;
+        j = enter_line(q + 1).ok_or(q)?;
     }
 }
 
@@ -283,5 +308,15 @@ mod tests {
     fn test_15_count_escape_stopped_by_normal_char() {
         let src = b"x\\\\y";
         assert_eq!(count_escape(src, 3, b'\\'), 2);
+    }
+
+    // 16. A failed scan tells where the paragraph ends
+    #[test]
+    fn test_16_scan_paragraph_stop() {
+        assert_eq!(scan_paragraph(b"ab>c", 0, b'>', b'\n', Some), Ok(2));
+        assert_eq!(scan_paragraph(b"ab\nc\n\nd>", 0, b'>', b'\n', Some), Err(4));
+        assert_eq!(scan_paragraph(b"ab\ncd", 0, b'>', b'\n', Some), Err(5));
+        assert_eq!(scan_paragraph(b"ab\n", 0, b'>', b'\n', Some), Err(2));
+        assert_eq!(scan_paragraph(b"ab\ncd>", 0, b'>', b'\n', |_| None), Err(2));
     }
 }

@@ -92,7 +92,7 @@
 //! - This construction's own closing search is escape-aware (matching the
 //!   full parser); the context-free `find_*` close search is not.
 
-use super::common::{Span, count_escape, find_line_end, next_in_paragraph};
+use super::common::{Span, count_escape, find_line_end, next_in_paragraph, scan_paragraph};
 
 /// One opaque symmetric rule: `(delimiter byte, exact run count)`.
 pub type SymSpec = (u8, u32);
@@ -877,6 +877,10 @@ impl ParseContext {
         let classes = lines.classes();
         let mut reader = LineReader::new(&lines, &classes);
         let mut chain_memo = vec![ChainMemo::default(); chained.len()];
+        // Per `asym` rule, where the inline run of its last failed close
+        // search ends: no unescaped close byte lies between that search's
+        // start, before every later opener, and here.
+        let mut asym_dead: Vec<usize> = vec![0; asym.len()];
         let mut pos: usize = 0;
         while pos < len {
             let Some(r) = find_needle(needles, &source[pos..]) else {
@@ -993,12 +997,19 @@ impl ParseContext {
                     }
                 }
                 Opaque::Asym(ri) => {
+                    if run_end < asym_dead[ri] {
+                        pos = run_end;
+                        continue;
+                    }
                     match asym_close(source, run_end, asym[ri].1, escape, eol, enter_line) {
-                        Some(cp) => {
+                        Ok(cp) => {
                             spans.push(Span::new(p as u32, (cp + 1) as u32));
                             pos = cp + 1;
                         }
-                        None => pos = run_end,
+                        Err(stop) => {
+                            asym_dead[ri] = stop;
+                            pos = run_end;
+                        }
                     }
                 }
                 Opaque::Chain(ri) => {
@@ -1233,15 +1244,15 @@ fn asym_close(
     escape: u8,
     eol: u8,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
-) -> Option<usize> {
+) -> Result<usize, usize> {
     let mut j = from;
     loop {
-        let q = next_in_paragraph(src, j, close, eol, &mut enter_line)?;
+        let q = scan_paragraph(src, j, close, eol, &mut enter_line)?;
         if count_escape(src, q, escape) % 2 == 1 {
             j = q + 1;
             continue;
         }
-        return Some(q);
+        return Ok(q);
     }
 }
 
@@ -2257,5 +2268,17 @@ mod tests {
             0,
         );
         assert_eq!(m.spans(), &[Span::new(3, 6)]);
+    }
+
+    // 52. A failed asymmetric close search holds for the openers after it up
+    //     to the end of its inline run only
+    #[test]
+    fn test_52_asym_failed_search_kept_to_run_end() {
+        assert_eq!(regions(b"<a <b\n\n<c>"), vec![(7, 10)]);
+        assert_eq!(regions(b"<a\n# <b>"), vec![(5, 8)]);
+        assert_eq!(regions(b"<a `b` <c\n\n<d>"), vec![(3, 6), (11, 14)]);
+        let mut src = b"<a ".repeat(20_000);
+        src.extend_from_slice(b"\n\n<b>");
+        assert_eq!(regions(&src), vec![(60_002, 60_005)]);
     }
 }
