@@ -4109,3 +4109,139 @@ fn dead_close_07_balanced_url_search_meets_close() {
     assert_eq!(txt(src, st.links[0].url), "d");
     assert_eq!(all(src, &st.texts), vec!["[a](b "]);
 }
+
+// ================================================================
+// line ends: what the hard-break marker takes
+// ================================================================
+//
+// `run_inline!` declares `hard_break(b'\\', b' ', 2)` and `\` as the escape
+// byte. The marker is a `\` that is not itself escaped, or at least two
+// spaces; nothing else before the line end is trimmed.
+
+// 01. An escaped backslash before the line end is text, not a marker
+#[test]
+fn line_end_01_escaped_backslash_is_text() {
+    let src = b"a\\\\\nb";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a\\\\", "b"]);
+}
+
+// 02. With three backslashes the last one is the marker
+#[test]
+fn line_end_02_odd_backslash_run_is_marker() {
+    let src = b"a\\\\\\\nb";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 3);
+    assert_eq!(all(src, &st.texts), vec!["a\\\\", "b"]);
+}
+
+// 03. The same at the end of the run
+#[test]
+fn line_end_03_backslash_at_run_end() {
+    let src = b"a\\\\";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a\\\\"]);
+    let src = b"a\\";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(all(src, &st.texts), vec!["a"]);
+}
+
+// 04. A single space before the line end stays text
+#[test]
+fn line_end_04_single_space_stays_text() {
+    let src = b"a \nb";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a ", "b"]);
+    let src = b"a ";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a "]);
+}
+
+// 05. Two spaces are the marker and are trimmed
+#[test]
+fn line_end_05_space_run_is_marker() {
+    let src = b"a  \nb";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// 06. With `merge_simple` a line ending in one space joins the next line
+//     like a line ending without one
+#[test]
+fn line_end_06_single_space_merges_like_bare_eol() {
+    for (src, want) in [(&b"a \nb"[..], "a \nb"), (b"a\nb", "a\nb")] {
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, true, b'\\', b' ', b'\t', b'\n', 1, true;
+            hard_break(b'\\', b' ', 2) => hard_breaks;
+            on_trigger(b'*') {
+                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+            }
+        );
+        assert!(st.hard_breaks.is_empty());
+        assert_eq!(all(src, &st.texts), vec![want]);
+    }
+}
+
+// 07. At the end of the run an odd backslash run ends in the marker too
+#[test]
+fn line_end_07_odd_backslash_run_at_run_end() {
+    let src = b"a\\\\\\";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 3);
+    assert_eq!(all(src, &st.texts), vec!["a\\\\"]);
+}
+
+// 08. Spaces before a backslash marker stay text
+#[test]
+fn line_end_08_spaces_before_backslash_marker() {
+    let src = b"a  \\\nb";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 3);
+    assert_eq!(all(src, &st.texts), vec!["a  ", "b"]);
+}
+
+// 09. The marker is escaped by the grammar's escape byte, not by a marker
+//     byte before it, when the two differ
+#[test]
+fn line_end_09_marker_byte_differs_from_escape() {
+    for (src, hb, want) in [
+        (&b"a\\^"[..], None, vec!["a\\^"]),
+        (b"a^^", Some(2), vec!["a^"]),
+        (b"a\\^\nb", None, vec!["a\\^", "b"]),
+        (b"a^^\nb", Some(2), vec!["a^", "b"]),
+    ] {
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
+            hard_break(b'^', b' ', 2) => hard_breaks;
+            on_trigger(b'*') {
+                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+            }
+        );
+        assert_eq!(
+            st.hard_breaks.first().map(|h| h.start),
+            hb,
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+        assert_eq!(
+            all(src, &st.texts),
+            want,
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+    }
+}

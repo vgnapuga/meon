@@ -1461,3 +1461,34 @@ fn integ_bracket_run_02_bang_before_run_is_text() {
     assert!(!c.links[0].is_image);
     assert_eq!(texts(src, &c), vec!["!["]);
 }
+
+// ================================================================
+// line ends and hard breaks
+// ================================================================
+
+// 01. An escaped backslash at the end of a line is not a hard break
+#[test]
+fn integ_line_end_01_escaped_backslash() {
+    let src = b"a\\\\\nb\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.hard_breaks.is_empty());
+    assert_eq!(texts(src, &c), vec!["a\\\\\nb"]);
+}
+
+// 02. A single trailing space joins the lines like a bare line break
+#[test]
+fn integ_line_end_02_single_space() {
+    let src = b"a \nb\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.hard_breaks.is_empty());
+    assert_eq!(texts(src, &c), vec!["a \nb"]);
+}
+
+// 03. Two trailing spaces and a backslash are still hard breaks
+#[test]
+fn integ_line_end_03_markers() {
+    let src = b"a  \nb\\\nc\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.hard_breaks.len(), 2);
+    assert_eq!(texts(src, &c), vec!["a", "b", "c"]);
+}

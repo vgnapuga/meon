@@ -158,11 +158,12 @@
 //!
 //! In a multi-line run `eol` is an ordinary byte for every rule; the stack
 //! survives it. When `hard_break` is declared, each internal `eol` is checked
-//! like the run's end: trailing `sp` bytes or an `esc` byte before it are
+//! like the run's end: an `esc` byte before it that is not itself escaped,
+//! or a run of at least `min` `sp` bytes, is the marker. The marker is
 //! trimmed from the flushed text and a zero-length hard-break span is
-//! emitted. When the top of the stack is a `key_value` frame the `eol` is
-//! left to the `end`-byte check instead, because `end` and `eol` may be the
-//! same byte.
+//! emitted; fewer `sp` bytes stay text. When the top of the stack is a
+//! `key_value` frame the `eol` is left to the `end`-byte check instead,
+//! because `end` and `eol` may be the same byte.
 //!
 //! # `key_value`
 //!
@@ -410,16 +411,27 @@ macro_rules! parse_inline {
         // run. A key that ends where this span ends is the span itself.
         let mut _kv_opaque: Option<(usize, usize)> = None;
 
-        // Hard-break detection.
+        // Hard-break detection at the end of the run: an `esc` byte that is
+        // not itself escaped, or at least `min` `sp` bytes, is the marker and
+        // is left out of the scan. Fewer `sp` bytes stay text.
         let _hb = 'hb: {
             $(
                 if parse_end > $start {
-                    if src[parse_end - 1] == $hb_esc { parse_end -= 1; break 'hb true; }
-                    let mut _n: u32 = 0;
-                    while parse_end > $start && src[parse_end - 1] == $sp {
-                        _n += 1; parse_end -= 1;
+                    if src[parse_end - 1] == $hb_esc
+                        && !$crate::parse_inline!(@is_escaped src, parse_end - 1, $start, $esc)
+                    {
+                        parse_end -= 1;
+                        break 'hb true;
                     }
-                    if _n >= $sp_min { break 'hb true; }
+                    let mut _p = parse_end;
+                    let mut _n: u32 = 0;
+                    while _p > $start && src[_p - 1] == $sp {
+                        _n += 1; _p -= 1;
+                    }
+                    if _n >= $sp_min {
+                        parse_end = _p;
+                        break 'hb true;
+                    }
                 }
             )*
             false
@@ -635,33 +647,40 @@ macro_rules! parse_inline {
                 _k
             };
 
-            // ---------------------------------------------------------- //
-            // Internal eol of a multi-line run. Present only when            //
-            // `hard_break` is declared; otherwise the eol falls through the   //
-            // dispatch below as an unmatched byte. Runs before the escape      //
-            // check: a backslash before eol is the hard-break marker, not an    //
-            // escape. Trims trailing `sp` / `esc` bytes, emits the hard-break    //
-            // span, flushes text up to the trim point and continues the scan;    //
-            // the stack is not drained. The end-of-run check further down still   //
-            // handles input that ends without an eol and the single-line calls.    //
-            //                                                                       //
-            // Skipped when a kv frame is on top: `end` and `eol` may be the same     //
-            // byte, and the `$kv_end` check below owns that occurrence.               //
-            // ------------------------------------------------------------------------//
+            // ---------------------------------------------------------------- //
+            // Internal eol of a multi-line run. Present only when `hard_break` //
+            // is declared; otherwise the eol falls through the dispatch below  //
+            // as an unmatched byte. Runs before the escape check: an `esc`     //
+            // byte before eol that is not itself escaped is the hard-break     //
+            // marker, as is a run of at least `min` `sp` bytes. The marker is  //
+            // trimmed, the hard-break span emitted, text flushed up to the     //
+            // trim point and the scan continues; the stack is not drained.     //
+            // Fewer `sp` bytes stay text. The end-of-run check above handles   //
+            // input that ends without an eol and the single-line calls.        //
+            //                                                                  //
+            // Skipped when a kv frame is on top: `end` and `eol` may be the    //
+            // same byte, and the `$kv_end` check below owns that occurrence.   //
+            // ---------------------------------------------------------------- //
             $(
                 if src[pos] == $eol && !_top_is_kv {
                     let mut _ep = pos;
                     let mut _ehb = false;
                     if _ep > $start {
-                        if src[_ep - 1] == $hb_esc {
+                        if src[_ep - 1] == $hb_esc
+                            && !$crate::parse_inline!(@is_escaped src, _ep - 1, $start, $esc)
+                        {
                             _ep -= 1;
                             _ehb = true;
                         } else {
+                            let mut _p = _ep;
                             let mut _en: u32 = 0;
-                            while _ep > $start && src[_ep - 1] == $sp {
-                                _en += 1; _ep -= 1;
+                            while _p > $start && src[_p - 1] == $sp {
+                                _en += 1; _p -= 1;
                             }
-                            if _en >= $sp_min { _ehb = true; }
+                            if _en >= $sp_min {
+                                _ep = _p;
+                                _ehb = true;
+                            }
                         }
                     }
                     if text_start < _ep {

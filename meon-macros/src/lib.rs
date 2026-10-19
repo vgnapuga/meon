@@ -99,8 +99,9 @@ use crate::strip::strip;
 ///     merge_simple = true;          // coalesce adjacent fallback spans
 ///
 ///     hard_break(esc, sp, min) => field [div];
-///     // Detects trailing hard-break sequences: `esc` byte OR ≥ `min`
-///     // consecutive `sp` bytes at end of line. Emits a zero-length Span.
+///     // Detects trailing hard-break sequences: an `esc` byte not itself
+///     // escaped OR ≥ `min` consecutive `sp` bytes at end of line. Emits a
+///     // zero-length Span; fewer `sp` bytes stay text.
 ///
 ///     on_trigger(b1, b2, ...) {
 ///         symmetric byte {
