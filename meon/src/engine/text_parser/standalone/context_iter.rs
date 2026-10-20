@@ -327,7 +327,7 @@ mod tests {
     use super::*;
 
     use crate::engine::text_parser::standalone::context::{
-        BlockRule, BlockSimpleRule, ChainSpec, LineModel, LineRule,
+        BlockRule, BlockSimpleRule, ByteSet, ChainSpec, LineModel, LineRule,
     };
 
     /// meon-md's line rules.
@@ -337,17 +337,25 @@ mod tests {
         tab: b'\t',
         max_nest: 4,
         block_simple: &[
-            BlockSimpleRule::Fence { byte: b'`', min: 3 },
+            BlockSimpleRule::Fence {
+                bytes: ByteSet::from_bytes(b"`"),
+                min: 3,
+            },
             BlockSimpleRule::Cont { byte: b'>' },
         ],
         block: &[
-            BlockRule::Marker { bytes: b"-*+" },
-            BlockRule::Num { ends: b".)" },
+            BlockRule::Marker {
+                bytes: ByteSet::from_bytes(b"-*+"),
+            },
+            BlockRule::Num {
+                digits: ByteSet::from_bytes(b"0123456789"),
+                ends: ByteSet::from_bytes(b".)"),
+            },
         ],
         lines: &[
             LineRule::Marker { byte: b'#', max: 6 },
             LineRule::Uniform {
-                bytes: b"-*_",
+                bytes: ByteSet::from_bytes(b"-*_"),
                 min: 3,
             },
         ],

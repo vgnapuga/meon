@@ -124,7 +124,8 @@ pub(crate) enum StandaloneRule {
     },
     LineUniform {
         field: Ident,
-        bytes: Vec<Literal>,
+        /// The byte pattern as written, e.g. `b'-' | b'*'`.
+        pat: TS2,
         min: Literal,
         ty: TS2,
         var: Ident,
@@ -132,7 +133,9 @@ pub(crate) enum StandaloneRule {
     },
     Fence {
         field: Ident,
-        byte: Literal,
+        /// The byte pattern as written; a fence closes with the byte it
+        /// opened with.
+        pat: TS2,
         min: Literal,
         /// See [`StandaloneRule::SymmetricExact::cap`].
         cap: Literal,
@@ -143,14 +146,17 @@ pub(crate) enum StandaloneRule {
     },
     BlockMarker {
         field: Ident,
-        bytes: Vec<Literal>,
+        /// The marker byte pattern as written.
+        pat: TS2,
         ty: TS2,
         var: Ident,
         body: TS2,
     },
     BlockNumbered {
         field: Ident,
-        end_bytes: Vec<Literal>,
+        /// The digit and end byte patterns as written.
+        digits: TS2,
+        ends: TS2,
         ty: TS2,
         num_var: Ident,
         kind_var: Ident,

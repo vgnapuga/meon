@@ -46,7 +46,9 @@ pub use crate::parse_block;
 /// # Per-line dispatch
 ///
 /// ```text
-/// 1. Blank line          → flush the run, close open `cont` frames, advance.
+/// 1. Blank line          → flush the run, close every open frame — unless a
+///                          fence is the innermost one: the line is then fence
+///                          content and every frame stays open — advance.
 /// 2. parse_block! peel   → continue or close the frames already open.
 /// 3. parse_block! open   → open new fence / cont / block items.
 /// 4. parse_line!         → match a whole-line rule.
@@ -96,7 +98,7 @@ pub use crate::parse_block;
 /// # Loop state
 ///
 /// - `pos` always advances; the loop is O(n) in the source length.
-/// - `_active_stack: [(u8, u8, u8, u32); max_nest]` and `_active_depth` —
+/// - `_active_stack: [(u32, u32); max_nest]` and `_active_depth` —
 ///   the open block frames (see [`crate::parse_block!`] for the encoding).
 /// - `para_start` — start of the current fallthrough run, `None` when no run
 ///   is open. Also the run's inline-scan start.
@@ -319,8 +321,7 @@ macro_rules! parse_text {
             let len: usize = src.len();
             let mut state = ParseState::new(len);
 
-            let mut _active_stack: [(u8, u8, u8, u32); $maxn] =
-                [(0u8, 0u8, 0u8, 0u32); $maxn];
+            let mut _active_stack: [(u32, u32); $maxn] = [(0u32, 0u32); $maxn];
             let mut _active_depth: usize = 0;
             let mut pos: usize = 0;
             let mut para_start: Option<u32> = None;
@@ -364,9 +365,9 @@ macro_rules! parse_text {
                     close_para!();
 
                     let is_fence = if $maxn == 1 {
-                        _active_depth > 0 && _active_stack[0].0 == 0u8
+                        _active_depth > 0 && _active_stack[0].0 != 0
                     } else {
-                        _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
+                        _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 != 0)
                     };
 
                     if !is_fence {
@@ -447,9 +448,9 @@ macro_rules! parse_text {
                 }
 
                 let skip_inline = if $maxn == 1 {
-                    _active_depth > 0 && _active_stack[0].0 == 0u8
+                    _active_depth > 0 && _active_stack[0].0 != 0
                 } else {
-                    _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
+                    _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 != 0)
                 };
 
                 if skip_inline {
@@ -522,16 +523,16 @@ macro_rules! parse_text {
 
     // Close every still-open block frame at end of input (or, gated by the
     // caller, on a blank line), top → down. Each frame's span is dispatched to
-    // the right field by `parse_block!`'s `@close_frame` arm, matching the
-    // stored byte against each `cont` / `fence` rule.
+    // the field of the rule that opened it by `parse_block!`'s `@close_frame`
+    // arm.
     (@close_stack $stack:ident, $depth:ident, $st:ident, $src:ident, $pos:expr ;
         block_simple { $($sr:tt)* } block { $($br:tt)* }
     ) => {
         while $depth > 0 {
             $depth -= 1;
-            let (_d2, _b2, _c2, _s2) = $stack[$depth];
+            let (_c2, _s2) = $stack[$depth];
             $crate::parse_block!(@close_frame
-                $st, $src, $pos as u32, _d2, _b2, _s2 ; $($sr)*);
+                $st, $src, $pos as u32, _c2, _s2 ; $($sr)*);
         }
     };
 }

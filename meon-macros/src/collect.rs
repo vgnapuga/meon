@@ -618,10 +618,10 @@ pub(crate) fn collect_lines(ts: TS2, cf: &mut CF) -> Result<()> {
                 .unwrap_or_else(|| Ident::new("_v", PS::call_site()));
             let body = body_group.stream();
             if is_simple {
-                let (bytes, min) = parse_line_simple_args(args.stream())?;
+                let (pat, min) = parse_min_args(args.stream(), args.span(), "line_simple")?;
                 cf.standalone.push(StandaloneRule::LineUniform {
                     field: f,
-                    bytes,
+                    pat,
                     min,
                     ty,
                     var,
@@ -696,10 +696,10 @@ fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
                 c.skip(';');
                 cf.block_simple.push((f.clone(), cap.clone()));
                 if kind == "fence" {
-                    let (byte, min) = parse_fence_args(args.stream())?;
+                    let (pat, min) = parse_min_args(args.stream(), args.span(), "fence")?;
                     cf.standalone.push(StandaloneRule::Fence {
                         field: f,
-                        byte,
+                        pat,
                         min,
                         cap,
                     });
@@ -732,14 +732,14 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                 let (f, cap) = c.arrow_field_cap("block field")?;
                 c.skip(';');
                 cf.block.push((f.clone(), ty.clone(), cap));
-                let bytes = Cursor::new(pat_stream).collect_lit_alternation();
+                let pat = Cursor::new(pat_stream).collect_pattern("block marker")?;
                 let var = vars
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| Ident::new("_b", PS::call_site()));
                 cf.standalone.push(StandaloneRule::BlockMarker {
                     field: f,
-                    bytes,
+                    pat,
                     ty,
                     var,
                     body: body_group.stream(),
@@ -755,7 +755,7 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                 let (f, cap) = c.arrow_field_cap("num field")?;
                 c.skip(';');
                 cf.block.push((f.clone(), ty.clone(), cap));
-                let end_bytes = parse_num_end_bytes(num_args.stream());
+                let (digits, ends) = parse_num_args(num_args.stream(), num_args.span())?;
                 let mut vi = vars.into_iter();
                 let num_var = vi
                     .next()
@@ -765,7 +765,8 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                     .unwrap_or_else(|| Ident::new("_k", PS::call_site()));
                 cf.standalone.push(StandaloneRule::BlockNumbered {
                     field: f,
-                    end_bytes,
+                    digits,
+                    ends,
                     ty,
                     num_var,
                     kind_var,
@@ -796,44 +797,35 @@ fn parse_line_marker_args(ts: TS2) -> Result<(Literal, Literal)> {
     Ok((byte, c.expect_lit("line marker max")?))
 }
 
-fn parse_line_simple_args(ts: TS2) -> Result<(Vec<Literal>, Literal)> {
+/// The byte pattern and minimum run of `line_simple(pat, min = N)` and
+/// `fence(pat, min = N)`.
+fn parse_min_args(ts: TS2, span: PS, rule: &str) -> Result<(TS2, Literal)> {
     let mut c = Cursor::new(ts);
-    let bytes = c.collect_lit_alternation();
+    let pat = c.collect_pattern(&format!("{rule} bytes"))?;
     c.skip(',');
+    if c.peek_str().as_deref() != Some("min") {
+        return Err(Error::new(span, format!("`{rule}` rule needs `min = N`")));
+    }
     c.advance();
     c.skip_eq_alone();
-    Ok((bytes, c.expect_lit("line_simple min")?))
-}
-
-fn parse_fence_args(ts: TS2) -> Result<(Literal, Literal)> {
-    let mut c = Cursor::new(ts);
-    let byte = c.expect_lit("fence byte")?;
-    c.skip(',');
-    c.advance();
-    c.skip_eq_alone();
-    Ok((byte, c.expect_lit("fence min")?))
+    Ok((pat, c.expect_lit(&format!("{rule} min"))?))
 }
 
 fn parse_cont_args(ts: TS2) -> Result<Literal> {
     Cursor::new(ts).expect_lit("cont byte")
 }
 
-fn parse_num_end_bytes(ts: TS2) -> Vec<Literal> {
+/// The digit and end patterns of `num(digits, end = ends)`.
+fn parse_num_args(ts: TS2, span: PS) -> Result<(TS2, TS2)> {
     let mut c = Cursor::new(ts);
-    while let Some(tt) = c.peek() {
-        if let TT::Ident(id) = tt {
-            if id == "end" {
-                break;
-            }
-        }
-        c.advance();
-    }
-    if c.peek().is_none() {
-        return vec![];
+    let digits = c.collect_pattern("num digits")?;
+    c.skip(',');
+    if c.peek_str().as_deref() != Some("end") {
+        return Err(Error::new(span, "`num` rule needs `end = pattern`"));
     }
     c.advance();
     c.skip_eq_alone();
-    c.collect_lit_alternation()
+    Ok((digits, c.collect_pattern("num end")?))
 }
 
 #[cfg(test)]
@@ -1284,5 +1276,65 @@ mod tests {
     fn test_15_inline_missing_cap_err() {
         let mut cf = CF::default();
         assert!(collect_inline(quote! { fallback => texts; }, &mut cf).is_err());
+    }
+
+    // 22. Block and line byte patterns are passed on as written: several
+    //     fence bytes, digit and end ranges, a range marker, a range run
+    #[test]
+    fn test_22_patterns_passed_as_written() {
+        let cf = cb(quote! {
+            block_simple { fence(b'`' | b'~', min = 3) => codes [40]; }
+            block {
+                (b'x'..=b'z' | b'+') |b|: Item { kind: b } => items [40];
+                num(b'1'..=b'9', end = b'.' | b'a'..=b'c') |n, k|: Num { num: n, kind: k } => nums [40];
+            }
+        });
+        let pats: Vec<String> = cf
+            .standalone
+            .iter()
+            .map(|r| match r {
+                StandaloneRule::Fence { pat, min, .. } => format!("{pat} / {min}"),
+                StandaloneRule::BlockMarker { pat, .. } => pat.to_string(),
+                StandaloneRule::BlockNumbered { digits, ends, .. } => format!("{digits} / {ends}"),
+                _ => unreachable!(),
+            })
+            .collect();
+        let want = [
+            quote! { b'`' | b'~' }.to_string() + " / 3",
+            quote! { b'x'..=b'z' | b'+' }.to_string(),
+            quote! { b'1'..=b'9' }.to_string() + " / " + &quote! { b'.' | b'a'..=b'c' }.to_string(),
+        ];
+        assert_eq!(pats, want);
+
+        let cf = cl(quote! {
+            line_simple(b'0'..=b'9' | b'=', min = 3) |b|: Rule { kind: b } => rules [40];
+        });
+        let StandaloneRule::LineUniform { pat, .. } = &cf.standalone[0] else {
+            unreachable!()
+        };
+        assert_eq!(pat.to_string(), quote! { b'0'..=b'9' | b'=' }.to_string());
+    }
+
+    // 23. A minimum given under any other key, or bare, is an error, as is a
+    //     `num` without `end`
+    #[test]
+    fn test_23_min_and_end_keys_required() {
+        let err = |r: Result<()>| r.unwrap_err().to_compile_error().to_string();
+        let mut cf = CF::default();
+        let e = err(collect_blocks(
+            quote! { block_simple { fence(b'`', max = 3) => codes [40]; } },
+            &mut cf,
+        ));
+        assert!(e.contains("`fence` rule needs `min = N`"), "{e}");
+        let e = err(collect_lines(
+            quote! { line_simple(b'-', 3) |b|: Rule { kind: b } => rules [40]; },
+            &mut cf,
+        ));
+        assert!(e.contains("`line_simple` rule needs `min = N`"), "{e}");
+        let e = err(collect_blocks(
+            quote! { block { num(b'0'..=b'9', b'.') |n, k|: Num { num: n, kind: k } => nums [40]; } },
+            &mut cf,
+        ));
+        assert!(e.contains("`num` rule needs `end = pattern`"), "{e}");
     }
 }

@@ -43,8 +43,8 @@
 //! | [`ChainedIter`] | `chained: Type { ... }` | `T` |
 //! | [`KvIter`] | `key_value: Type { ... }` | `T` |
 //! | [`LineMarkerIter`] | `line(byte, max = N)` | `(T, Span)` |
-//! | [`LineUniformIter`] | `line_simple(bytes, min = N)` | `(T, Span)` |
-//! | [`FenceIter`] | `fence(byte, min = N)` | `Span` |
+//! | [`LineUniformIter`] | `line_simple(pattern, min = N)` | `(T, Span)` |
+//! | [`FenceIter`] | `fence(pattern, min = N)` | `Span` |
 //! | [`ContIter`] | `cont(byte)` | `Span` |
 //! | [`BlockMarkerIter`] | `block { (pattern) }` | `(T, Span)` |
 //! | [`BlockNumberedIter`] | `block { num(...) }` | `(T, Span)` |
@@ -115,17 +115,19 @@ pub mod symmetric;
 /// | `chained(o1,c1,tb,o2,c2,ub,tr,prefix,Type,..)`   | `find_<field>`   | [`ChainedIter`]         |
 /// | `kv(eq, end, allow, Type, kf, vf)`               | `find_<field>`   | [`KvIter`]              |
 /// | `line_marker(byte, max, Type, var, rule)`        | `find_<field>`   | [`LineMarkerIter`]      |
-/// | `line_uniform([bytes], min, Type, var, rule)`    | `find_<field>`   | [`LineUniformIter`]     |
-/// | `fence(byte, min)`                               | `find_<field>`   | [`FenceIter`]           |
+/// | `line_uniform((pat), min, Type, var, rule)`      | `find_<field>`   | [`LineUniformIter`]     |
+/// | `fence((pat), min)`                              | `find_<field>`   | [`FenceIter`]           |
 /// | `cont(byte)`                                     | `find_<field>`   | [`ContIter`]            |
-/// | `block_marker([bytes], Type, var, rule)`         | `find_<field>`   | [`BlockMarkerIter`]     |
-/// | `block_numbered([ends], Type, nvar, kvar, rule)` | `find_<field>`   | [`BlockNumberedIter`]   |
+/// | `block_marker((pat), Type, var, rule)`           | `find_<field>`   | [`BlockMarkerIter`]     |
+/// | `block_numbered((digits), (ends), Type, nvar, kvar, rule)` | `find_<field>` | [`BlockNumberedIter`] |
 ///
 /// The `sep`, `eol`, `tab`, and `escape` context bytes and `max_nest` are
 /// forwarded from the grammar's header to the iterators that need them — they
 /// do not appear in the individual rule entries. `rule` is a line-family rule's index in
 /// declaration order within its section (`block` or `lines`), which its
-/// `find_context_*` finder hands to `ContextCursor::admits`.
+/// `find_context_*` finder hands to `ContextCursor::admits`. A `(pat)` entry
+/// is the grammar's byte pattern as written: the finders `matches!` against
+/// it, and the `context()` header turns it into a [`ByteSet`](crate::ByteSet).
 ///
 /// # Standalone semantics
 ///
@@ -198,24 +200,28 @@ macro_rules! define_standalone_fns {
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
     };
 
-    // One line rule of the `context()` header, as a `LineModel` entry.
-    (@block_simple fence($byte:literal, $min:literal)) => {
-        $crate::BlockSimpleRule::Fence { byte: $byte, min: $min as u8 }
+    // One line rule of the `context()` header, as a `LineModel` entry. A
+    // byte pattern becomes the list of the bytes it matches.
+    (@block_simple fence(($($pat:tt)*), $min:literal)) => {
+        $crate::BlockSimpleRule::Fence { bytes: $crate::byte_set!($($pat)*), min: $min as u32 }
     };
     (@block_simple cont($byte:literal)) => {
         $crate::BlockSimpleRule::Cont { byte: $byte }
     };
-    (@block marker($($byte:literal),+)) => {
-        $crate::BlockRule::Marker { bytes: &[$($byte),+] }
+    (@block marker(($($pat:tt)*))) => {
+        $crate::BlockRule::Marker { bytes: $crate::byte_set!($($pat)*) }
     };
-    (@block num($($end:literal),+)) => {
-        $crate::BlockRule::Num { ends: &[$($end),+] }
+    (@block num(($($dp:tt)*), ($($ep:tt)*))) => {
+        $crate::BlockRule::Num {
+            digits: $crate::byte_set!($($dp)*),
+            ends: $crate::byte_set!($($ep)*),
+        }
     };
     (@lines marker($byte:literal, $max:literal)) => {
         $crate::LineRule::Marker { byte: $byte, max: $max as u8 }
     };
-    (@lines uniform([$($byte:literal),+], $min:literal)) => {
-        $crate::LineRule::Uniform { bytes: &[$($byte),+], min: $min as u32 }
+    (@lines uniform(($($pat:tt)*), $min:literal)) => {
+        $crate::LineRule::Uniform { bytes: $crate::byte_set!($($pat)*), min: $min as u32 }
     };
 
     // Entry without a context header: finders only, no `context()`.
@@ -374,13 +380,13 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     line_uniform([$($byte:literal),+], $min:literal, $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     line_uniform(($($pat:tt)*), $min:literal, $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
                 $crate::LineUniformIter::new(
                     source, $min as u32, $eol, $sep,
-                    |b| ::core::matches!(b, $($byte)|+),
+                    |b| ::core::matches!(b, $($pat)*),
                     |$var| $ty { $($body)* },
                 )
             }
@@ -392,7 +398,7 @@ macro_rules! define_standalone_fns {
                 let mut _cur = ctx.cursor();
                 $crate::LineUniformIter::new(
                     source, $min as u32, $eol, $sep,
-                    |b| ::core::matches!(b, $($byte)|+),
+                    |b| ::core::matches!(b, $($pat)*),
                     |$var| $ty { $($body)* },
                 )
                 .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Line($rule)))
@@ -402,11 +408,18 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     fence($byte:literal, $min:literal) => $field:ident ; $($rest:tt)*) => {
+     fence(($($pat:tt)*), $min:literal) => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
-                $crate::FenceIter::new(source, $byte, $min as u8, $eol, $sep, $tab)
+                $crate::FenceIter::new(
+                    source,
+                    |b| ::core::matches!(b, $($pat)*),
+                    $min as u32,
+                    $eol,
+                    $sep,
+                    $tab,
+                )
             }
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol tab=$tab esc=$esc maxn=$maxn ; $($rest)* }
@@ -417,7 +430,7 @@ macro_rules! define_standalone_fns {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = $crate::span::Span> + '_ {
-                $crate::ContIter::new(source, $byte, $eol, $sep, $tab, $maxn as usize)
+                $crate::ContIter::<$maxn>::new(source, $byte, $eol, $sep, $tab)
             }
             #[allow(missing_docs)]
             pub fn [<find_context_ $field>]<'s>(
@@ -427,7 +440,7 @@ macro_rules! define_standalone_fns {
                 // Frames come innermost-first, so their starts are not in
                 // order: the cursor steps back to an outer frame's start.
                 let mut _cur = ctx.cursor();
-                $crate::ContIter::new(source, $byte, $eol, $sep, $tab, $maxn as usize)
+                $crate::ContIter::<$maxn>::new(source, $byte, $eol, $sep, $tab)
                     .filter(move |s| !_cur.is_covered(s.start as usize))
             }
         }
@@ -435,13 +448,13 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     block_marker([$($byte:literal),+], $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     block_marker(($($pat:tt)*), $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
                 $crate::BlockMarkerIter::new(
                     source, $eol, $sep, $tab,
-                    |b| ::core::matches!(b, $($byte)|+),
+                    |b| ::core::matches!(b, $($pat)*),
                     |$var| $ty { $($body)* },
                 )
             }
@@ -453,7 +466,7 @@ macro_rules! define_standalone_fns {
                 let mut _cur = ctx.cursor();
                 $crate::BlockMarkerIter::new(
                     source, $eol, $sep, $tab,
-                    |b| ::core::matches!(b, $($byte)|+),
+                    |b| ::core::matches!(b, $($pat)*),
                     |$var| $ty { $($body)* },
                 )
                 .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Block($rule)))
@@ -463,13 +476,14 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;
-     block_numbered([$($end:literal),+], $ty:ty, $nvar:ident, $kvar:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
+     block_numbered(($($dp:tt)*), ($($ep:tt)*), $ty:ty, $nvar:ident, $kvar:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
         $crate::paste::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](source: &[u8]) -> impl ::std::iter::Iterator<Item = ($ty, $crate::span::Span)> + '_ {
                 $crate::BlockNumberedIter::new(
                     source, $eol, $sep, $tab,
-                    |b| ::core::matches!(b, $($end)|+),
+                    |b| ::core::matches!(b, $($dp)*),
+                    |b| ::core::matches!(b, $($ep)*),
                     |$nvar, $kvar| $ty { $($body)* },
                 )
             }
@@ -481,7 +495,8 @@ macro_rules! define_standalone_fns {
                 let mut _cur = ctx.cursor();
                 $crate::BlockNumberedIter::new(
                     source, $eol, $sep, $tab,
-                    |b| ::core::matches!(b, $($end)|+),
+                    |b| ::core::matches!(b, $($dp)*),
+                    |b| ::core::matches!(b, $($ep)*),
                     |$nvar, $kvar| $ty { $($body)* },
                 )
                 .filter(move |(_, s)| _cur.admits(source, *s, $crate::RuleIndex::Block($rule)))
@@ -491,4 +506,30 @@ macro_rules! define_standalone_fns {
     };
 
     (@fns sep=$sep:tt eol=$eol:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt ;) => {};
+}
+
+/// The bytes a byte pattern matches, as a [`ByteSet`](crate::ByteSet)
+/// computed at compile time: `byte_set!(b'0'..=b'9' | b'_')`.
+///
+/// The `LineModel` entries `define_standalone_fns!` emits take a grammar's
+/// byte patterns this way, so a pattern of any shape — alternations, ranges,
+/// wildcards, constants — is read exactly as the full parse's `matches!`
+/// reads it.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! byte_set {
+    ($pat:pat) => {{
+        const SET: $crate::ByteSet = {
+            let mut set = $crate::ByteSet::EMPTY;
+            let mut b = 0usize;
+            while b < 256 {
+                if ::core::matches!(b as u8, $pat) {
+                    set = set.with(b as u8);
+                }
+                b += 1;
+            }
+            set
+        };
+        SET
+    }};
 }

@@ -372,4 +372,40 @@ mod tests {
         let mut iter = LineUniformIter::new(b"\n\n", 3, b'\n', b' ', wide_matches, stab_make);
         assert_eq!(iter.next(), None);
     }
+
+    #[allow(unused)]
+    mod generated {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub struct Rule {
+            pub kind: u8,
+        }
+
+        crate::define_parser!(Rules {
+            sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+            inline { fallback => texts [10]; }
+            lines {
+                line_simple(b'0'..=b'9' | b'=', min = 3) |b|: Rule { kind: b } => rules [40];
+            }
+            blocks { fallback => paragraphs [80]; }
+        });
+
+        fn items(it: impl IntoIterator<Item = (Rule, crate::span::Span)>) -> Vec<(u8, u32, u32)> {
+            it.into_iter()
+                .map(|(m, s)| (m.kind, s.start, s.end))
+                .collect()
+        }
+
+        // 19. A range pattern reaches the finders as written: any byte of it
+        //     opens a line, which then takes only that byte and `sep`
+        #[test]
+        fn test_19_generated_range_pattern() {
+            let src: &[u8] = b"===\n555\n5 5 5\n565\n44\n7777 x";
+            let full = RulesParser::parse(src);
+            let want = vec![(b'=', 0, 3), (b'5', 4, 7), (b'5', 8, 13)];
+            assert_eq!(items(full.rules.iter().copied()), want);
+            assert_eq!(items(RulesParser::find_rules(src)), want);
+            let ctx = RulesParser::context(src);
+            assert_eq!(items(RulesParser::find_context_rules(src, &ctx)), want);
+        }
+    }
 }

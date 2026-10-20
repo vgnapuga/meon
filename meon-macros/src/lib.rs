@@ -136,18 +136,20 @@ use crate::strip::strip;
 ///
 /// ## `lines { ... }` section
 ///
-/// Declares whole-line elements. A matching line is consumed entirely; inline
-/// scanning is skipped for it.
+/// Declares whole-line elements, tried at the start of a line no block rule
+/// claims.
 ///
 /// ```text
 /// lines {
 ///     line(byte, max = N) |var|: Type { ... } => field [div];
-///     // Matches 1–N leading `byte` bytes followed by `sep` or EOL.
-///     // `var` receives the count. Produces Vec<(Type, Span)>.
+///     // Matches 1–N leading `byte` bytes followed by `sep` or the line end.
+///     // `var` receives the count. The Span is the rest of the line, which is
+///     // scanned for inline rules. Produces Vec<(Type, Span)>.
 ///
-///     line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field [div];
-///     // Matches a line composed entirely of one delimiter byte (interleaved
-///     // with `sep`), at least `min` times. `var` receives the delimiter byte.
+///     line_simple(pattern, min = N) |var|: Type { ... } => field [div];
+///     // Matches a line composed entirely of one byte `pattern` matches
+///     // (interleaved with `sep`), at least `min` times. `var` receives that
+///     // byte. The whole line is consumed; no inline scan.
 ///     // Produces Vec<(Type, Span)>.
 /// }
 /// ```
@@ -159,10 +161,11 @@ use crate::strip::strip;
 /// ```text
 /// blocks {
 ///     block_simple {
-///         fence(byte, min = N) => field [div];
-///         // Opens on a line starting with ≥ N `byte` bytes; closes on a
-///         // matching fence line. Entire range is one Span. Inline scanning
-///         // suppressed while fence is active.
+///         fence(pattern, min = N) => field [div];
+///         // Opens on a line starting with ≥ N of one byte `pattern` matches
+///         // (and no further such byte on the line); closes on a line of at
+///         // least as many of that same byte. Entire range is one Span.
+///         // Inline scanning suppressed while fence is active.
 ///
 ///         cont(byte) => field [div];
 ///         // Groups consecutive lines starting with `byte` into one Span.
@@ -175,9 +178,10 @@ use crate::strip::strip;
 ///         // Produces Vec<(Type, Span)>.
 ///
 ///         num(digit_pat, end = end_pat) |n, k|: Type { ... } => field [div];
-///         // Single-line numbered item: digit run followed by byte matching
-///         // `end_pat`. `n` receives the parsed number, `k` the delimiter byte.
-///         // Produces Vec<(Type, Span)>.
+///         // Single-line numbered item: one to nine bytes matching
+///         // `digit_pat`, then a byte matching `end_pat`, then `sep` or `tab`.
+///         // `n` receives the number (each byte counts as its value less
+///         // `b'0'`), `k` the delimiter byte. Produces Vec<(Type, Span)>.
 ///     }
 ///
 ///     fallback => field [div];
@@ -482,7 +486,7 @@ mod tests {
                 blocks { block_simple { fence(b'`') => fenced_codes [400]; } }
             }
         });
-        assert!(e.contains("fence min"));
+        assert!(e.contains("`fence` rule needs `min = N`"), "{e}");
     }
 
     // 16. max_nest, when present, is forwarded verbatim into the parse_text!

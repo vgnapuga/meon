@@ -68,9 +68,9 @@ pub(crate) fn build_standalone_dsl(
     let mut ctx_lines: Vec<TS2> = Vec::new();
     for rule in rules {
         match rule {
-            StandaloneRule::Fence { byte, min, cap, .. } => {
+            StandaloneRule::Fence { pat, min, cap, .. } => {
                 ctx_caps.push(quote! { #cap });
-                ctx_block_simple.push(quote! { fence(#byte, #min) });
+                ctx_block_simple.push(quote! { fence((#pat), #min) });
             }
             StandaloneRule::Cont { byte, .. } => {
                 ctx_block_simple.push(quote! { cont(#byte) });
@@ -111,17 +111,17 @@ pub(crate) fn build_standalone_dsl(
                 ctx_caps.push(quote! { #cap });
                 ctx_chained.push(quote! { (#open1, #close1, #tb, #open2, #close2, #ub) });
             }
-            StandaloneRule::BlockMarker { bytes, .. } => {
-                ctx_block.push(quote! { marker(#(#bytes),*) });
+            StandaloneRule::BlockMarker { pat, .. } => {
+                ctx_block.push(quote! { marker((#pat)) });
             }
-            StandaloneRule::BlockNumbered { end_bytes, .. } => {
-                ctx_block.push(quote! { num(#(#end_bytes),*) });
+            StandaloneRule::BlockNumbered { digits, ends, .. } => {
+                ctx_block.push(quote! { num((#digits), (#ends)) });
             }
             StandaloneRule::LineMarker { byte, max, .. } => {
                 ctx_lines.push(quote! { marker(#byte, #max) });
             }
-            StandaloneRule::LineUniform { bytes, min, .. } => {
-                ctx_lines.push(quote! { uniform([#(#bytes),*], #min) });
+            StandaloneRule::LineUniform { pat, min, .. } => {
+                ctx_lines.push(quote! { uniform((#pat), #min) });
             }
             _ => {}
         }
@@ -185,21 +185,21 @@ pub(crate) fn build_standalone_dsl(
             let i = next(&mut line_rule);
             quote! { line_marker(#byte, #max, #ty, #var, #i) { #body } => #field; }
         }
-        StandaloneRule::LineUniform { field, bytes, min, ty, var, body } => {
+        StandaloneRule::LineUniform { field, pat, min, ty, var, body } => {
             let i = next(&mut line_rule);
-            quote! { line_uniform([#(#bytes),*], #min, #ty, #var, #i) { #body } => #field; }
+            quote! { line_uniform((#pat), #min, #ty, #var, #i) { #body } => #field; }
         }
-        StandaloneRule::Fence { field, byte, min, .. } =>
-            quote! { fence(#byte, #min) => #field; },
+        StandaloneRule::Fence { field, pat, min, .. } =>
+            quote! { fence((#pat), #min) => #field; },
         StandaloneRule::Cont { field, byte } =>
             quote! { cont(#byte) => #field; },
-        StandaloneRule::BlockMarker { field, bytes, ty, var, body } => {
+        StandaloneRule::BlockMarker { field, pat, ty, var, body } => {
             let i = next(&mut block_rule);
-            quote! { block_marker([#(#bytes),*], #ty, #var, #i) { #body } => #field; }
+            quote! { block_marker((#pat), #ty, #var, #i) { #body } => #field; }
         }
-        StandaloneRule::BlockNumbered { field, end_bytes, ty, num_var, kind_var, body } => {
+        StandaloneRule::BlockNumbered { field, digits, ends, ty, num_var, kind_var, body } => {
             let i = next(&mut block_rule);
-            quote! { block_numbered([#(#end_bytes),*], #ty, #num_var, #kind_var, #i) { #body } => #field; }
+            quote! { block_numbered((#digits), (#ends), #ty, #num_var, #kind_var, #i) { #body } => #field; }
         }
     }).collect();
     quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest; #ctx_hdr #(#items)* }

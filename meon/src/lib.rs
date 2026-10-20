@@ -88,8 +88,8 @@ pub use engine::text_parser::standalone::{
 
 pub use engine::text_parser::standalone::{
     context::{
-        BlockRule, BlockSimpleRule, ChainSpec, ContextCursor, LineModel, LineRule, ParseContext,
-        RuleIndex,
+        BlockRule, BlockSimpleRule, ByteSet, ChainSpec, ContextCursor, LineModel, LineRule,
+        ParseContext, RuleIndex,
     },
     context_iter::{ContextAsymmetricStackIter, ContextSymmetricExactIter},
 };

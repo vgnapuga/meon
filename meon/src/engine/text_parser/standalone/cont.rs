@@ -2,19 +2,12 @@
 
 use super::common::*;
 
-/// Physical storage ceiling for the frame stack — the size of the fixed,
-/// alloc-free `open`/`pending` arrays. The *behavioural* nesting cap is the
-/// grammar's `max_nest`, passed to [`ContIter::new`] and clamped to this bound;
-/// no realistic grammar nests 32 deep, so in practice the effective cap equals
-/// `max_nest` exactly and this constant is never the binding limit.
-const MAX_DEPTH: usize = 32;
-
 /// Iterator over line-continuation block spans in a byte slice, **including
 /// same-type self-nesting** on one line (`> >` opens two frames).
 ///
 /// A `cont` marker self-nests positionally: on each line the number of leading
 /// marker bytes (each optionally followed by one `sep`/`tab`) is the line's
-/// continuation depth, capped at `max_nest`. A frame at depth `d` spans the
+/// continuation depth, capped at `N`, the grammar's `max_nest`. A frame at depth `d` spans the
 /// maximal run of consecutive lines whose depth is `>= d`; it opens at the
 /// position of the `d`-th marker on the first line of that run and closes at
 /// the start of the first line whose depth drops below `d` (or end of source).
@@ -27,32 +20,29 @@ const MAX_DEPTH: usize = 32;
 /// Frames closing at the same point are emitted **innermost-first**, matching
 /// the full parser's close order.
 ///
-/// The only standalone iterator with cross-line state (a small bounded frame
-/// stack); every other iterator in this module is a stateless forward scan.
+/// The frames open across lines are kept, as in the full parse, in a fixed
+/// array of `N` entries: no allocation, and no cap but the grammar's own.
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
-pub struct ContIter<'a> {
+pub struct ContIter<'a, const N: usize> {
     src: &'a [u8],
     byte: u8,
     eol: u8,
     sep: u8,
     tab: u8,
-    /// Effective nesting cap: `min(max_nest, MAX_DEPTH)`. No line opens more
-    /// than this many frames; deeper markers are treated as content.
-    cap: usize,
     /// Current line-start scan position.
     pos: usize,
     /// Start offsets of currently-open frames, outermost first.
-    open: [u32; MAX_DEPTH],
+    open: [u32; N],
     open_len: usize,
     /// Closed spans buffered in emit (innermost-first) order, drained by `next`.
-    pending: [Span; MAX_DEPTH],
+    pending: [Span; N],
     pending_len: usize,
     pending_idx: usize,
 }
 
-impl<'a> ContIter<'a> {
+impl<'a, const N: usize> ContIter<'a, N> {
     /// Create a nesting-aware continuation-block iterator.
     ///
     /// # Parameters
@@ -65,21 +55,20 @@ impl<'a> ContIter<'a> {
     /// - `sep` / `tab` — the separator bytes a single marker may consume after
     ///   itself, so `"> > x"` reads as depth 2 rather than one marker plus
     ///   content. Same convention as [`crate::parse_block!`].
-    /// - `max_nest` — the grammar's bounded-nesting cap. At most this many
-    ///   frames open per line (clamped to the physical `MAX_DEPTH` storage
-    ///   ceiling); markers beyond it are content, matching the full parse.
-    pub fn new(src: &'a [u8], byte: u8, eol: u8, sep: u8, tab: u8, max_nest: usize) -> Self {
+    ///
+    /// `N` is the grammar's `max_nest`: at most this many frames open per
+    /// line, and markers beyond it are content, matching the full parse.
+    pub fn new(src: &'a [u8], byte: u8, eol: u8, sep: u8, tab: u8) -> Self {
         Self {
             src,
             byte,
             eol,
             sep,
             tab,
-            cap: max_nest.min(MAX_DEPTH),
             pos: 0,
-            open: [0u32; MAX_DEPTH],
+            open: [0u32; N],
             open_len: 0,
-            pending: [Span::new(0, 0); MAX_DEPTH],
+            pending: [Span::new(0, 0); N],
             pending_len: 0,
             pending_idx: 0,
         }
@@ -108,7 +97,7 @@ impl<'a> ContIter<'a> {
     }
 }
 
-impl Iterator for ContIter<'_> {
+impl<const N: usize> Iterator for ContIter<'_, N> {
     type Item = Span;
 
     fn next(&mut self) -> Option<Span> {
@@ -181,7 +170,7 @@ impl Iterator for ContIter<'_> {
                     // Open phase: further markers open new frames, bounded by
                     // the grammar's `max_nest` cap. Markers past the cap are
                     // ordinary content, matching the full parse.
-                    while cur < le && src[cur] == self.byte && self.open_len < self.cap {
+                    while cur < le && src[cur] == self.byte && self.open_len < N {
                         self.open[self.open_len] = cur as u32;
                         self.open_len += 1;
                         cur = self.consume_marker(cur, le);
@@ -201,8 +190,8 @@ mod tests {
 
     // A generous cap so the general fixtures exercise nesting without the cap
     // ever binding; the cap itself is covered by test_23.
-    fn iter(src: &[u8]) -> ContIter<'_> {
-        ContIter::new(src, b'>', b'\n', b' ', b'\t', MAX_DEPTH)
+    fn iter(src: &[u8]) -> ContIter<'_, 32> {
+        ContIter::new(src, b'>', b'\n', b' ', b'\t')
     }
 
     // 01. Parses a single matching line that spans until the end of the input without a trailing newline
@@ -424,9 +413,43 @@ mod tests {
     #[test]
     fn test_23_max_nest_caps_opening() {
         // markers at 0, 2, 4, 6; cap 2 opens frames at 0 and 2 only.
-        let mut it = ContIter::new(b"> > > > x\n", b'>', b'\n', b' ', b'\t', 2);
+        let mut it = ContIter::<2>::new(b"> > > > x\n", b'>', b'\n', b' ', b'\t');
         assert_eq!(it.next(), Some(Span::new(2, 10))); // inner (2nd marker)
         assert_eq!(it.next(), Some(Span::new(0, 10))); // outer (1st marker)
         assert_eq!(it.next(), None);
+    }
+
+    #[allow(unused)]
+    mod generated {
+        crate::define_parser!(Quotes {
+            sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 40;
+            inline { fallback => texts [10]; }
+            blocks {
+                block_simple { cont(b'>') => quotes [40]; }
+                fallback => paragraphs [80];
+            }
+        });
+
+        fn sorted<'a>(it: impl IntoIterator<Item = &'a crate::span::Span>) -> Vec<(u32, u32)> {
+            let mut v: Vec<_> = it.into_iter().map(|s| (s.start, s.end)).collect();
+            v.sort_unstable();
+            v
+        }
+
+        // 24. The finder nests as deep as the grammar's `max_nest`: 35
+        //     markers under `max_nest = 40` open 35 frames, as in the full
+        //     parse, with no cap of the finder's own
+        #[test]
+        fn test_24_generated_deep_nesting() {
+            let mut src = b"> ".repeat(35);
+            src.extend_from_slice(b"x\n");
+            let full = QuotesParser::parse(&src);
+            assert_eq!(full.quotes.len(), 35);
+            let found: Vec<_> = QuotesParser::find_quotes(&src).collect();
+            assert_eq!(sorted(&found), sorted(&full.quotes));
+            let ctx = QuotesParser::context(&src);
+            let found: Vec<_> = QuotesParser::find_context_quotes(&src, &ctx).collect();
+            assert_eq!(sorted(&found), sorted(&full.quotes));
+        }
     }
 }

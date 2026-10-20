@@ -355,4 +355,67 @@ mod tests {
         let mut iter = BlockMarkerIter::new(b"\n\n", b'\n', b' ', b'\t', wide_matches, stub_make);
         assert_eq!(iter.next(), None);
     }
+
+    #[allow(unused)]
+    mod generated {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub struct Item {
+            pub kind: u8,
+        }
+
+        // Two marker bytes: the finder streams by them.
+        mod narrow {
+            use super::Item;
+            crate::define_parser!(Narrow {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline { fallback => texts [10]; }
+                blocks {
+                    block { (b'x'..=b'y') |b|: Item { kind: b } => items [40]; }
+                    fallback => paragraphs [80];
+                }
+            });
+        }
+
+        // Four marker bytes: the finder scans line by line.
+        mod wide {
+            use super::Item;
+            crate::define_parser!(Wide {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline { fallback => texts [10]; }
+                blocks {
+                    block { (b'x'..=b'z' | b'+') |b|: Item { kind: b } => items [40]; }
+                    fallback => paragraphs [80];
+                }
+            });
+        }
+
+        fn items(it: impl IntoIterator<Item = (Item, crate::span::Span)>) -> Vec<(u8, u32, u32)> {
+            it.into_iter()
+                .map(|(m, s)| (m.kind, s.start, s.end))
+                .collect()
+        }
+
+        // 19. A range marker pattern reaches the finders as written, and the
+        //     finders yield the full parse's items
+        #[test]
+        fn test_19_generated_range_marker() {
+            let src: &[u8] = b"x a\n  y b\nz c\n+ d\nw e\nxy f";
+            let full = narrow::NarrowParser::parse(src);
+            let want = vec![(b'x', 2, 3), (b'y', 8, 9)];
+            assert_eq!(items(full.items.iter().copied()), want);
+            assert_eq!(items(narrow::NarrowParser::find_items(src)), want);
+            let ctx = narrow::NarrowParser::context(src);
+            assert_eq!(
+                items(narrow::NarrowParser::find_context_items(src, &ctx)),
+                want
+            );
+
+            let full = wide::WideParser::parse(src);
+            let want = vec![(b'x', 2, 3), (b'y', 8, 9), (b'z', 12, 13), (b'+', 16, 17)];
+            assert_eq!(items(full.items.iter().copied()), want);
+            assert_eq!(items(wide::WideParser::find_items(src)), want);
+            let ctx = wide::WideParser::context(src);
+            assert_eq!(items(wide::WideParser::find_context_items(src, &ctx)), want);
+        }
+    }
 }

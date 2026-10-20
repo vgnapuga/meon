@@ -135,20 +135,21 @@ pub struct ChainSpec {
     pub url_balanced: bool,
 }
 
-/// Maximum distinct needle bytes: up to 3 fence bytes plus up to 8 opaque
-/// triggers, deduplicated.
+/// Most distinct needle bytes one search instruction takes; a wider set is
+/// searched through a byte table.
 const MAX_NEEDLES: usize = 11;
 
 /// One `block_simple` rule of a [`LineModel`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockSimpleRule {
-    /// `fence(byte, min = N)`: a run of at least `min` `byte`s with no further
-    /// `byte` on the line opens a fenced block.
+    /// `fence(pattern, min = N)`: a run of at least `min` of one byte out of
+    /// `bytes`, with no further such byte on the line, opens a fenced block,
+    /// which a run of that same byte closes.
     Fence {
-        /// The fence byte.
-        byte: u8,
+        /// The bytes a fence may consist of.
+        bytes: ByteSet,
         /// The shortest opening run.
-        min: u8,
+        min: u32,
     },
     /// `cont(byte)`: a `byte` marker, optionally followed by one `sep`/`tab`,
     /// opens or continues a continuation frame.
@@ -165,13 +166,15 @@ pub enum BlockRule {
     /// `(b1 | b2 | ...)`: one marker byte out of `bytes`.
     Marker {
         /// The marker bytes.
-        bytes: &'static [u8],
+        bytes: ByteSet,
     },
-    /// `num(..., end = e1 | e2 | ...)`: one to nine ASCII digits, then one
-    /// byte out of `ends`.
+    /// `num(digits, end = ends)`: one to nine bytes out of `digits`, then
+    /// one byte out of `ends`.
     Num {
+        /// The bytes the number may consist of.
+        digits: ByteSet,
         /// The bytes that may end the number.
-        ends: &'static [u8],
+        ends: ByteSet,
     },
 }
 
@@ -191,7 +194,7 @@ pub enum LineRule {
     /// only.
     Uniform {
         /// The bytes the line may repeat.
-        bytes: &'static [u8],
+        bytes: ByteSet,
         /// The fewest repetitions.
         min: u32,
     },
@@ -255,7 +258,7 @@ pub(crate) enum LineKind {
     Fence {
         at: usize,
         byte: u8,
-        count: u8,
+        count: u32,
         depth: usize,
     },
     /// `cont` markers open or continue frames; inline content starts at
@@ -292,19 +295,65 @@ impl LineSlot {
     }
 }
 
-/// A set of byte values.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct ByteSet([u64; 4]);
+/// A set of byte values: the bytes a grammar's byte pattern matches.
+///
+/// The [`LineModel`] rules hold their patterns this way, so a lookup is one
+/// bit test whatever the pattern's shape. A `const` set comes from
+/// [`ByteSet::from_bytes`], or from a pattern through the hidden `byte_set!`
+/// macro the generated `Parser::context` uses.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct ByteSet([u64; 4]);
 
 impl ByteSet {
-    #[inline]
-    fn insert(&mut self, b: u8) {
-        self.0[usize::from(b >> 6)] |= 1 << (b & 63);
+    /// The set of no byte.
+    pub const EMPTY: Self = Self([0; 4]);
+
+    /// The set of the bytes in `bytes`.
+    pub const fn from_bytes(bytes: &[u8]) -> Self {
+        let mut set = Self::EMPTY;
+        let mut i = 0;
+        while i < bytes.len() {
+            set = set.with(bytes[i]);
+            i += 1;
+        }
+        set
     }
 
+    /// The set with `b` added.
+    #[inline]
+    pub const fn with(self, b: u8) -> Self {
+        let mut words = self.0;
+        words[(b >> 6) as usize] |= 1 << (b & 63);
+        Self(words)
+    }
+
+    /// Is `b` in the set?
     #[inline(always)]
-    fn contains(&self, b: u8) -> bool {
-        (self.0[usize::from(b >> 6)] >> (b & 63)) & 1 == 1
+    pub const fn contains(&self, b: u8) -> bool {
+        (self.0[(b >> 6) as usize] >> (b & 63)) & 1 == 1
+    }
+
+    /// The bytes in the set, in ascending order.
+    pub fn iter(self) -> impl Iterator<Item = u8> {
+        (0..=255u8).filter(move |&b| self.contains(b))
+    }
+
+    #[inline]
+    fn insert(&mut self, b: u8) {
+        *self = self.with(b);
+    }
+
+    #[inline]
+    fn union(&mut self, other: Self) {
+        for (w, o) in self.0.iter_mut().zip(other.0) {
+            *w |= o;
+        }
+    }
+}
+
+impl core::fmt::Debug for ByteSet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
     }
 }
 
@@ -506,8 +555,8 @@ impl LineModel {
         'open: while depth < self.max_nest {
             for rule in self.block_simple {
                 match *rule {
-                    BlockSimpleRule::Fence { byte, min } => {
-                        if let Some(count) = fence_run(src, cur, le, byte, min) {
+                    BlockSimpleRule::Fence { bytes, min } => {
+                        if let Some((byte, count)) = fence_run(src, cur, le, bytes, min) {
                             return LineKind::Fence {
                                 at: cur,
                                 byte,
@@ -569,7 +618,7 @@ impl LineModel {
                         .iter()
                         .any(|r| match *r {
                             LineRule::Marker { byte, .. } => byte == b,
-                            LineRule::Uniform { bytes, .. } => bytes.contains(&b),
+                            LineRule::Uniform { bytes, .. } => bytes.contains(b),
                         })
             }
             RuleIndex::Block(i) => {
@@ -584,8 +633,8 @@ impl LineModel {
                     || self.block[..i.min(self.block.len())]
                         .iter()
                         .any(|r| match *r {
-                            BlockRule::Marker { bytes } => bytes.contains(&src[m]),
-                            BlockRule::Num { .. } => src[m].is_ascii_digit(),
+                            BlockRule::Marker { bytes } => bytes.contains(src[m]),
+                            BlockRule::Num { digits, .. } => digits.contains(src[m]),
                         })
             }
         }
@@ -613,15 +662,15 @@ impl LineModel {
     /// `(byte, count)`: the first `block_simple` rule in order that matches
     /// there, when it is a fence. The first step of [`Self::classify`].
     #[inline]
-    fn fence_at(&self, src: &[u8], ls: usize, le: usize) -> Option<(u8, u8)> {
+    fn fence_at(&self, src: &[u8], ls: usize, le: usize) -> Option<(u8, u32)> {
         if self.max_nest == 0 {
             return None;
         }
         for rule in self.block_simple {
             match *rule {
-                BlockSimpleRule::Fence { byte, min } => {
-                    if let Some(count) = fence_run(src, ls, le, byte, min) {
-                        return Some((byte, count));
+                BlockSimpleRule::Fence { bytes, min } => {
+                    if let Some(found) = fence_run(src, ls, le, bytes, min) {
+                        return Some(found);
                     }
                 }
                 BlockSimpleRule::Cont { byte } => {
@@ -649,18 +698,18 @@ impl LineModel {
         for (ri, rule) in self.block.iter().enumerate() {
             match *rule {
                 BlockRule::Marker { bytes } => {
-                    if bytes.contains(&src[p]) && spaced(p + 1) {
+                    if bytes.contains(src[p]) && spaced(p + 1) {
                         return Some((p + 2, ri));
                     }
                 }
-                BlockRule::Num { ends } => {
+                BlockRule::Num { digits, ends } => {
                     let mut i = p;
                     let mut dc = 0u8;
-                    while i < le && src[i].is_ascii_digit() && dc < 9 {
+                    while i < le && digits.contains(src[i]) && dc < 9 {
                         i += 1;
                         dc += 1;
                     }
-                    if dc > 0 && i < le && ends.contains(&src[i]) && spaced(i + 1) {
+                    if dc > 0 && i < le && ends.contains(src[i]) && spaced(i + 1) {
                         return Some((i + 2, ri));
                     }
                 }
@@ -693,7 +742,7 @@ impl LineModel {
                 }
                 LineRule::Uniform { bytes, min } => {
                     let delim = src[ls];
-                    if !bytes.contains(&delim) {
+                    if !bytes.contains(delim) {
                         continue;
                     }
                     let mut count = 0u32;
@@ -733,11 +782,10 @@ impl LineModel {
         }
         for rule in self.block_simple {
             match *rule {
-                BlockSimpleRule::Fence { byte, .. } => {
-                    c.fences.insert(byte);
-                    c.simple.insert(byte);
-                    c.starts.insert(byte);
-                    c.blocks.insert(byte);
+                BlockSimpleRule::Fence { bytes, .. } => {
+                    for set in [&mut c.fences, &mut c.simple, &mut c.starts, &mut c.blocks] {
+                        set.union(bytes);
+                    }
                 }
                 BlockSimpleRule::Cont { byte } => {
                     c.simple.insert(byte);
@@ -748,28 +796,22 @@ impl LineModel {
             }
         }
         for rule in self.block {
-            let (marker, ends): (&[u8], &[u8]) = match *rule {
-                BlockRule::Marker { bytes } => (bytes, &[]),
-                BlockRule::Num { ends } => (b"0123456789", ends),
+            let (marker, ends) = match *rule {
+                BlockRule::Marker { bytes } => (bytes, ByteSet::EMPTY),
+                BlockRule::Num { digits, ends } => (digits, ends),
             };
-            for &b in marker {
-                c.marks.insert(b);
-                c.starts.insert(b);
-                c.blocks.insert(b);
+            for set in [&mut c.marks, &mut c.starts, &mut c.blocks] {
+                set.union(marker);
             }
-            for &b in ends {
-                c.marks.insert(b);
-            }
+            c.marks.union(ends);
         }
         for rule in self.lines {
-            let bytes: &[u8] = match *rule {
-                LineRule::Marker { ref byte, .. } => core::slice::from_ref(byte),
+            let bytes = match *rule {
+                LineRule::Marker { byte, .. } => ByteSet::EMPTY.with(byte),
                 LineRule::Uniform { bytes, .. } => bytes,
             };
-            for &b in bytes {
-                c.marks.insert(b);
-                c.starts.insert(b);
-            }
+            c.marks.union(bytes);
+            c.starts.union(bytes);
         }
         c
     }
@@ -789,7 +831,7 @@ impl LineModel {
         open_ls: usize,
         open_le: usize,
         byte: u8,
-        count: u8,
+        count: u32,
         depth: usize,
     ) -> (usize, usize) {
         let len = src.len();
@@ -892,9 +934,21 @@ impl ParseContext {
         // One deduplicated needle set — fence bytes and opaque triggers
         // together — so every iteration issues exactly ONE search
         // (memchr/2/3, or SWAR beyond three distinct bytes), never several.
+        // A set too wide for those is searched byte by byte through a table.
         let mut needle_buf = [0u8; MAX_NEEDLES];
-        let nn = build_needles(lines.block_simple, sym, asym, chained, &mut needle_buf);
-        let needles = &needle_buf[..nn];
+        let mut needle_set = ByteSet::default();
+        let nn = build_needles(
+            lines.block_simple,
+            sym,
+            asym,
+            chained,
+            &mut needle_buf,
+            &mut needle_set,
+        );
+        let find = |hay: &[u8]| match nn {
+            Some(n) => find_needle(&needle_buf[..n], hay),
+            None => hay.iter().position(|&b| needle_set.contains(b)),
+        };
 
         let classes = lines.classes();
         let mut reader = LineReader::new(&lines, &classes);
@@ -905,7 +959,7 @@ impl ParseContext {
         let mut asym_dead: Vec<usize> = vec![0; asym.len()];
         let mut pos: usize = 0;
         while pos < len {
-            let Some(r) = find_needle(needles, &source[pos..]) else {
+            let Some(r) = find(&source[pos..]) else {
                 break;
             };
             let p = pos + r;
@@ -1071,27 +1125,33 @@ impl ParseContext {
 }
 
 /// Deduplicated union of every fence byte, symmetric marker, asymmetric
-/// opener and `chained` text opener, written into `buf`. Returns the count
-/// written. Overflow beyond [`MAX_NEEDLES`] is silently dropped (a dropped
-/// needle only means its rule is missed, never unsound); no known grammar
-/// comes close.
+/// opener and `chained` text opener, kept whole in `set` and written into
+/// `buf` while it fits. Returns the count, or `None` when more than
+/// [`MAX_NEEDLES`] bytes do not fit `buf` and the search must go through
+/// `set`.
 fn build_needles(
     block_simple: &[BlockSimpleRule],
     sym: &[SymSpec],
     asym: &[AsymSpec],
     chained: &[ChainSpec],
     buf: &mut [u8; MAX_NEEDLES],
-) -> usize {
+    set: &mut ByteSet,
+) -> Option<usize> {
     let mut n = 0;
     let mut push = |b: u8, n: &mut usize| {
-        if *n < MAX_NEEDLES && !buf[..*n].contains(&b) {
-            buf[*n] = b;
+        if !set.contains(b) {
+            set.insert(b);
+            if *n < MAX_NEEDLES {
+                buf[*n] = b;
+            }
             *n += 1;
         }
     };
     for rule in block_simple {
-        if let BlockSimpleRule::Fence { byte, .. } = *rule {
-            push(byte, &mut n);
+        if let BlockSimpleRule::Fence { bytes, .. } = *rule {
+            for byte in bytes.iter() {
+                push(byte, &mut n);
+            }
         }
     }
     for &(b, _) in sym {
@@ -1103,7 +1163,7 @@ fn build_needles(
     for spec in chained {
         push(spec.text.0, &mut n);
     }
-    n
+    (n <= MAX_NEEDLES).then_some(n)
 }
 
 /// One search over `hay` for any of the `needles`: `memchr`-family for up to
@@ -1158,21 +1218,22 @@ fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec], chained: &[ChainSpec]) ->
     asym.iter().position(|&(o, ..)| o == b).map(Opaque::Asym)
 }
 
-/// The run count of a fence of `byte` opening at `pos` on `[pos, le)`, if one
-/// opens: at least `min` bytes and no further `byte` on the info line
-/// (`parse_block!`'s `@open_simple` fence arm).
+/// The byte and run count of a fence of one of `bytes` opening at `pos` on
+/// `[pos, le)`, if one opens: at least `min` of that byte and no further one
+/// on the info line (`parse_block!`'s `@open_simple` fence arm).
 #[inline]
-fn fence_run(src: &[u8], pos: usize, le: usize, byte: u8, min: u8) -> Option<u8> {
-    if pos >= le || src[pos] != byte {
+fn fence_run(src: &[u8], pos: usize, le: usize, bytes: ByteSet, min: u32) -> Option<(u8, u32)> {
+    if pos >= le || !bytes.contains(src[pos]) {
         return None;
     }
+    let byte = src[pos];
     let mut i = pos;
-    let mut c: u8 = 0;
+    let mut c: u32 = 0;
     while i < le && src[i] == byte {
-        c = c.saturating_add(1);
+        c += 1;
         i += 1;
     }
-    (c >= min && src[i..le].iter().all(|&x| x != byte)).then_some(c)
+    (c >= min && src[i..le].iter().all(|&x| x != byte)).then_some((byte, c))
 }
 
 /// Does the content `[pos, line_end)` close an open fence of `byte` ×
@@ -1186,14 +1247,14 @@ fn fence_closes(
     pos: usize,
     line_end: usize,
     byte: u8,
-    open_count: u8,
+    open_count: u32,
     sep: u8,
     tab: u8,
 ) -> bool {
     let mut i = pos;
-    let mut c: u8 = 0;
+    let mut c: u32 = 0;
     while i < line_end && src[i] == byte {
-        c = c.saturating_add(1);
+        c += 1;
         i += 1;
     }
     c >= open_count && src[i..line_end].iter().all(|&b| b == sep || b == tab)
@@ -1209,7 +1270,7 @@ fn fence_close_scan(
     open_line_end: usize,
     len: usize,
     byte: u8,
-    open_count: u8,
+    open_count: u32,
     eol: u8,
     sep: u8,
     tab: u8,
@@ -1438,17 +1499,25 @@ mod tests {
         tab: b'\t',
         max_nest: 4,
         block_simple: &[
-            BlockSimpleRule::Fence { byte: b'`', min: 3 },
+            BlockSimpleRule::Fence {
+                bytes: ByteSet::from_bytes(b"`"),
+                min: 3,
+            },
             BlockSimpleRule::Cont { byte: b'>' },
         ],
         block: &[
-            BlockRule::Marker { bytes: b"-*+" },
-            BlockRule::Num { ends: b".)" },
+            BlockRule::Marker {
+                bytes: ByteSet::from_bytes(b"-*+"),
+            },
+            BlockRule::Num {
+                digits: ByteSet::from_bytes(b"0123456789"),
+                ends: ByteSet::from_bytes(b".)"),
+            },
         ],
         lines: &[
             LineRule::Marker { byte: b'#', max: 6 },
             LineRule::Uniform {
-                bytes: b"-*_",
+                bytes: ByteSet::from_bytes(b"-*_"),
                 min: 3,
             },
         ],
@@ -1659,7 +1728,10 @@ mod tests {
     #[test]
     fn test_18_distinct_fence_byte() {
         let src = b"`c`\n~~~\n`hidden`\n~~~\n`d`";
-        const LINES: LineModel = fences(&[BlockSimpleRule::Fence { byte: b'~', min: 3 }]);
+        const LINES: LineModel = fences(&[BlockSimpleRule::Fence {
+            bytes: ByteSet::from_bytes(b"~"),
+            min: 3,
+        }]);
         let m = ParseContext::build(src, b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
         assert_eq!(
             m.spans(),
@@ -1682,14 +1754,14 @@ mod tests {
         }
     }
 
-    // 20. Needles beyond the fixed buffer are dropped: the overflowing rule
-    //     simply never matches, everything else still does
+    // 20. More trigger bytes than the needle buffer holds: the scan falls
+    //     back to the byte table, and every rule still matches
     #[test]
-    fn test_20_needle_overflow_dropped() {
+    fn test_20_needle_overflow_scans_table() {
         let alphabet = *b"qwzjvxkyfgdm";
         let sym: Vec<SymSpec> = alphabet.iter().map(|&b| (b, 1)).collect();
         let m = ParseContext::build(b"mam qbq", b'\\', LineModel::default(), &sym, &[], &[], 0);
-        assert_eq!(m.spans(), &[Span::new(4, 7)]);
+        assert_eq!(m.spans(), &[Span::new(0, 3), Span::new(4, 7)]);
     }
 
     // 21. Two distinct fence rules coexist; a mid-line or short-run fence
@@ -1698,8 +1770,14 @@ mod tests {
     fn test_21_two_fence_rules() {
         let src = b"~~ not\n```\na\n```\n~~~\nb\n~~~\nx ``` y";
         const LINES: LineModel = fences(&[
-            BlockSimpleRule::Fence { byte: b'`', min: 3 },
-            BlockSimpleRule::Fence { byte: b'~', min: 3 },
+            BlockSimpleRule::Fence {
+                bytes: ByteSet::from_bytes(b"`"),
+                min: 3,
+            },
+            BlockSimpleRule::Fence {
+                bytes: ByteSet::from_bytes(b"~"),
+                min: 3,
+            },
         ]);
         let m = ParseContext::build(src, b'\\', LINES, &[], &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(7, 16), Span::new(17, 26)]);
@@ -1824,7 +1902,7 @@ mod tests {
             lines: &[
                 LineRule::Marker { byte: b'-', max: 1 },
                 LineRule::Uniform {
-                    bytes: b"-",
+                    bytes: ByteSet::from_bytes(b"-"),
                     min: 3,
                 },
             ],
@@ -1833,7 +1911,7 @@ mod tests {
         const RULE_FIRST: LineModel = LineModel {
             lines: &[
                 LineRule::Uniform {
-                    bytes: b"-",
+                    bytes: ByteSet::from_bytes(b"-"),
                     min: 3,
                 },
                 LineRule::Marker { byte: b'-', max: 1 },
@@ -1850,8 +1928,12 @@ mod tests {
         );
         const MARKERS: LineModel = LineModel {
             block: &[
-                BlockRule::Marker { bytes: b"*" },
-                BlockRule::Marker { bytes: b"*-" },
+                BlockRule::Marker {
+                    bytes: ByteSet::from_bytes(b"*"),
+                },
+                BlockRule::Marker {
+                    bytes: ByteSet::from_bytes(b"*-"),
+                },
             ],
             ..fences(&[])
         };
@@ -1922,8 +2004,13 @@ mod tests {
     #[test]
     fn test_33_fence_byte_markers() {
         const PLUS: LineModel = LineModel {
-            block_simple: &[BlockSimpleRule::Fence { byte: b'+', min: 3 }],
-            block: &[BlockRule::Marker { bytes: b"+" }],
+            block_simple: &[BlockSimpleRule::Fence {
+                bytes: ByteSet::from_bytes(b"+"),
+                min: 3,
+            }],
+            block: &[BlockRule::Marker {
+                bytes: ByteSet::from_bytes(b"+"),
+            }],
             ..fences(&[])
         };
         let m = ParseContext::build(b"+ a +\n", b'\\', PLUS, &[(b'+', 1)], &[], &[], 0);
@@ -2307,5 +2394,50 @@ mod tests {
         assert_eq!(frame_regions(b"{a{b}c} `d`", 1), vec![(0, 7), (8, 11)]);
         assert_eq!(frame_regions(b"{{{a}}} `b`", 2), vec![(0, 7), (8, 11)]);
         assert_eq!(frame_regions(b"{a} `b`", 0), vec![(4, 7)]);
+    }
+
+    // 56. A `num` rule's digit pattern decides where a paragraph run ends:
+    //     with letters for digits, `ab. y` is an item line, so the code
+    //     opener of the line before it has no close
+    #[test]
+    fn test_56_num_digit_pattern_ends_run() {
+        const LINES: LineModel = LineModel {
+            eol: b'\n',
+            sep: b' ',
+            tab: b'\t',
+            max_nest: 1,
+            block_simple: &[],
+            block: &[BlockRule::Num {
+                digits: ByteSet::from_bytes(b"abcdefghijklmnopqrstuvwxyz"),
+                ends: ByteSet::from_bytes(b"."),
+            }],
+            lines: &[],
+        };
+        let m = ParseContext::build(b"`x\nab. y`", b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
+        assert_eq!(m.spans(), &[]);
+        let m = ParseContext::build(b"`x\n12. y`", b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
+        assert_eq!(m.spans(), &[Span::new(0, 9)]);
+    }
+
+    // 57. A `num` end byte that is also an opaque trigger is a marker on an
+    //     item line, not an opener
+    #[test]
+    fn test_57_num_end_byte_is_marker() {
+        const LINES: LineModel = LineModel {
+            eol: b'\n',
+            sep: b' ',
+            tab: b'\t',
+            max_nest: 1,
+            block_simple: &[],
+            block: &[BlockRule::Num {
+                digits: ByteSet::from_bytes(b"0123456789"),
+                ends: ByteSet::from_bytes(b"`"),
+            }],
+            lines: &[],
+        };
+        let m = ParseContext::build(b"1` code`", b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
+        assert_eq!(m.spans(), &[]);
+        let m = ParseContext::build(b"1`code`", b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
+        assert_eq!(m.spans(), &[Span::new(1, 7)]);
     }
 }
