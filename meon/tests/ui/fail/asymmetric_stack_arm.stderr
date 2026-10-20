@@ -1,0 +1,5 @@
+error: an `asymmetric` rule with `balanced = true` or `parse_inside = true` opens one frame per open byte, so its only arm is `1 => field`
+ --> tests/ui/fail/asymmetric_stack_arm.rs:7:75
+  |
+7 |             asymmetric b'{', b'}' { balanced = true; parse_inside = true; 2 => pairs [40], }
+  |                                                                           ^

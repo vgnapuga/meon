@@ -79,6 +79,9 @@ pub(crate) enum StandaloneRule {
         count: Literal,
         /// See [`StandaloneRule::SymmetricExact::opaque`].
         opaque: bool,
+        /// The rule's `balanced` flag. With it or `parse_inside = true` the
+        /// full parse keeps the rule on its stack, and `count` is `1`.
+        balanced: bool,
         /// See [`StandaloneRule::SymmetricExact::cap`].
         cap: Literal,
     },

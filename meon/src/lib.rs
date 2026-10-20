@@ -74,9 +74,15 @@ pub mod swar;
 pub use meon_macros::define_parser;
 
 pub use engine::text_parser::standalone::{
-    asymmetric::AsymmetricExactIter, block_marker::BlockMarkerIter,
-    block_numbered::BlockNumberedIter, chained::ChainedIter, cont::ContIter, fence::FenceIter,
-    key_value::KvIter, line_marker::LineMarkerIter, line_uniform::LineUniformIter,
+    asymmetric::{AsymmetricExactIter, AsymmetricStackIter},
+    block_marker::BlockMarkerIter,
+    block_numbered::BlockNumberedIter,
+    chained::ChainedIter,
+    cont::ContIter,
+    fence::FenceIter,
+    key_value::KvIter,
+    line_marker::LineMarkerIter,
+    line_uniform::LineUniformIter,
     symmetric::SymmetricExactIter,
 };
 
@@ -85,5 +91,5 @@ pub use engine::text_parser::standalone::{
         BlockRule, BlockSimpleRule, ChainSpec, ContextCursor, LineModel, LineRule, ParseContext,
         RuleIndex,
     },
-    context_iter::{ContextAsymmetricExactIter, ContextSymmetricExactIter},
+    context_iter::{ContextAsymmetricStackIter, ContextSymmetricExactIter},
 };

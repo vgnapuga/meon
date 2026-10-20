@@ -56,12 +56,17 @@
 //!    both sides for symmetric rules. A `chained` rule whose components are
 //!    both opaque opens at the last byte of a run of its open byte; the text
 //!    close, the url open right after it and the url close must all lie in
-//!    the run, and the match covers the open byte through the url close. A
-//!    hit among a line's markers is not a trigger. A matched construct covers
-//!    its full extent, delimiters included, and the scan resumes after it —
-//!    so overlapping opaque candidates resolve leftmost-first, like the full
-//!    parser's trigger loop. A `chained` match that fails resumes the scan
-//!    right after its open run, so its text is scanned like any other.
+//!    the run, and the match covers the open byte through the url close. An
+//!    `asymmetric` rule with `balanced = true` opens a frame at every byte
+//!    of its open run and nests them as the full parse does; its match
+//!    covers the open run through the close of the outermost frame, or to
+//!    the end of the run when that frame never closes, since nothing else
+//!    matches inside it. A hit among a line's markers is not a trigger. A
+//!    matched construct covers its full extent, delimiters included, and the
+//!    scan resumes after it — so overlapping opaque candidates resolve
+//!    leftmost-first, like the full parser's trigger loop. A `chained` match
+//!    that fails resumes the scan right after its open run, so its text is
+//!    scanned like any other.
 //!
 //! The result is a sorted, non-overlapping `Vec<Span>` of opaque regions,
 //! preallocated from the grammar's own capacity divisors (the same `[cap]`
@@ -89,17 +94,33 @@
 //!   closes — and those bytes are not covered here. In a grammar that also
 //!   has an opaque `chained` rule, an opaque match the full parse never
 //!   reaches inside such a match is still covered.
-//! - This construction's own closing search is escape-aware (matching the
-//!   full parser); the context-free `find_*` close search is not.
+//! - An `asymmetric` finder sees its own rule's frames only. In the full
+//!   parse the frames of every stack-kept rule, `key_value` values among
+//!   them, share one stack: they all count towards `max_nest`, a
+//!   `balanced = false` rule opens only on an empty stack, and a close whose
+//!   innermost frame belongs to another rule closes nothing, unless that
+//!   frame is a `key_value` value inside the container the close ends. The
+//!   finder reads the full parse's spans where the rules nest properly —
+//!   every other frame opened inside one of the rule's frames is closed by
+//!   that frame's close, or is such a value — all the frames fit in
+//!   `max_nest`, and no other frame is open where a `balanced = false` rule
+//!   opens.
 
-use super::common::{Span, count_escape, find_line_end, next_in_paragraph, scan_paragraph};
+use super::chained::{ChainMemo, chain_match};
+use super::common::{
+    Span, count_escape, find_line_end, next_in_paragraph, scan_paragraph, scan_paragraph_by,
+};
 
 /// One opaque symmetric rule: `(delimiter byte, exact run count)`.
 pub type SymSpec = (u8, u32);
-/// One opaque asymmetric rule: `(open byte, close byte, exact open count)`.
-pub type AsymSpec = (u8, u8, u32);
+/// One opaque asymmetric rule: `(open byte, close byte, exact open count,
+/// balanced)`. A `balanced` rule is kept on the full parse's stack: every
+/// byte of its open run opens a frame, and its count is `1`.
+pub type AsymSpec = (u8, u8, u32, bool);
 
-/// One opaque `chained` rule: both its components are `parse_inside = false`.
+/// The two components of a `chained` rule: their open and close bytes and
+/// their `balanced` flags. The context takes the rules whose components are
+/// both `parse_inside = false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainSpec {
     /// The text component's open and close bytes.
@@ -696,7 +717,7 @@ impl LineModel {
     /// Does the model hold any rule? Without one every line is a paragraph
     /// line.
     #[inline]
-    fn has_rules(&self) -> bool {
+    pub(crate) fn has_rules(&self) -> bool {
         !(self.block_simple.is_empty() && self.block.is_empty() && self.lines.is_empty())
     }
 
@@ -845,7 +866,8 @@ impl ParseContext {
     /// - `lines` — the grammar's line rules; its fences are the fence rules
     ///   of the pass.
     /// - `sym` — every `symmetric` arm with `parse_inside = false`.
-    /// - `asym` — every `asymmetric` arm with `parse_inside = false`.
+    /// - `asym` — every `asymmetric` arm with `parse_inside = false`, with
+    ///   its rule's `balanced` flag.
     /// - `chained` — every `chained` rule whose components are both
     ///   `parse_inside = false`.
     /// - `cap_hint` — preallocation hint for the region vector; the generated
@@ -956,6 +978,8 @@ impl ParseContext {
             }
             let count = match rule {
                 Opaque::Sym(ri) => sym[ri].1,
+                // Every byte of the open run of a balanced rule opens.
+                Opaque::Asym(ri) if asym[ri].3 => c,
                 Opaque::Asym(ri) => asym[ri].2,
                 // Of a run of the open byte the last byte opens the match.
                 Opaque::Chain(_) => c,
@@ -996,6 +1020,17 @@ impl ParseContext {
                         None => pos = run_end,
                     }
                 }
+                Opaque::Asym(ri) if asym[ri].3 => {
+                    let (open, close) = (asym[ri].0, asym[ri].1);
+                    let frames = (p, run_end, lines.max_nest);
+                    match frames_end(source, frames, open, close, escape, eol, enter_line) {
+                        Some(end) => {
+                            spans.push(Span::new(p as u32, end as u32));
+                            pos = end;
+                        }
+                        None => pos = run_end,
+                    }
+                }
                 Opaque::Asym(ri) => {
                     if run_end < asym_dead[ri] {
                         pos = run_end;
@@ -1015,6 +1050,7 @@ impl ParseContext {
                 Opaque::Chain(ri) => {
                     let memo = &mut chain_memo[ri];
                     match chain_match(source, run_end, &chained[ri], escape, eol, enter_line, memo)
+                        .map(|(_, cu)| cu + 1)
                     {
                         Some(end) => {
                             spans.push(Span::new((run_end - 1) as u32, end as u32));
@@ -1061,7 +1097,7 @@ fn build_needles(
     for &(b, _) in sym {
         push(b, &mut n);
     }
-    for &(o, _, _) in asym {
+    for &(o, _, _, _) in asym {
         push(o, &mut n);
     }
     for spec in chained {
@@ -1119,7 +1155,7 @@ fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec], chained: &[ChainSpec]) ->
     if let Some(ri) = sym.iter().position(|&(sb, _)| sb == b) {
         return Some(Opaque::Sym(ri));
     }
-    asym.iter().position(|&(o, _, _)| o == b).map(Opaque::Asym)
+    asym.iter().position(|&(o, ..)| o == b).map(Opaque::Asym)
 }
 
 /// The run count of a fence of `byte` opening at `pos` on `[pos, le)`, if one
@@ -1256,134 +1292,69 @@ fn asym_close(
     }
 }
 
-/// What the searches of one `chained` rule learned, for the openers after
-/// them: the full parse keeps the same, so a run of unclosed openers costs
-/// one search, not one per opener.
-#[derive(Debug, Clone, Copy, Default)]
-struct ChainMemo {
-    /// `(start, stop)`: no unescaped text close byte lies in `[start, stop)`,
-    /// and `stop` ends the inline run.
-    text_dead: Option<(usize, usize)>,
-    /// `(start, close)`: the first unescaped text close byte from `start` on
-    /// is at `close`, and the match after it failed. Kept for a text
-    /// component with `balanced = false` only.
-    text_found: Option<(usize, usize)>,
-    /// As `text_dead`, for the url close byte.
-    url_dead: Option<(usize, usize)>,
-}
-
-/// The end of the `chained` match whose text component starts at `from`,
-/// right after the open byte, or `None` when it fails: the text close, the
-/// url open on the byte right after it, and the url close, all in the
-/// opener's inline run (`enter_line` as for [`next_in_paragraph`]).
-fn chain_match(
+/// The end of the region of a `balanced = true` opaque asymmetric rule
+/// whose open run is `frames.0..frames.1`, in a grammar of `max_nest`
+/// `frames.2`, or `None` when the run opens no frame.
+///
+/// As in the full parse, every byte of an open run opens a frame while
+/// fewer than `max_nest` are open, and past that pairs with the next close,
+/// both dropped; every byte of a close run closes the innermost frame, and
+/// nothing else is read inside them. The region ends after the close of the
+/// outermost frame, or where the inline run `enter_line` bounds ends when
+/// it never closes: no other rule matches inside an open opaque frame.
+#[inline]
+fn frames_end(
     src: &[u8],
-    from: usize,
-    spec: &ChainSpec,
-    escape: u8,
-    eol: u8,
-    mut enter_line: impl FnMut(usize) -> Option<usize>,
-    memo: &mut ChainMemo,
-) -> Option<usize> {
-    let (open, close) = spec.text;
-    let found = memo.text_found.filter(|&(s, c)| s <= from && from <= c);
-    let dead = memo.text_dead.filter(|&(s, e)| s <= from && from < e);
-    let ct = match (found, dead) {
-        (Some((_, c)), _) => c,
-        (None, Some(_)) => return None,
-        (None, None) => {
-            let bal = spec.text_balanced;
-            match component_close(src, from, open, close, bal, escape, eol, &mut enter_line) {
-                Ok(c) => c,
-                Err((stop, met)) => {
-                    if !met {
-                        memo.text_dead = Some((from, stop));
-                    }
-                    return None;
-                }
-            }
-        }
-    };
-    let (uo, uc) = spec.url;
-    let next = ct + 1;
-    if next < src.len() && src[next] == uo {
-        let url_from = next + 1;
-        if !memo
-            .url_dead
-            .is_some_and(|(s, e)| s <= url_from && url_from < e)
-        {
-            let bal = spec.url_balanced;
-            match component_close(src, url_from, uo, uc, bal, escape, eol, &mut enter_line) {
-                Ok(cu) => return Some(cu + 1),
-                Err((stop, met)) => {
-                    if !met {
-                        memo.url_dead = Some((url_from, stop));
-                    }
-                }
-            }
-        }
-    }
-    // The match failed after its text close: an opener before that close
-    // finds the same one.
-    if !spec.text_balanced {
-        memo.text_found = Some((from, ct));
-    }
-    None
-}
-
-/// The close byte of a `chained` component whose content starts at `from`,
-/// in the inline run `enter_line` bounds: the first unescaped `close`, or,
-/// with `balanced`, the one that brings the depth back to zero, each
-/// unescaped `open` nesting one level. On failure, where the run ends and
-/// whether an unescaped `close` was met on the way.
-#[allow(clippy::too_many_arguments)]
-fn component_close(
-    src: &[u8],
-    from: usize,
+    frames: (usize, usize, usize),
     open: u8,
     close: u8,
-    balanced: bool,
     escape: u8,
     eol: u8,
-    mut enter_line: impl FnMut(usize) -> Option<usize>,
-) -> Result<usize, (usize, bool)> {
-    let len = src.len();
-    let mut depth = 1u32;
-    let mut met = false;
-    let mut j = from;
-    loop {
-        let hit = if balanced {
-            memchr::memchr3(open, close, eol, &src[j..])
+    enter_line: impl FnMut(usize) -> Option<usize>,
+) -> Option<usize> {
+    let (p, run_end, max_nest) = frames;
+    if max_nest == 0 {
+        return None;
+    }
+    let (mut depth, mut overflow) = (0usize, 0u32);
+    let mut take = |b: u8| -> bool {
+        if b == open {
+            if depth < max_nest {
+                depth += 1;
+                overflow = 0;
+            } else {
+                overflow += 1;
+            }
+        } else if overflow > 0 {
+            overflow -= 1;
         } else {
-            memchr::memchr2(close, eol, &src[j..])
+            depth -= 1;
+        }
+        depth == 0
+    };
+    for _ in p..run_end {
+        take(open);
+    }
+    let find = |h: &[u8]| memchr::memchr3(open, close, eol, h);
+    let mut enter_line = enter_line;
+    let mut j = run_end;
+    loop {
+        let q = match scan_paragraph_by(src, j, eol, find, &mut enter_line) {
+            Ok(q) => q,
+            Err(stop) => return Some(stop),
         };
-        let Some(r) = hit else {
-            return Err((len, met));
-        };
-        let q = j + r;
-        if src[q] == eol {
-            if q + 1 >= len || src[q + 1] == eol {
-                return Err((q, met));
-            }
-            match enter_line(q + 1) {
-                Some(next) => j = next,
-                None => return Err((q, met)),
-            }
+        if count_escape(src, q, escape) % 2 == 1 {
+            j = q + 1;
             continue;
         }
-        if count_escape(src, q, escape) % 2 == 0 {
-            // A close byte that is also the open byte nests, yet it is met.
-            met |= src[q] == close;
-            if balanced && src[q] == open {
-                depth += 1;
-            } else {
-                depth -= 1;
-                if depth == 0 {
-                    return Ok(q);
-                }
+        let b = src[q];
+        j = q;
+        while j < src.len() && src[j] == b {
+            j += 1;
+            if take(b) {
+                return Some(j);
             }
         }
-        j = q + 1;
     }
 }
 
@@ -1512,7 +1483,7 @@ mod tests {
             b'\\',
             MD_LINES,
             &[(b'`', 1)],
-            &[(b'<', b'>', 1)],
+            &[(b'<', b'>', 1, false)],
             &[MD_LINKS],
             0,
         )
@@ -2263,7 +2234,7 @@ mod tests {
             b'\\',
             LineModel::default(),
             &[],
-            &[(b'<', b'"', 1)],
+            &[(b'<', b'"', 1, false)],
             &[quoted],
             0,
         );
@@ -2280,5 +2251,61 @@ mod tests {
         let mut src = b"<a ".repeat(20_000);
         src.extend_from_slice(b"\n\n<b>");
         assert_eq!(regions(&src), vec![(60_002, 60_005)]);
+    }
+
+    // ---- Opaque `asymmetric` rules with `balanced = true` --------------- //
+
+    fn frame_regions(src: &[u8], max_nest: usize) -> Vec<(u32, u32)> {
+        let lines = LineModel {
+            max_nest,
+            ..MD_LINES
+        };
+        ParseContext::build(
+            src,
+            b'\\',
+            lines,
+            &[(b'`', 1)],
+            &[(b'{', b'}', 1, true)],
+            &[],
+            0,
+        )
+        .spans()
+        .iter()
+        .map(|s| (s.start, s.end))
+        .collect()
+    }
+
+    // 53. The frames nest, and the match covers the open run through the
+    //     close of the outermost one; nothing else matches inside
+    #[test]
+    fn test_53_balanced_frames_nest() {
+        assert_eq!(frame_regions(b"{a {b} c} `d`", 4), vec![(0, 9), (10, 13)]);
+        assert_eq!(frame_regions(b"{{a}} `b`", 4), vec![(0, 5), (6, 9)]);
+        assert_eq!(frame_regions(b"{a `}` b} c", 4), vec![(0, 5)]);
+        assert_eq!(frame_regions(b"{a\\}b} `c`", 4), vec![(0, 6), (7, 10)]);
+        assert_eq!(frame_regions(b"\\{a} `b`", 4), vec![(5, 8)]);
+    }
+
+    // 54. A frame that never closes covers to the end of its inline run
+    #[test]
+    fn test_54_unclosed_frame_covers_run() {
+        assert_eq!(frame_regions(b"{a {b} `c`", 4), vec![(0, 10)]);
+        assert_eq!(
+            frame_regions(b"{a\nb `c`\n\n`d`", 4),
+            vec![(0, 8), (10, 13)]
+        );
+        assert_eq!(frame_regions(b"{a\n# `b`", 4), vec![(0, 2), (5, 8)]);
+        assert_eq!(frame_regions(b"- {a\n`b`", 4), vec![(2, 4), (5, 8)]);
+        let src = b"{a ".repeat(20_000);
+        assert_eq!(frame_regions(&src, 4), vec![(0, 60_000)]);
+    }
+
+    // 55. Past `max_nest` an open pairs with the next close, both dropped;
+    //     with no room at all the rule opens nothing
+    #[test]
+    fn test_55_balanced_frames_cap() {
+        assert_eq!(frame_regions(b"{a{b}c} `d`", 1), vec![(0, 7), (8, 11)]);
+        assert_eq!(frame_regions(b"{{{a}}} `b`", 2), vec![(0, 7), (8, 11)]);
+        assert_eq!(frame_regions(b"{a} `b`", 0), vec![(4, 7)]);
     }
 }

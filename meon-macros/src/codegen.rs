@@ -90,11 +90,12 @@ pub(crate) fn build_standalone_dsl(
                 close,
                 count,
                 opaque: true,
+                balanced,
                 cap,
                 ..
             } => {
                 ctx_caps.push(quote! { #cap });
-                ctx_asym.push(quote! { (#open, #close, #count) });
+                ctx_asym.push(quote! { (#open, #close, #count, #balanced) });
             }
             StandaloneRule::Chained {
                 open1,
@@ -158,12 +159,24 @@ pub(crate) fn build_standalone_dsl(
             let o = opacity(*opaque);
             quote! { symmetric_exact(#byte, #count, #o) => #field; }
         }
-        StandaloneRule::AsymmetricExact { field, open, close, count, opaque, .. } => {
+        StandaloneRule::AsymmetricExact { field, open, close, count, opaque, balanced, .. } => {
             let o = opacity(*opaque);
-            quote! { asymmetric_exact(#open, #close, #count, #o) => #field; }
+            if *balanced || !*opaque {
+                quote! { asymmetric_stack(#open, #close, #balanced, #o) => #field; }
+            } else {
+                quote! { asymmetric_exact(#open, #close, #count, #o) => #field; }
+            }
         }
-        StandaloneRule::Chained { field, open1, close1, open2, close2, prefix, ty, pf, ff, sf, .. } =>
-            quote! { chained(#open1, #close1, #open2, #close2, #prefix, #ty, #pf, #ff, #sf) => #field; },
+        StandaloneRule::Chained {
+            field, open1, close1, open2, close2, prefix, ty, pf, ff, sf, text_flags, url_flags, ..
+        } => {
+            let (tb, ub) = (text_flags.balanced, url_flags.balanced);
+            let tr = text_flags.parse_inside || url_flags.parse_inside;
+            quote! {
+                chained(#open1, #close1, #tb, #open2, #close2, #ub, #tr, #prefix, #ty, #pf, #ff, #sf)
+                    => #field;
+            }
+        }
         StandaloneRule::KeyValue { field, eq, end, allow_sep, ty, kf, vf } => {
             let allow = if *allow_sep { quote!(true) } else { quote!(false) };
             quote! { kv(#eq, #end, #allow, #ty, #kf, #vf) => #field; }

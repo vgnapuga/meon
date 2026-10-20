@@ -15,7 +15,7 @@
 //! This front-end is the only parser of the DSL that reports errors. The
 //! runtime `parse_*!` macros pattern-match the same tokens again, but they
 //! only ever see a stream that passed here and was then canonicalised by
-//! [`crate::normalize`]. Two rules follow from that:
+//! [`crate::normalize`]. Three rules follow from that:
 //!
 //! - **Unknown keywords are errors.** An identifier in statement position that
 //!   this module does not recognise (a typo, a keyword from the wrong section)
@@ -26,6 +26,9 @@
 //!   and its `prefix`; a `key_value` rule needs `eq`, `allow_sep`, `end`,
 //!   `key` and `value`. A missing one is a located error, not a silently
 //!   skipped standalone rule.
+//! - **No arm that can never match.** An `asymmetric` rule with `balanced`
+//!   or `parse_inside` set opens one frame per open byte, so its only arm is
+//!   `1 => field`; any other arm, a second one included, is a located error.
 //!
 //! Order and separators, on the other hand, are *not* enforced here: settings
 //! and sub-rules may come in any order, with or without `;` / `,`, and the
@@ -130,12 +133,14 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     collect_match_arms(body.stream(), &["balanced", "parse_inside"], cf)?;
                     let parse_inside =
                         require_flag(body.stream(), "parse_inside", body.span(), "asymmetric")?;
-                    require_flag(body.stream(), "balanced", body.span(), "asymmetric")?;
+                    let balanced =
+                        require_flag(body.stream(), "balanced", body.span(), "asymmetric")?;
                     collect_asymmetric_standalone(
                         body.stream(),
                         open_lit,
                         close_lit,
                         !parse_inside,
+                        balanced,
                         cf,
                     )?;
                 }
@@ -240,14 +245,28 @@ fn collect_symmetric_standalone(ts: TS2, byte: Literal, opaque: bool, cf: &mut C
     Ok(())
 }
 
-/// Extract the `N => field` exact-count arm of an `asymmetric` block.
+/// Extract the `N => field` exact-count arms of an `asymmetric` block.
+///
+/// A rule with `balanced` or `parse_inside` set is kept on the full parse's
+/// stack, which opens one frame per open byte: only a `1 =>` arm can match,
+/// and any other arm is an error.
 fn collect_asymmetric_standalone(
     ts: TS2,
     open: Literal,
     close: Literal,
     opaque: bool,
+    balanced: bool,
     cf: &mut CF,
 ) -> Result<()> {
+    let stack = balanced || !opaque;
+    let mut arms = 0usize;
+    let one_arm = |span| {
+        Error::new(
+            span,
+            "an `asymmetric` rule with `balanced = true` or `parse_inside = true` opens one \
+             frame per open byte, so its only arm is `1 => field`",
+        )
+    };
     let mut c = Cursor::new(ts);
     while c.peek().is_some() {
         match c.peek().cloned() {
@@ -260,6 +279,9 @@ fn collect_asymmetric_standalone(
                 c.skip(';');
             }
             Some(TT::Ident(id)) if id == "_" => {
+                if stack {
+                    return Err(one_arm(id.span()));
+                }
                 c.advance();
                 if c.is_fat_arrow() {
                     c.pos += 2;
@@ -271,6 +293,10 @@ fn collect_asymmetric_standalone(
             Some(TT::Literal(count)) => {
                 c.advance();
                 if c.is_fat_arrow() {
+                    arms += 1;
+                    if stack && (arms > 1 || int_value(&count) != Some(1)) {
+                        return Err(one_arm(count.span()));
+                    }
                     let (f, cap) = c.arrow_field_cap("asym exact")?;
                     c.skip(',');
                     cf.standalone.push(StandaloneRule::AsymmetricExact {
@@ -279,6 +305,7 @@ fn collect_asymmetric_standalone(
                         close: close.clone(),
                         count,
                         opaque,
+                        balanced,
                         cap,
                     });
                 }
@@ -292,6 +319,29 @@ fn collect_asymmetric_standalone(
         }
     }
     Ok(())
+}
+
+/// The value of an integer literal token, as the compiler reads it: `1`,
+/// `1u32`, `1_u32`, `0x1`, `0o1`, `0b1`. `None` for any other literal.
+fn int_value(lit: &Literal) -> Option<u128> {
+    let s = lit.to_string().replace('_', "");
+    let (digits, radix) = match s.get(..2) {
+        Some("0x") => (&s[2..], 16),
+        Some("0o") => (&s[2..], 8),
+        Some("0b") => (&s[2..], 2),
+        _ => (s.as_str(), 10),
+    };
+    let end = digits
+        .find(|ch: char| !ch.is_digit(radix))
+        .unwrap_or(digits.len());
+    let (num, suffix) = digits.split_at(end);
+    let suffixes = [
+        "", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+    ];
+    if num.is_empty() || !suffixes.contains(&suffix) {
+        return None;
+    }
+    u128::from_str_radix(num, radix).ok()
 }
 
 /// Extract the two delimiter pairs, their settings and the prefix of a
@@ -1080,6 +1130,80 @@ mod tests {
             e.contains("`chained component` body is missing `balanced"),
             "{e}"
         );
+    }
+
+    // 20. An asymmetric rule kept on the stack has only a `1 =>` arm and
+    //     carries its `balanced` flag; a forward-searched one may have others
+    #[test]
+    fn test_20_asymmetric_stack_arms() {
+        for flags in [
+            quote! { balanced = true; parse_inside = false; },
+            quote! { balanced = false; parse_inside = true; },
+        ] {
+            for arm in [
+                quote! { 2 => pairs [40], },
+                quote! { _ => pairs [40], },
+                quote! { 1 => pairs [40], },
+            ] {
+                let e = err_inline(quote! {
+                    on_trigger(b'{', b'}') { asymmetric b'{', b'}' { #flags 1 => objs [40], #arm } }
+                });
+                assert!(e.contains("so its only arm is `1 => field`"), "{e}");
+            }
+        }
+        let cf = ci(quote! {
+            on_trigger(b'{', b'}') {
+                asymmetric b'{', b'}' { parse_inside = true; balanced = true; 1 => objs [40], }
+            }
+        });
+        assert!(matches!(
+            cf.standalone[..],
+            [StandaloneRule::AsymmetricExact {
+                balanced: true,
+                opaque: false,
+                ..
+            }]
+        ));
+        let cf = ci(quote! {
+            on_trigger(b'<') {
+                asymmetric b'<', b'>' { balanced = false; parse_inside = false; 1 => one [40], 2 => two [40], }
+            }
+        });
+        assert_eq!(cf.standalone.len(), 2);
+        // Any spelling of the value 1 is that arm.
+        for arm in [
+            quote! { 1u32 },
+            quote! { 1_u32 },
+            quote! { 0x1 },
+            quote! { 01 },
+        ] {
+            let cf = ci(quote! {
+                on_trigger(b'{', b'}') {
+                    asymmetric b'{', b'}' { balanced = true; parse_inside = true; #arm => objs [40], }
+                }
+            });
+            assert_eq!(cf.standalone.len(), 1);
+        }
+    }
+
+    // 21. An integer literal's value, as the compiler reads it
+    #[test]
+    fn test_21_int_value() {
+        let v = |s: &str| int_value(&s.parse::<Literal>().unwrap());
+        for (s, n) in [
+            ("1", 1),
+            ("1u32", 1),
+            ("1_000", 1000),
+            ("0x1f", 31),
+            ("0o17", 15),
+            ("0b101", 5),
+            ("7usize", 7),
+        ] {
+            assert_eq!(v(s), Some(n), "{s}");
+        }
+        for s in ["1.0", "b'1'", "\"1\"", "1f32"] {
+            assert_eq!(v(s), None, "{s}");
+        }
     }
 
     // 09. A line marker produces a LineMarker rule and a cf.line entry

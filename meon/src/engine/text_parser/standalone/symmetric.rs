@@ -14,9 +14,10 @@ use super::common::*;
 /// empty line — two consecutive `eol` bytes — or the end of input aborts the
 /// pending opener.
 ///
-/// Escape sequences are respected on the opening delimiter: an odd number of
-/// preceding `escape` bytes suppresses the match. The closing delimiter is
-/// found by a plain scan (no escape check on close).
+/// Escape sequences are respected on both delimiters, as in the full parse: a
+/// byte preceded by an odd number of `escape` bytes is no delimiter, and the
+/// rest of its run is read as a run of its own (`*a\**` closes at the last
+/// `*`).
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -90,6 +91,10 @@ impl Iterator for SymmetricExactIter<'_> {
                 let Some(q) = next_in_paragraph(src, j, self.byte, self.eol, Some) else {
                     break None;
                 };
+                if count_escape(src, q, self.escape) % 2 == 1 {
+                    j = q + 1;
+                    continue;
+                }
                 let mut cc = 0u32;
                 let mut tmp = q;
                 while tmp < len && src[tmp] == self.byte {
@@ -262,12 +267,20 @@ mod tests {
 
     // 15. Specific implementation behavior: the closing marker loop does not validate escape sequences
     #[test]
-    fn test_15_closing_marker_ignores_escapes() {
+    fn test_15_closing_marker_respects_escapes() {
         let src = b"test *content\\*";
         let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
-
-        assert_eq!(iter.next(), Some(Span::new(6, 14)));
         assert_eq!(iter.next(), None);
+        let mut iter = SymmetricExactIter::new(b"*a\\*b*", b'*', 1, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(1, 5)));
+        // The rest of a run whose first byte is escaped is a run of its own.
+        let mut iter = SymmetricExactIter::new(b"*a\\**", b'*', 1, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(1, 4)));
+        let mut iter = SymmetricExactIter::new(b"**a\\***", b'*', 2, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(2, 5)));
+        // An even number of escapes leaves the close a close.
+        let mut iter = SymmetricExactIter::new(b"*a\\\\*", b'*', 1, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(1, 4)));
     }
 
     // ---- Paragraph-bounded behaviour ------------------------------------ //

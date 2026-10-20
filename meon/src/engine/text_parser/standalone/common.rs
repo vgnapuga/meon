@@ -4,8 +4,10 @@
 //!
 //! - [`find_line_end`] — locate the end of the current line.
 //! - [`next_in_paragraph`] — the paragraph-bounded close search shared by
-//!   every inline iterator and by the context builder, and
-//!   [`scan_paragraph`], the same search telling where a failed one stopped.
+//!   the inline iterators that search for a close and by the context
+//!   builder, and
+//!   [`scan_paragraph`], the same search telling where a failed one stopped,
+//!   with [`scan_paragraph_by`] for a search of several bytes.
 //! - [`count_escape`] — count consecutive escape bytes preceding a position,
 //!   used to determine whether a delimiter is escaped (odd count) or not (even).
 //! - [`probe_matcher`] / [`find_any_of`] — turn an arbitrary byte predicate
@@ -64,12 +66,32 @@ pub fn scan_paragraph(
     from: usize,
     needle: u8,
     eol: u8,
+    enter_line: impl FnMut(usize) -> Option<usize>,
+) -> Result<usize, usize> {
+    scan_paragraph_by(
+        src,
+        from,
+        eol,
+        |h| memchr::memchr2(needle, eol, h),
+        enter_line,
+    )
+}
+
+/// [`scan_paragraph`] for the bytes `find` stops at: `find` returns the
+/// offset of the first `eol` or needle byte in a haystack, and the search
+/// returns the first needle byte it meets.
+#[inline(always)]
+pub fn scan_paragraph_by(
+    src: &[u8],
+    from: usize,
+    eol: u8,
+    find: impl Fn(&[u8]) -> Option<usize>,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, usize> {
     let len = src.len();
     let mut j = from;
     loop {
-        let Some(r) = memchr::memchr2(needle, eol, &src[j..]) else {
+        let Some(r) = find(&src[j..]) else {
             return Err(len);
         };
         let q = j + r;

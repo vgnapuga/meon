@@ -112,7 +112,9 @@ use crate::strip::strip;
 ///         asymmetric open, close {
 ///             balanced     = true | false;
 ///             parse_inside = true | false;
-///             N => field [div],
+///             N => field [div],   // exact count N of `open`; with either
+///                                 // flag true the rule is kept on the
+///                                 // stack, and `1 =>` is its only arm
 ///         }
 ///         chained: Type {
 ///             | open1, close1 | { parse_inside = ...; balanced = ...; } => text_field,
@@ -601,5 +603,15 @@ mod tests {
         let mixed = compact(expand_str(grammar(true)));
         assert!(mixed.contains("chained[]"), "{mixed}");
         assert!(mixed.contains("caps[]"), "{mixed}");
+        // The finder gets both components' `balanced` flags and whether
+        // either is transparent.
+        assert!(
+            opaque.contains("chained(b'[',b']',false,b'(',b')',true,false,b'!',"),
+            "{opaque}"
+        );
+        assert!(
+            mixed.contains("chained(b'[',b']',false,b'(',b')',true,true,b'!',"),
+            "{mixed}"
+        );
     }
 }
