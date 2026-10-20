@@ -2233,19 +2233,17 @@ fn shared_close_06_both_rules_independent_on_same_line() {
     assert_eq!(txt(src, st.n_italics[0]), "b");
 }
 
-// 07. A `(` opened while a `[` frame is already on top of the stack nests
-//     correctly using each frame's own recorded close byte: the inner `(`
-//     closes on the first `)`, and because the outer `[`'s recorded close
-//     byte is also `)`, the *second* `)` correctly closes the outer frame
-//     rather than being mistaken for stray input.
+// 07. Both rules are opaque (`parse_inside = false`), so inside the `[`
+//     frame no other rule fires: the `(` is content, and the first `)`
+//     closes the `[` frame by that frame's own recorded close byte. The
+//     second `)` meets an empty stack and stays text.
 #[test]
 fn shared_close_07_nested_different_open_bytes_shared_close() {
     let src = b"[a (b) c)";
     let (st, _) = run_inline_shared_close_nested!(src, 2);
-    assert_eq!(st.objects.len(), 1);
-    assert_eq!(txt(src, st.objects[0]), "b");
+    assert!(st.objects.is_empty());
     assert_eq!(st.n_italics.len(), 1);
-    assert_eq!(txt(src, st.n_italics[0]), "a (b) c");
+    assert_eq!(txt(src, st.n_italics[0]), "a (b");
 }
 
 // ================================================================

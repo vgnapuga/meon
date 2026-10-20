@@ -538,5 +538,56 @@ mod tests {
             assert!(no_room::NoRoomParser::parse(src).pairs.is_empty());
             assert_eq!(no_room::NoRoomParser::find_pairs(src).count(), 0);
         }
+
+        #[derive(Debug, Clone, Copy)]
+        pub struct Link {
+            pub text: Span,
+            pub url: Span,
+            pub img: bool,
+        }
+
+        // Keys next to every kind of opaque span: a string, an opaque frame
+        // and an opaque `chained` match.
+        mod quoted {
+            use super::{Link, Pair};
+            crate::define_parser!(Quoted {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline {
+                    on_trigger(b'[', b'=', b'"', b'{', b'}') {
+                        symmetric b'"' { parse_inside = false; balanced = false; 1 => strs [40], }
+                        asymmetric b'{', b'}' { balanced = true; parse_inside = false; 1 => objs [40], }
+                        chained: Link {
+                            | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                            | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                            prefix | b'!' | => img,
+                        } => links [40]
+                        key_value: Pair { eq = b'='; allow_sep = true; end = b';'; key => key, value => value, } => pairs [40]
+                    }
+                    fallback => texts [10];
+                }
+                blocks { fallback => paragraphs [80]; }
+            });
+        }
+
+        // 25. An opaque span ending right before `eq` is the key whatever
+        //     rule made it, and the key after one starts past it
+        #[test]
+        fn test_25_generated_opaque_keys() {
+            use quoted::QuotedParser;
+            let keys = |src: &[u8]| -> Vec<(u32, u32)> {
+                QuotedParser::parse(src)
+                    .pairs
+                    .iter()
+                    .map(|p| (p.key.start, p.key.end))
+                    .collect()
+            };
+            assert_eq!(keys(b"\"a b\"=1"), vec![(0, 5)]);
+            assert_eq!(keys(b"{a b}=1"), vec![(0, 5)]);
+            assert_eq!(keys(b"{a {b} c}=1"), vec![(0, 9)]);
+            assert_eq!(keys(b"[a b](u)=1"), vec![(0, 8)]);
+            assert_eq!(keys(b"![a](u) = 1"), vec![(0, 7)]);
+            assert_eq!(keys(b"x [a](u)c=1"), vec![(8, 9)]);
+            assert_eq!(keys(b"{a}b=1"), vec![(3, 4)]);
+        }
     }
 }

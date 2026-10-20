@@ -744,5 +744,131 @@ mod tests {
             check!(flat::FlatParser, b"{a {b} c}", vec![(1, 5)]);
             check!(flat::FlatParser, b"{{a}", vec![(1, 3)]);
         }
+
+        #[derive(Debug, Clone, Copy)]
+        pub struct Link {
+            pub text: crate::span::Span,
+            pub url: crate::span::Span,
+            pub img: bool,
+        }
+
+        // An opaque stack rule next to a transparent one, an italic, a
+        // transparent `chained` rule and a hard break.
+        mod opq {
+            use super::Link;
+            crate::define_parser!(Opq {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline {
+                    hard_break(b'\\', b' ', 2) => hbs [40];
+                    on_trigger(b'{', b'}', b'[', b']', b'*', b'(', b')', b'<', b'>') {
+                        symmetric b'*' { parse_inside = true; balanced = true; 1 => ems [40], }
+                        asymmetric b'{', b'}' { balanced = true; parse_inside = false; 1 => objs [40], }
+                        asymmetric b'[', b']' { balanced = true; parse_inside = true; 1 => arrs [40], }
+                        chained: Link {
+                            | b'(', b')' | { parse_inside = true; balanced = false; } => text,
+                            | b'<', b'>' | { parse_inside = true; balanced = false; } => url,
+                            prefix | b'!' | => img,
+                        } => links [40]
+                    }
+                    fallback => texts [10];
+                }
+                blocks { fallback => paragraphs [80]; }
+            });
+        }
+        use opq::OpqParser;
+
+        // 28. Inside an opaque frame only its own rule acts: another stack
+        //     rule neither opens nor blocks the frame's close, and the
+        //     context finder of that rule agrees
+        #[test]
+        fn test_28_generated_opaque_frame_isolates() {
+            for (src, objs) in [
+                (&b"{[a]}"[..], vec![(1, 4)]),
+                (b"{[a}]", vec![(1, 3)]),
+                (b"{a{b}c}", vec![(1, 6), (3, 4)]),
+            ] {
+                let full = OpqParser::parse(src);
+                assert_eq!(
+                    spans(&full.objs),
+                    objs,
+                    "{:?}",
+                    String::from_utf8_lossy(src)
+                );
+                assert!(full.arrs.is_empty());
+                let ctx = OpqParser::context(src);
+                assert!(OpqParser::find_context_arrs(src, &ctx).next().is_none());
+                assert_eq!(
+                    spans(&OpqParser::find_objs(src).collect::<Vec<_>>()),
+                    spans(&full.objs)
+                );
+            }
+            assert!(OpqParser::parse(b"{*a*}").ems.is_empty());
+        }
+
+        // 29. A transparent `chained` match goes on past an opaque frame
+        //     inside it: the frame's bytes do not close the component
+        #[test]
+        fn test_29_generated_chained_over_opaque_frame() {
+            let full = OpqParser::parse(b"(a {b) c})<u>");
+            assert_eq!(spans(&full.objs), vec![(4, 8)]);
+            let links: Vec<_> = full
+                .links
+                .iter()
+                .map(|l| (spans([&l.text]), spans([&l.url])))
+                .collect();
+            assert_eq!(links, vec![(vec![(1, 9)], vec![(11, 12)])]);
+        }
+
+        // 30. Hard breaks inside an opaque frame that closes are taken back,
+        //     as an opaque forward search never sees them; an unclosed
+        //     frame's bytes are plain text and keep theirs
+        #[test]
+        fn test_30_generated_hard_break_in_opaque_frame() {
+            assert!(OpqParser::parse(b"{a\\\nb}").hbs.is_empty());
+            assert!(OpqParser::parse(b"{a  \nb}").hbs.is_empty());
+            assert_eq!(spans(&OpqParser::parse(b"{a\\\nb").hbs), vec![(2, 2)]);
+            assert_eq!(spans(&OpqParser::parse(b"[a\\\nb]").hbs), vec![(2, 2)]);
+        }
+
+        mod one {
+            crate::define_parser!(One {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline {
+                    on_trigger(b'{', b'}', b'*') {
+                        symmetric b'*' { parse_inside = true; balanced = true; 1 => ems [40], }
+                        asymmetric b'{', b'}' { balanced = false; parse_inside = true; 1 => objs [40], }
+                    }
+                    fallback => texts [10];
+                }
+                blocks { fallback => paragraphs [80]; }
+            });
+        }
+
+        // 31. `balanced = false` holds one frame of the rule at a time, at
+        //     any depth: under another rule's frame it opens, inside its own
+        //     it does not, and the finders agree
+        #[test]
+        fn test_31_generated_unbalanced_opens_under_other_frames() {
+            use one::OneParser;
+            for (src, objs) in [
+                (&b"*a {b} c*"[..], vec![(4, 5)]),
+                (b"{a {b} c}", vec![(1, 5)]),
+            ] {
+                let full = OneParser::parse(src);
+                assert_eq!(
+                    spans(&full.objs),
+                    objs,
+                    "{:?}",
+                    String::from_utf8_lossy(src)
+                );
+                let ctx = OneParser::context(src);
+                assert_eq!(spans(&OneParser::find_objs(src).collect::<Vec<_>>()), objs);
+                assert_eq!(
+                    spans(&OneParser::find_context_objs(src, &ctx).collect::<Vec<_>>()),
+                    objs
+                );
+            }
+            assert_eq!(spans(&OneParser::parse(b"*a {b} c*").ems), vec![(1, 8)]);
+        }
     }
 }

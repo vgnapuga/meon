@@ -325,4 +325,58 @@ mod tests {
         assert_eq!(iter.next(), Some(Span::new(5, 6)));
         assert_eq!(iter.next(), None);
     }
+
+    #[allow(unused)]
+    mod generated {
+        // A hard break whose marker bytes are a delimiter's: `~` repeated,
+        // or one `~` before the line end.
+        macro_rules! tildes {
+            ($m:ident, $p:ident, $hb_esc:literal, $sp:literal) => {
+                mod $m {
+                    crate::define_parser!($p {
+                        sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                        inline {
+                            hard_break($hb_esc, $sp, 2) => hbs [40];
+                            on_trigger(b'~') {
+                                symmetric b'~' { parse_inside = true; balanced = true; 2 => s2 [40], }
+                            }
+                            fallback => texts [10];
+                        }
+                        blocks { fallback => paragraphs [80]; }
+                    });
+                }
+            };
+        }
+        tildes!(run, Run, b'\\', b'~');
+        tildes!(single, Single, b'~', b' ');
+
+        fn spans(v: &[crate::span::Span]) -> Vec<(u32, u32)> {
+            v.iter().map(|s| (s.start, s.end)).collect()
+        }
+
+        // 20. A hard-break marker is no other rule's byte, at the end of the
+        //     run and before an internal eol alike: a delimiter run reaching
+        //     the marker stops where it starts
+        #[test]
+        fn test_20_generated_hard_break_marker_is_its_own() {
+            for src in [&b"~~a~~"[..], b"~~a~~\nb", b"~~a~~~\nb"] {
+                let full = run::RunParser::parse(src);
+                assert!(full.s2.is_empty(), "{:?}", String::from_utf8_lossy(src));
+                assert_eq!(spans(&full.hbs), vec![(3, 3)]);
+            }
+            let full = run::RunParser::parse(b"~~a~~ x\nb");
+            assert_eq!((spans(&full.s2), spans(&full.hbs)), (vec![(2, 3)], vec![]));
+            // One `~` is the marker: the run before it is one byte short.
+            for src in [&b"~~a~~"[..], b"~~a~~\nb"] {
+                let full = single::SingleParser::parse(src);
+                assert!(full.s2.is_empty(), "{:?}", String::from_utf8_lossy(src));
+                assert_eq!(spans(&full.hbs), vec![(4, 4)]);
+            }
+            let full = single::SingleParser::parse(b"~~a~~~\nb");
+            assert_eq!(
+                (spans(&full.s2), spans(&full.hbs)),
+                (vec![(2, 3)], vec![(5, 5)])
+            );
+        }
+    }
 }

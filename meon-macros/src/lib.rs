@@ -15,9 +15,10 @@
 //! * `collect` — the front-end: walks the grammar tokens and fills a
 //!   `model::CF` plus a list of `model::StandaloneRule`s; the only place
 //!   that reports grammar errors;
-//! * `strip` / `normalize` — token surgery on the sections handed to the
-//!   runtime macros: capacities removed, the `inline` section rewritten into
-//!   the one shape those macros pattern-match;
+//! * `strip` / `normalize` — token surgery: the invisible groups of
+//!   `macro_rules!` fragments unwrapped, and on the sections handed to the
+//!   runtime macros, capacities removed and the `inline` section rewritten
+//!   into the one shape those macros pattern-match;
 //! * `codegen` / `methods` — the back-end: turns that data into tokens.
 //!
 //! The front-end returns `error::Result`; a malformed grammar surfaces as a
@@ -44,7 +45,7 @@ use crate::error::Result;
 use crate::methods::build_content_methods;
 use crate::model::{CF, crate_path};
 use crate::normalize::canonicalize_inline;
-use crate::strip::strip;
+use crate::strip::{flatten_invisible, strip};
 
 /// Generate a parser from a declarative grammar.
 ///
@@ -195,6 +196,14 @@ use crate::strip::strip;
 /// `source.len() / div`. Tune based on expected element density:
 /// a divisor of `10` means roughly one element per 10 bytes.
 ///
+/// ## Inside `macro_rules!`
+///
+/// A grammar may be written inside a `macro_rules!` macro and take its
+/// settings, bytes, patterns, capacities and metadata from the macro's
+/// fragments (`$n:literal`, `$p:pat`, `$e:expr`, ...): a fragment reads as
+/// the tokens it stands for, and an `$e:expr` in a metadata body keeps its
+/// precedence.
+///
 /// # Errors
 ///
 /// A malformed grammar emits a located `compile_error!` at the offending token
@@ -217,7 +226,7 @@ pub fn define_parser(input: TokenStream) -> TokenStream {
 
 /// Fallible core of [`define_parser`].
 fn expand(input: TS2) -> Result<TS2> {
-    let mut c = Cursor::new(input);
+    let mut c = Cursor::new(flatten_invisible(input));
 
     let name = c.next_ident("parser name")?;
     let body_g = c.next_group(Delimiter::Brace, "parser body")?;

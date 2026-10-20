@@ -96,15 +96,13 @@
 //!   reaches inside such a match is still covered.
 //! - An `asymmetric` finder sees its own rule's frames only. In the full
 //!   parse the frames of every stack-kept rule, `key_value` values among
-//!   them, share one stack: they all count towards `max_nest`, a
-//!   `balanced = false` rule opens only on an empty stack, and a close whose
-//!   innermost frame belongs to another rule closes nothing, unless that
-//!   frame is a `key_value` value inside the container the close ends. The
-//!   finder reads the full parse's spans where the rules nest properly —
+//!   them, share one stack: they all count towards `max_nest`, and a close
+//!   whose innermost frame belongs to another rule closes nothing, unless
+//!   that frame is a `key_value` value inside the container the close ends.
+//!   The finder reads the full parse's spans where the rules nest properly —
 //!   every other frame opened inside one of the rule's frames is closed by
-//!   that frame's close, or is such a value — all the frames fit in
-//!   `max_nest`, and no other frame is open where a `balanced = false` rule
-//!   opens.
+//!   that frame's close, or is such a value — and all the frames fit in
+//!   `max_nest`.
 
 use super::chained::{ChainMemo, chain_match};
 use super::common::{

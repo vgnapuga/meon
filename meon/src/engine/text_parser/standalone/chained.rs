@@ -986,5 +986,61 @@ mod tests {
             assert_eq!(find, vec![(false, (4, 5), (7, 8))]);
             assert_eq!(NestedParser::find_links(b"[a [b](u)").count(), 0);
         }
+
+        mod marked {
+            use super::Link;
+            crate::define_parser!(Marked {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 2;
+                inline {
+                    on_trigger(b'[') {
+                        chained: Link {
+                            | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                            | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                            prefix | b'!' | => is_image,
+                        } => links [50]
+                    }
+                    fallback => texts [10];
+                }
+                blocks { block_simple { cont(b'!') => bangs [40]; } fallback => paragraphs [80]; }
+            });
+        }
+
+        mod marked_tr {
+            use super::Link;
+            crate::define_parser!(MarkedTr {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 2;
+                inline {
+                    on_trigger(b'[', b']', b'(', b')') {
+                        chained: Link {
+                            | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                            | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                            prefix | b'!' | => is_image,
+                        } => links [50]
+                    }
+                    fallback => texts [10];
+                }
+                blocks { block_simple { cont(b'!') => bangs [40]; } fallback => paragraphs [80]; }
+            });
+        }
+
+        // 30. The prefix is read inside the inline run only: a `!` that is a
+        //     block marker before the run makes no image, for an opaque rule
+        //     and a transparent one alike
+        #[test]
+        fn test_30_generated_prefix_inside_the_run() {
+            use marked::MarkedParser;
+            use marked_tr::MarkedTrParser;
+            let opaque = |src: &[u8]| -> Vec<L> {
+                MarkedParser::parse(src).links.iter().map(link).collect()
+            };
+            let transparent = |src: &[u8]| -> Vec<L> {
+                MarkedTrParser::parse(src).links.iter().map(link).collect()
+            };
+            for links in [&opaque as &dyn Fn(&[u8]) -> Vec<L>, &transparent] {
+                assert_eq!(links(b"![a](u)"), vec![(false, (2, 3), (5, 6))]);
+                assert_eq!(links(b"!x![a](u)"), vec![(true, (4, 5), (7, 8))]);
+                assert_eq!(links(b"x ![a](u)"), vec![(true, (4, 5), (7, 8))]);
+            }
+        }
     }
 }

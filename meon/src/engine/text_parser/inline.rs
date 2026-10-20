@@ -98,8 +98,10 @@
 //!   both components opaque it is a self-contained forward search; with a
 //!   transparent component it is a two-phase state machine that lets other
 //!   rules fire on the bytes it scans over. Of a run of the open byte only
-//!   the last byte opens the match, and the prefix is the byte before it:
-//!   in `![[a](u)` the text is `![` and the match is `[a](u)`, not an image.
+//!   the last byte opens the match, and the prefix is the byte before it,
+//!   when that byte lies in the run: in `![[a](u)` the text is `![` and the
+//!   match is `[a](u)`, not an image, and a `!` that is a block marker before
+//!   the run makes no image.
 //!   With `balanced = true` the bytes before it are text too, so they never
 //!   nest in the match. Inside a transparent match the bytes of a close run
 //!   act one by one. With `balanced = true` each open byte of the component
@@ -129,19 +131,26 @@
 //!
 //! # `asymmetric`
 //!
-//! `balanced` sets the type's depth cap: `max_nest` when `true`, `1` when
-//! `false`. `parse_inside` sets opacity: with `false`, no other rule fires
-//! inside the frame. Either flag `true` puts the rule on the stack; its
-//! close byte must then be listed in the same `on_trigger` set, because
-//! closes are found by the same search as opens. Each byte of an open run is
-//! its own open event: `{{` is two opens. An open of a `balanced = true`
-//! rule beyond the cap, with that rule's own frame on top, bumps a one-shot
-//! overflow counter, consumed by the next same-type close. That open and
-//! that close are dropped; the text between them is plain text of the frame
-//! on the stack, rolled back or kept with the rest of its content (see "Plain
-//! text and open frames"). Any other open the stack cannot take (the cap of
-//! a `balanced = false` rule, a full stack under another rule's frame) is
-//! refused and stays literal text.
+//! `balanced` sets how the rule's frames nest: with `true` they nest in one
+//! another up to `max_nest`; with `false` the rule holds one frame at a
+//! time, which opens at any depth the stack has room for, under other rules'
+//! frames too. `parse_inside` sets opacity: with `false`, no other rule fires
+//! inside the frame — no other stack rule opens or closes, no `chained`
+//! component opens or closes, no `symmetric` or `key_value` rule acts — and
+//! only the frame's own rule nests in it and closes it. Hard breaks found
+//! inside an opaque frame are taken back when it closes, as an opaque forward
+//! search never sees them; a frame left open at the end of the run keeps
+//! them with the rest of its plain text. Either flag `true` puts the rule on
+//! the stack; its close byte must then be listed in the same `on_trigger`
+//! set, because closes are found by the same search as opens. Each byte of
+//! an open run is its own open event: `{{` is two opens. An open of a
+//! `balanced = true` rule beyond the cap, with that rule's own frame on top,
+//! bumps a one-shot overflow counter, consumed by the next same-type close.
+//! That open and that close are dropped; the text between them is plain text
+//! of the frame on the stack, rolled back or kept with the rest of its
+//! content (see "Plain text and open frames"). Any other open the stack
+//! cannot take (a second frame of a `balanced = false` rule, a full stack
+//! under another rule's frame) is refused and stays literal text.
 //!
 //! A close byte runs one pass per character: a `key_value` frame on top of
 //! the stack is committed first (its value ends where its container closes),
@@ -165,20 +174,24 @@
 //! like the run's end: an `esc` byte before it that is not itself escaped,
 //! or a run of at least `min` `sp` bytes, is the marker. The marker is
 //! trimmed from the flushed text and a zero-length hard-break span is
-//! emitted; fewer `sp` bytes stay text. When the top of the stack is a
-//! `key_value` frame the `eol` is left to the `end`-byte check instead,
-//! because `end` and `eol` may be the same byte.
+//! emitted; fewer `sp` bytes stay text. As at the run's end, where the scan
+//! stops before the marker, no other rule reads a marker byte: a delimiter
+//! run that reaches the marker stops where the marker starts. When the top
+//! of the stack is a `key_value` frame the `eol` is left to the `end`-byte
+//! check instead, because `end` and `eol` may be the same byte.
 //!
 //! # `key_value`
 //!
 //! The rule triggers on `eq`. The key is found by scanning back from `eq`,
 //! clamped to the start of the current key segment: the position after the
-//! last container open run, or after the `end` run that closed the previous
-//! value. When an opaque span (a quoted key) ends right before `eq`, or
-//! before the `sep` run trimmed when `allow_sep`, that span with its
-//! delimiters is the key, `sep` bytes inside it included. Otherwise the key
-//! is the word before `eq`: the scan stops at `sep`, `tab`, `eol` and at the
-//! end of an earlier opaque span. The value starts after `eq` (skipping
+//! last transparent container open run, or after the `end` run that closed
+//! the previous value. When an opaque span ends right before `eq`, or before
+//! the `sep` run trimmed when `allow_sep` — the match of an opaque
+//! `symmetric` rule (a quoted key), of an opaque `asymmetric` rule, kept on
+//! the stack or not, or of a `chained` rule with both components opaque, its
+//! prefix included — that span with its delimiters is the key, `sep` bytes
+//! inside it included. Otherwise the key is the word before `eq`: the scan
+//! stops at `sep`, `tab`, `eol` and at the end of an earlier opaque span. The value starts after `eq` (skipping
 //! `sep` when `allow_sep`) and is tracked by a stack frame; a second `eq`
 //! while a `key_value` frame is on top is value content, and so is the rest
 //! of an `eq` run. With the stack full, `eq` opens no frame and the key, `eq`
@@ -341,6 +354,14 @@ macro_rules! parse_inline {
         let src: &[u8] = $src;
         let len = src.len();
         let mut parse_end: usize = $le;
+        // Every `on_trigger` byte.
+        #[allow(dead_code)]
+        const _TRIGGERS: &[u8] = &[$($($fn_b),+),*];
+        // Does the grammar have a `key_value` rule, and an opaque asymmetric
+        // rule on the stack? Without one, the tests of the top frame for it
+        // fold away.
+        const _HAS_KV: bool = false $( || { let _ = $kv_end; true } )*;
+        const _HAS_OPAQUE_FRAMES: bool = false $( || ($abal && !$api) )*;
 
         macro_rules! push_il {
             ($field:ident, $span:expr) => {
@@ -378,6 +399,21 @@ macro_rules! parse_inline {
         // it in place. The second field restores the previous last span's
         // `end`, which `push_merge_*` may have extended into the held region.
         let mut held_base: [(u32, u32); $maxn] = [(0u32, 0u32); $maxn];
+        // Per-frame length of the hard-break vector at an asymmetric frame's
+        // open: an opaque frame that closes takes back the hard breaks found
+        // inside it, as an opaque forward search never sees them.
+        let mut hb_base: [u32; $maxn] = [0u32; $maxn];
+        #[allow(unused_macros)]
+        macro_rules! hb_len {
+            () => { (0u32 $( + $state.$hb.len() as u32 )*) };
+        }
+        #[allow(unused_macros)]
+        macro_rules! hb_take_back {
+            ($n:expr) => {{
+                let _n: u32 = $n;
+                $( $state.$hb.truncate(_n as usize); )*
+            }};
+        }
 
         #[allow(unused_macros)]
         macro_rules! hold_base {
@@ -420,22 +456,11 @@ macro_rules! parse_inline {
         // is left out of the scan. Fewer `sp` bytes stay text.
         let _hb = 'hb: {
             $(
-                if parse_end > $start {
-                    if src[parse_end - 1] == $hb_esc
-                        && !$crate::parse_inline!(@is_escaped src, parse_end - 1, $start, $esc)
-                    {
-                        parse_end -= 1;
-                        break 'hb true;
-                    }
-                    let mut _p = parse_end;
-                    let mut _n: u32 = 0;
-                    while _p > $start && src[_p - 1] == $sp {
-                        _n += 1; _p -= 1;
-                    }
-                    if _n >= $sp_min {
-                        parse_end = _p;
-                        break 'hb true;
-                    }
+                let _mk = $crate::parse_inline!(@hb_mark src, parse_end, $start, $esc,
+                    $hb_esc, $sp, $sp_min);
+                if _mk < parse_end {
+                    parse_end = _mk;
+                    break 'hb true;
                 }
             )*
             false
@@ -644,11 +669,20 @@ macro_rules! parse_inline {
             // Is the top frame a key_value frame? Derived from its stored byte.
             // Valid for this outer iteration only: loops that pop frames
             // recompute it.
-            let _top_is_kv = fdepth > 0 && {
+            let _top_is_kv = _HAS_KV && fdepth > 0 && {
                 let _tb = frames[fdepth - 1].0;
                 let mut _k = false;
                 $( if _tb == $kv_end { _k = true; } )*
                 _k
+            };
+            // Is the top frame an opaque (`parse_inside = false`) asymmetric
+            // frame? Inside one only its own rule's bytes act: the rest is
+            // content.
+            let _top_opaque_active = _HAS_OPAQUE_FRAMES && fdepth > 0 && {
+                let _tb = frames[fdepth - 1].0;
+                let mut _op = false;
+                $( if ($abal || $api) && _tb == $ao { _op = !$api; } )*
+                _op
             };
 
             // ---------------------------------------------------------------- //
@@ -667,26 +701,9 @@ macro_rules! parse_inline {
             // ---------------------------------------------------------------- //
             $(
                 if src[pos] == $eol && !_top_is_kv {
-                    let mut _ep = pos;
-                    let mut _ehb = false;
-                    if _ep > $start {
-                        if src[_ep - 1] == $hb_esc
-                            && !$crate::parse_inline!(@is_escaped src, _ep - 1, $start, $esc)
-                        {
-                            _ep -= 1;
-                            _ehb = true;
-                        } else {
-                            let mut _p = _ep;
-                            let mut _en: u32 = 0;
-                            while _p > $start && src[_p - 1] == $sp {
-                                _en += 1; _p -= 1;
-                            }
-                            if _en >= $sp_min {
-                                _ep = _p;
-                                _ehb = true;
-                            }
-                        }
-                    }
+                    let _ep = $crate::parse_inline!(@hb_mark src, pos, $start, $esc,
+                        $hb_esc, $sp, $sp_min);
+                    let _ehb = _ep < pos;
                     if text_start < _ep {
                         push_il!($tx, $crate::span::Span::new(text_start as u32, _ep as u32));
                     }
@@ -713,6 +730,40 @@ macro_rules! parse_inline {
             let delim_start: u32 = pos as u32;
             let mut count: u32 = 0;
             while pos < parse_end && src[pos] == delim { count += 1; pos += 1; }
+            // A run that reaches an internal `eol` stops at that eol's
+            // hard-break marker, as the scan stops at the marker before the
+            // run's end: no other rule reads a marker byte. A run that is all
+            // marker leaves the scan at the eol. Only a grammar whose marker
+            // bytes are trigger bytes has such runs.
+            $(
+                const _HB_CLIP: bool = {
+                    let mut _f = false;
+                    let mut _i = 0;
+                    while _i < _TRIGGERS.len() {
+                        if _TRIGGERS[_i] == $sp || _TRIGGERS[_i] == $hb_esc {
+                            _f = true;
+                        }
+                        _i += 1;
+                    }
+                    _f
+                };
+                if _HB_CLIP
+                    && (delim == $sp || delim == $hb_esc)
+                    && pos < parse_end
+                    && src[pos] == $eol
+                    && !_top_is_kv
+                {
+                    let _mk = $crate::parse_inline!(@hb_mark src, pos, $start, $esc,
+                        $hb_esc, $sp, $sp_min);
+                    if _mk <= delim_start as usize {
+                        continue;
+                    }
+                    if _mk < pos {
+                        count -= (pos - _mk) as u32;
+                        pos = _mk;
+                    }
+                }
+            )*
 
             // ---------------------------------------------------------- //
             // key_value terminator (`$kv_end`) at the value's own level:  //
@@ -760,7 +811,9 @@ macro_rules! parse_inline {
             if !_chained_opaque_active {
                 // --- open side ---
                 $(
-                    if ($abal || $api) && delim == $ao {
+                    if ($abal || $api) && delim == $ao
+                        && !(_top_opaque_active && frames[fdepth - 1].0 != $ao)
+                    {
                         // The text before the run is flushed and the text
                         // cursor moves to the run. An open byte the stack takes
                         // moves the cursor past itself; one it refuses stays as
@@ -769,11 +822,14 @@ macro_rules! parse_inline {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
                         }
                         text_start = delim_start as usize;
-                        let _cap: usize = if $abal { $maxn } else { 1usize };
                         for _k in 0..count {
                             let _char_pos = delim_start + _k;
                             let mut _consumed = false;
-                            if fdepth < $maxn && fdepth < _cap {
+                            // `balanced = false`: one frame of the rule at a
+                            // time, at any depth the stack has room for.
+                            if fdepth < $maxn
+                                && ($abal || !frames[..fdepth].iter().any(|_f| _f.0 == $ao))
+                            {
                                 match 1u32 {
                                     $( $an => {
                                         let _content_start = _char_pos + 1;
@@ -782,6 +838,7 @@ macro_rules! parse_inline {
                                             _content_start, _content_start));
                                         frames[fdepth] = ($ao, 1u8, _vidx);
                                         held_base[fdepth] = hold_base!();
+                                        hb_base[fdepth] = hb_len!();
                                         fdepth += 1;
                                         asym_overflow = 0;
                                         _consumed = true;
@@ -800,7 +857,10 @@ macro_rules! parse_inline {
                         }
                         // A container just opened: a key may begin right
                         // after it. Anchor the next key segment past the run.
-                        _kv_seg_start = pos;
+                        // No key begins inside an opaque one.
+                        if $api {
+                            _kv_seg_start = pos;
+                        }
                         _asym_bal_handled = true;
                     }
                 )*
@@ -868,6 +928,11 @@ macro_rules! parse_inline {
                                                 match 1u32 {
                                                     $( $an => {
                                                         $state.$af[_vidx as usize].end = _close_char_pos;
+                                                        if !$api {
+                                                            let _os = $state.$af[_vidx as usize].start as usize - 1;
+                                                            _kv_opaque = Some((_os, _close_char_pos as usize + 1));
+                                                            hb_take_back!(hb_base[fdepth - 1]);
+                                                        }
                                                     } )*
                                                     _ => {}
                                                 }
@@ -888,27 +953,19 @@ macro_rules! parse_inline {
                 continue;
             }
 
-            let _top_opaque_active = fdepth > 0 && {
-                let _tb = frames[fdepth - 1].0;
-                let mut _op = false;
-                $( if ($abal || $api) && _tb == $ao { _op = !$api; } )*
-                _op
-            };
-
             // ---------------------------------------------------------- //
             // chained, transparent phases (off the stack).               //
             // ---------------------------------------------------------- //
             // The phase state belongs to the rule with a transparent
             // component; the other `chained` rules leave it alone.
             let mut _chained_handled = false;
-            $(
-                if ($tpi || $upi) && !ch_in_text && !ch_in_url
-                    && !_top_opaque_active && delim == $co
+            if !_top_opaque_active { $(
+                if ($tpi || $upi) && !ch_in_text && !ch_in_url && delim == $co
                 {
                     // The last byte of the run opens the match; the bytes
                     // before it are text.
                     let _open = pos - 1;
-                    let _is_prefix = _open > 0
+                    let _is_prefix = _open > $start
                         && src[_open - 1] == $cp
                         && {
                             let mut _bs: u32 = 0;
@@ -1006,7 +1063,7 @@ macro_rules! parse_inline {
                     }
                     _chained_handled = true;
                 }
-            )*
+            )* }
             if _chained_handled {
                 continue;
             }
@@ -1022,7 +1079,7 @@ macro_rules! parse_inline {
                 if !$tpi && !$upi && delim == $co {
                     // As above: the last byte of the run opens the match.
                     let _open = pos - 1;
-                    let is_prefix = _open > 0
+                    let is_prefix = _open > $start
                         && src[_open - 1] == $cp
                         && {
                             let mut _bs: u32 = 0;
@@ -1132,6 +1189,7 @@ macro_rules! parse_inline {
                                 }
                                 pos = cu_end + 1;
                                 text_start = pos;
+                                _kv_opaque = Some((real_start, pos));
                                 continue;
                             }
                         }
@@ -1539,6 +1597,35 @@ macro_rules! parse_inline {
         // Returns `$le` unchanged. The single-line call site resumes at `$le + 1`
         // itself; the multi-line call site ignores the value.
         $le
+    }};
+
+    // ------------------------------------------------------------------ //
+    // @hb_mark: where the hard-break marker before the line end `$e` of a //
+    // run starting at `$start` begins — an `esc` byte that is not itself  //
+    // escaped, or a run of at least `min` `sp` bytes — or `$e` itself     //
+    // when there is none.                                                //
+    // ------------------------------------------------------------------ //
+    (@hb_mark $src:ident, $e:expr, $start:expr, $esc:literal,
+     $hb_esc:literal, $sp:literal, $sp_min:literal) => {{
+        let _e: usize = $e;
+        let mut _mk = _e;
+        if _e > $start {
+            if $src[_e - 1] == $hb_esc
+                && !$crate::parse_inline!(@is_escaped $src, _e - 1, $start, $esc)
+            {
+                _mk = _e - 1;
+            } else {
+                let mut _p = _e;
+                let mut _n: u32 = 0;
+                while _p > $start && $src[_p - 1] == $sp {
+                    _n += 1; _p -= 1;
+                }
+                if _n >= $sp_min {
+                    _mk = _p;
+                }
+            }
+        }
+        _mk
     }};
 
     // ------------------------------------------------------------------ //
