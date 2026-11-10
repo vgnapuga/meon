@@ -1139,24 +1139,25 @@ fn integ_unclosed_01_lone_star_multi_line() {
     assert_eq!(txt(src, c.texts[0]), "5 * 3 is fifteen\nand so on");
 }
 
-// 02. An unclosed opener at line start keeps every following line
+// 02. An unclosed opener at line start is text and keeps every following
+//     line
 #[test]
 fn integ_unclosed_02_opener_at_start() {
     let src = b"*a\nb\n";
     let c = MarkdownParser::parse(src);
     assert!(c.italics.is_empty());
     assert_eq!(c.texts.len(), 1);
-    assert_eq!(txt(src, c.texts[0]), "a\nb");
+    assert_eq!(txt(src, c.texts[0]), "*a\nb");
 }
 
-// 03. An unclosed bold with a trailing newline keeps its text
+// 03. An unclosed bold with a trailing newline keeps its opener and text
 #[test]
 fn integ_unclosed_03_bold_with_newline() {
     let src = b"**unclosed bold\n";
     let c = MarkdownParser::parse(src);
     assert!(c.bolds.is_empty());
     assert_eq!(c.texts.len(), 1);
-    assert_eq!(txt(src, c.texts[0]), "unclosed bold");
+    assert_eq!(txt(src, c.texts[0]), "**unclosed bold");
 }
 
 // 04. Emphasis that closes across a line break keeps its span and the
@@ -1491,4 +1492,67 @@ fn integ_line_end_03_markers() {
     let c = MarkdownParser::parse(src);
     assert_eq!(c.hard_breaks.len(), 2);
     assert_eq!(texts(src, &c), vec!["a", "b", "c"]);
+}
+
+// ================================================================
+// balanced link text and url
+// ================================================================
+
+// 01. Brackets inside the text and parentheses inside the url are counted:
+//     the link takes them whole
+#[test]
+fn integ_link_bal_01_nested_brackets_and_parens() {
+    let src = b"[a [b] c](https://x.y/a_(b)) d\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert_eq!(txt(src, c.links[0].text), "a [b] c");
+    assert_eq!(txt(src, c.links[0].url), "https://x.y/a_(b)");
+}
+
+// 02. A badge — an image as the link text — is one link
+#[test]
+fn integ_link_bal_02_badge() {
+    let src = b"[![ci](https://x.y/b.svg)](https://x.y/ci)\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(txt(src, c.links[0].text), "![ci](https://x.y/b.svg)");
+    assert_eq!(txt(src, c.links[0].url), "https://x.y/ci");
+}
+
+// ================================================================
+// `\r\n` line ends
+// ================================================================
+
+// 01. A fence closes on a `\r\n` line, and text ends before the `\r`
+#[test]
+fn integ_crlf_01_fence_and_text() {
+    let src = b"```\r\ncode\r\n```\r\nafter\r\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.fenced_codes.len(), 1);
+    assert_eq!(texts(src, &c), vec!["after"]);
+}
+
+// 02. Headings and thematic breaks read the line without its `\r`
+#[test]
+fn integ_crlf_02_line_rules() {
+    let src = b"# Title\r\n---\r\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.headings.len(), 1);
+    assert_eq!(txt(src, c.headings[0].1), "Title");
+    assert_eq!(c.thematic_breaks.len(), 1);
+}
+
+// ================================================================
+// blockquote lines are one inline run
+// ================================================================
+
+// 01. Emphasis spans two lines of one blockquote
+#[test]
+fn integ_quote_run_01_bold_across_lines() {
+    let src = b"> **a\n> b**\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 1);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "a\n> b");
 }

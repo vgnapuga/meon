@@ -52,12 +52,10 @@ define_parser!(MdKvFuzz {
         on_trigger(b'*', b'`', b'[', b'<', b':') {
             symmetric b'`' {
                 parse_inside = false;
-                balanced     = false;
                 1 => codes [80],
             }
             symmetric b'*' {
                 parse_inside = true;
-                balanced     = true;
                 1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
             }
             asymmetric b'<', b'>' {

@@ -15,7 +15,7 @@ pub struct Pair {
 }
 
 define_parser!(Messy {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = false, max_nest = 4;
     inline {
         fallback => texts [10]
         on_trigger(b'*', b'`', b'<', b'[', b'=') {
@@ -32,8 +32,8 @@ define_parser!(Messy {
                 | b'(', b')' | { parse_inside = false; balanced = false; } => url
             } => links [100]
             asymmetric b'<', b'>' { parse_inside = false; balanced = false; 1 => autolinks [100] }
-            symmetric b'*' { 1 => italics [40]; 2 => bolds [40] balanced = true; parse_inside = true }
-            symmetric b'`' { balanced = false; parse_inside = false; 1 => codes [80], }
+            symmetric b'*' { 1 => italics [40]; 2 => bolds [40] parse_inside = true }
+            symmetric b'`' { parse_inside = false; 1 => codes [80], }
         }
         merge_simple = true
     }

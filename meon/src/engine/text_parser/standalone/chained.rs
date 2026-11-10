@@ -10,21 +10,21 @@ use super::context::ChainSpec;
 /// one search, not one per opener.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ChainMemo {
-    /// `(start, stop)`: no unescaped text close byte lies in `[start, stop)`,
+    /// `(start, stop)`: no unescaped first close byte lies in `[start, stop)`,
     /// and `stop` ends the inline run.
-    text_dead: Option<(usize, usize)>,
-    /// `(start, close)`: the first unescaped text close byte from `start` on
+    first_dead: Option<(usize, usize)>,
+    /// `(start, close)`: the first unescaped first close byte from `start` on
     /// is at `close`, and the match after it failed. Kept for a text
     /// component with `balanced = false` only.
-    text_found: Option<(usize, usize)>,
-    /// As `text_dead`, for the url close byte.
-    url_dead: Option<(usize, usize)>,
+    first_found: Option<(usize, usize)>,
+    /// As `first_dead`, for the second close byte.
+    second_dead: Option<(usize, usize)>,
 }
 
-/// The text and url close bytes of the opaque `chained` match whose text
+/// The text and second close bytes of the opaque `chained` match whose text
 /// component starts at `from`, right after the open byte, or `None` when it
-/// fails: the text close, the url open on the byte right after it, and the
-/// url close, all in the opener's inline run (`enter_line` as for
+/// fails: the first close, the second open on the byte right after it, and the
+/// second close, all in the opener's inline run (`enter_line` as for
 /// [`next_in_paragraph`]).
 #[inline]
 pub(crate) fn chain_match(
@@ -32,52 +32,61 @@ pub(crate) fn chain_match(
     from: usize,
     spec: &ChainSpec,
     escape: u8,
-    eol: u8,
+    breaks: LineBreaks,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
     memo: &mut ChainMemo,
 ) -> Option<(usize, usize)> {
-    let (open, close) = spec.text;
-    let found = memo.text_found.filter(|&(s, c)| s <= from && from <= c);
-    let dead = memo.text_dead.filter(|&(s, e)| s <= from && from < e);
+    let (open, close) = spec.first;
+    let found = memo.first_found.filter(|&(s, c)| s <= from && from <= c);
+    let dead = memo.first_dead.filter(|&(s, e)| s <= from && from < e);
     let ct = match (found, dead) {
         (Some((_, c)), _) => c,
         (None, Some(_)) => return None,
         (None, None) => {
-            let bal = spec.text_balanced;
-            match component_close(src, from, open, close, bal, escape, eol, &mut enter_line) {
+            let bal = spec.first_balanced;
+            match component_close(src, from, open, close, bal, escape, breaks, &mut enter_line) {
                 Ok(c) => c,
                 Err((stop, met)) => {
                     if !met {
-                        memo.text_dead = Some((from, stop));
+                        memo.first_dead = Some((from, stop));
                     }
                     return None;
                 }
             }
         }
     };
-    let (uo, uc) = spec.url;
+    let (uo, uc) = spec.second;
     let next = ct + 1;
     if next < src.len() && src[next] == uo {
-        let url_from = next + 1;
+        let second_from = next + 1;
         if !memo
-            .url_dead
-            .is_some_and(|(s, e)| s <= url_from && url_from < e)
+            .second_dead
+            .is_some_and(|(s, e)| s <= second_from && second_from < e)
         {
-            let bal = spec.url_balanced;
-            match component_close(src, url_from, uo, uc, bal, escape, eol, &mut enter_line) {
+            let bal = spec.second_balanced;
+            match component_close(
+                src,
+                second_from,
+                uo,
+                uc,
+                bal,
+                escape,
+                breaks,
+                &mut enter_line,
+            ) {
                 Ok(cu) => return Some((ct, cu)),
                 Err((stop, met)) => {
                     if !met {
-                        memo.url_dead = Some((url_from, stop));
+                        memo.second_dead = Some((second_from, stop));
                     }
                 }
             }
         }
     }
-    // The match failed after its text close: an opener before that close
+    // The match failed after its first close: an opener before that close
     // finds the same one.
-    if !spec.text_balanced {
-        memo.text_found = Some((from, ct));
+    if !spec.first_balanced {
+        memo.first_found = Some((from, ct));
     }
     None
 }
@@ -96,14 +105,15 @@ pub(crate) fn component_close(
     close: u8,
     balanced: bool,
     escape: u8,
-    eol: u8,
+    breaks: LineBreaks,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, (usize, bool)> {
+    let eol = breaks.eol;
     if !balanced {
         // The first unescaped close; an `Err` met none.
         let mut j = from;
         return loop {
-            match scan_paragraph(src, j, close, eol, &mut enter_line) {
+            match scan_paragraph(src, j, close, breaks, &mut enter_line) {
                 Ok(q) if count_escape(src, q, escape) % 2 == 1 => j = q + 1,
                 Ok(q) => break Ok(q),
                 Err(stop) => break Err((stop, false)),
@@ -120,7 +130,7 @@ pub(crate) fn component_close(
         };
         let q = j + r;
         if src[q] == eol {
-            if q + 1 >= len || src[q + 1] == eol {
+            if breaks.ends_paragraph(src, q) {
                 return Err((q, met));
             }
             match enter_line(q + 1) {
@@ -145,20 +155,20 @@ pub(crate) fn component_close(
     }
 }
 
-/// Where a transparent match stands: in no match, in its text component, or
-/// in its url component. `depth` counts the levels a `balanced` component
+/// Where a transparent match stands: in no match, in its first component, or
+/// in its second component. `depth` counts the levels a `balanced` component
 /// has nested.
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     Idle,
-    Text {
+    First {
         prefix: bool,
         start: usize,
         depth: u32,
     },
-    Url {
+    Second {
         prefix: bool,
-        text: (usize, usize),
+        first: (usize, usize),
         start: usize,
         depth: u32,
     },
@@ -174,30 +184,30 @@ enum Phase {
 /// It reads the rule the way the full parse does:
 ///
 /// - Of an unescaped run of `open1` bytes the last one opens the match, and
-///   the prefix is the byte before it: in `![[a](u)` the match is `[a](u)`,
-///   and not an image.
+///   the prefix is the byte before it: with `[`, `]`, `(`, `)` and the
+///   prefix `!`, in `![[a](u)` the match is `[a](u)`, with no prefix.
 /// - A component closes at its first unescaped close byte, or, with
 ///   `balanced`, at the one that brings it back to the level it opened at:
-///   each unescaped open byte nests one level. The url component opens only
-///   on the byte right after the text close.
+///   each unescaped open byte nests one level. The second component opens only
+///   on the byte right after the first close.
 /// - A rule whose components are both opaque (`transparent = false`) is a
 ///   forward search per opener: a match that fails resumes the scan right
 ///   after its open run, so a later opener inside it may match.
 /// - A rule with a transparent component is one match at a time, read in
-///   one pass: a match that fails at its text close resumes the scan right
+///   one pass: a match that fails at its first close resumes the scan right
 ///   after that close, and one that never closes is dropped where its
 ///   paragraph ends. Openers inside a match are never retried, and inside a
 ///   component with `balanced = false` an `open1` byte is text.
 ///
 /// A match stays inside one paragraph: a component may span single line
-/// breaks, but an empty line — two consecutive `eol` bytes — or the end of
-/// input ends it. Other rules are not seen: in the full parse an opaque
+/// breaks, but a blank line (see [`LineBreaks`]) or the end of input ends
+/// it. Other rules are not seen: in the full parse an opaque
 /// construct opened before a transparent component's close byte hides it,
 /// and other rules' line structure ends paragraphs.
 ///
 /// What a failed search learns is kept for the openers after it: a close
-/// byte absent up to the end of the paragraph, and, for a text component
-/// with `balanced = false`, a text close whose match failed after it. A run
+/// byte absent up to the end of the paragraph, and, for a first component
+/// with `balanced = false`, a first close whose match failed after it. A run
 /// of unclosed openers costs one search, not one per opener. A search of a
 /// `balanced` component that meets close bytes is not kept, as a later
 /// opener may balance where it did not: `k` such openers in an `n`-byte
@@ -213,7 +223,7 @@ where
     spec: ChainSpec,
     prefix: u8,
     transparent: bool,
-    eol: u8,
+    breaks: LineBreaks,
     escape: u8,
     make: F,
     pos: usize,
@@ -237,8 +247,8 @@ where
     /// - `prefix` — optional single byte immediately before `open1` that sets
     ///   the `is_prefix` flag passed to `make` (e.g. `b'!'` for images).
     /// - `transparent` — does either component have `parse_inside = true`?
-    /// - `eol` — line terminator byte; a component may span single line
-    ///   breaks, but never an empty line (two consecutive `eol` bytes).
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`]; a
+    ///   component may span single line breaks, but never a blank line.
     /// - `escape` — escape prefix byte; a delimiter or prefix byte preceded
     ///   by an odd number of escape bytes is none.
     /// - `make` — closure that receives `(is_prefix, span1, span2)` and
@@ -248,7 +258,7 @@ where
         spec: ChainSpec,
         prefix: u8,
         transparent: bool,
-        eol: u8,
+        breaks: impl Into<LineBreaks>,
         escape: u8,
         make: F,
     ) -> Self {
@@ -257,7 +267,7 @@ where
             spec,
             prefix,
             transparent,
-            eol,
+            breaks: breaks.into(),
             escape,
             make,
             pos: 0,
@@ -289,7 +299,7 @@ where
     /// The next match of a rule whose components are both opaque.
     fn next_opaque(&mut self) -> Option<T> {
         let src = self.src;
-        let open = self.spec.text.0;
+        let open = self.spec.first.0;
         loop {
             let p = memchr::memchr(open, &src[self.pos..])? + self.pos;
             if count_escape(src, p, self.escape) % 2 == 1 {
@@ -303,7 +313,7 @@ where
                 from,
                 &self.spec,
                 self.escape,
-                self.eol,
+                self.breaks,
                 Some,
                 &mut self.memo,
             );
@@ -325,20 +335,20 @@ where
         let src = self.src;
         let len = src.len();
         let ChainSpec {
-            text: (co, cc),
-            text_balanced: tbal,
-            url: (uo, uc),
-            url_balanced: ubal,
+            first: (co, cc),
+            first_balanced: tbal,
+            second: (uo, uc),
+            second_balanced: ubal,
         } = self.spec;
-        let eol = self.eol;
+        let eol = self.breaks.eol;
         loop {
             let hay = &src[self.pos..];
             let hit = match self.phase {
                 Phase::Idle => memchr::memchr(co, hay),
-                Phase::Text { .. } if tbal => memchr::memchr3(co, cc, eol, hay),
-                Phase::Text { .. } => memchr::memchr2(cc, eol, hay),
-                Phase::Url { .. } if ubal => memchr::memchr3(uo, uc, eol, hay),
-                Phase::Url { .. } => memchr::memchr2(uc, eol, hay),
+                Phase::First { .. } if tbal => memchr::memchr3(co, cc, eol, hay),
+                Phase::First { .. } => memchr::memchr2(cc, eol, hay),
+                Phase::Second { .. } if ubal => memchr::memchr3(uo, uc, eol, hay),
+                Phase::Second { .. } => memchr::memchr2(uc, eol, hay),
             };
             let Some(r) = hit else {
                 self.pos = len;
@@ -349,7 +359,7 @@ where
             let b = src[q];
             // The match ends with its paragraph: a single `eol` is content.
             if b == eol && !matches!(self.phase, Phase::Idle) {
-                if q + 1 >= len || src[q + 1] == eol {
+                if self.breaks.ends_paragraph(src, q) {
                     self.phase = Phase::Idle;
                 }
                 self.pos = q + 1;
@@ -364,25 +374,25 @@ where
             self.pos = e;
             match self.phase {
                 Phase::Idle => {
-                    self.phase = Phase::Text {
+                    self.phase = Phase::First {
                         prefix: self.prefixed(e - 1),
                         start: e,
                         depth: 0,
                     };
                 }
-                Phase::Text {
+                Phase::First {
                     prefix,
                     start,
                     depth,
                 } => {
                     if tbal && b == co {
-                        self.phase = Phase::Text {
+                        self.phase = Phase::First {
                             prefix,
                             start,
                             depth: depth + count,
                         };
                     } else if count <= depth {
-                        self.phase = Phase::Text {
+                        self.phase = Phase::First {
                             prefix,
                             start,
                             depth: depth - count,
@@ -392,9 +402,9 @@ where
                         let ct = q + depth as usize;
                         let next = ct + 1;
                         if next < len && src[next] == uo {
-                            self.phase = Phase::Url {
+                            self.phase = Phase::Second {
                                 prefix,
-                                text: (start, ct),
+                                first: (start, ct),
                                 start: next + 1,
                                 depth: 0,
                             };
@@ -405,23 +415,23 @@ where
                         }
                     }
                 }
-                Phase::Url {
+                Phase::Second {
                     prefix,
-                    text,
+                    first,
                     start,
                     depth,
                 } => {
                     if ubal && b == uo {
-                        self.phase = Phase::Url {
+                        self.phase = Phase::Second {
                             prefix,
-                            text,
+                            first,
                             start,
                             depth: depth + count,
                         };
                     } else if count <= depth {
-                        self.phase = Phase::Url {
+                        self.phase = Phase::Second {
                             prefix,
-                            text,
+                            first,
                             start,
                             depth: depth - count,
                         };
@@ -431,7 +441,7 @@ where
                         self.pos = cu + 1;
                         return Some((self.make)(
                             prefix,
-                            Span::new(text.0 as u32, text.1 as u32),
+                            Span::new(first.0 as u32, first.1 as u32),
                             Span::new(start as u32, cu as u32),
                         ));
                     }
@@ -461,10 +471,10 @@ mod tests {
     use super::*;
 
     const LINK: ChainSpec = ChainSpec {
-        text: (b'[', b']'),
-        text_balanced: false,
-        url: (b'(', b')'),
-        url_balanced: false,
+        first: (b'[', b']'),
+        first_balanced: false,
+        second: (b'(', b')'),
+        second_balanced: false,
     };
 
     fn stub_make(is_prefix: bool, text: Span, url: Span) -> (bool, Span, Span) {
@@ -542,7 +552,7 @@ mod tests {
         let src = b"[text](unclosed\n[x](y)";
         let mut iter = ChainedIter::new(src, LINK, b'!', false, b'\n', b'\\', stub_make);
 
-        // The url component opened at 7 closes at the `)` at 21, spanning the
+        // The second component opened at 7 closes at the `)` at 21, spanning the
         // embedded newline; the inner `[x](y)` is consumed by it.
         assert_eq!(
             iter.next(),
@@ -693,7 +703,7 @@ mod tests {
         assert_eq!(links(b"[a] [b](c)"), vec![(5, 6, 8, 9)]);
         // The first opener's close serves the second one too.
         assert!(links(b"[a [b] c").is_empty());
-        // No url close up to the empty line, then a new paragraph.
+        // No second close up to the empty line, then a new paragraph.
         assert_eq!(links(b"[a](b\n\n[c](d)"), vec![(8, 9, 11, 12)]);
         assert!(links(b"[a](b [c](d").is_empty());
     }
@@ -715,8 +725,8 @@ mod tests {
 
     fn read(src: &[u8], balanced: bool, transparent: bool) -> Vec<L> {
         let spec = ChainSpec {
-            text_balanced: balanced,
-            url_balanced: balanced,
+            first_balanced: balanced,
+            second_balanced: balanced,
             ..LINK
         };
         ChainedIter::new(src, spec, b'!', transparent, b'\n', b'\\', |p, t, u| {
@@ -794,8 +804,8 @@ mod tests {
 
     fn quoted(src: &[u8], balanced: bool, transparent: bool) -> Vec<L> {
         let spec = ChainSpec {
-            text: (b'"', b'"'),
-            text_balanced: balanced,
+            first: (b'"', b'"'),
+            first_balanced: balanced,
             ..LINK
         };
         ChainedIter::new(src, spec, b'!', transparent, b'\n', b'\\', |p, t, u| {
@@ -831,12 +841,12 @@ mod tests {
         assert_eq!(read(&src, true, true), vec![]);
     }
 
-    // 26. The rest of a url close run is read again, so a url that closes on
-    //     the text open byte leaves the next byte of its run to open a match
+    // 26. The rest of a second close run is read again, so a url that closes on
+    //     the first open byte leaves the next byte of its run to open a match
     #[test]
-    fn test_26_url_close_run_read_again() {
+    fn test_26_second_close_run_read_again() {
         let spec = ChainSpec {
-            url: (b'(', b'['),
+            second: (b'(', b'['),
             ..LINK
         };
         for t in [false, true] {
@@ -929,7 +939,7 @@ mod tests {
         use opaque::OpaqueParser;
 
         // 27. An opaque rule's matches are context regions, from the open
-        //     byte through the url close, each component with its own
+        //     byte through the second close, each component with its own
         //     `balanced`
         #[test]
         fn test_27_generated_opaque_rule_is_context_source() {
@@ -946,7 +956,7 @@ mod tests {
                     .collect();
                 assert_eq!(regions(&OpaqueParser::context(src)), want);
             }
-            // The text component nests, the url component does not.
+            // The first component nests, the second component does not.
             assert_eq!(
                 regions(&OpaqueParser::context(b"[a [b] c](d (e) f)")),
                 vec![(0, 15)]

@@ -24,6 +24,7 @@ where
     F: Fn(u8) -> T,
 {
     src: &'a [u8],
+    breaks: LineBreaks,
     eol: u8,
     sep: u8,
     tab: u8,
@@ -46,7 +47,7 @@ where
     /// # Parameters
     ///
     /// - `src` — source byte slice to scan.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte; allowed as leading indentation and required
     ///   immediately after the marker byte.
     /// - `tab` — tab byte; treated equivalently to `sep` for indentation and
@@ -54,7 +55,15 @@ where
     /// - `matches` — predicate that returns `true` for valid marker bytes.
     /// - `make` — closure that receives the marker byte and constructs the
     ///   metadata value `T`.
-    pub fn new(src: &'a [u8], eol: u8, sep: u8, tab: u8, matches: M, make: F) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        breaks: impl Into<LineBreaks>,
+        sep: u8,
+        tab: u8,
+        matches: M,
+        make: F,
+    ) -> Self {
+        let breaks: LineBreaks = breaks.into();
         let mut needles = [0u8; 3];
         let (nn, streaming) = match probe_matcher(&matches, &mut needles) {
             Some(n) => (n, true),
@@ -62,7 +71,8 @@ where
         };
         Self {
             src,
-            eol,
+            breaks,
+            eol: breaks.eol,
             sep,
             tab,
             matches,
@@ -110,9 +120,10 @@ where
             if nxt < len && (src[nxt] == self.sep || src[nxt] == self.tab) {
                 let cs = nxt + 1;
                 let le = find_line_end(src, cs, self.eol);
+                let ce = self.breaks.content_end(src, cs, le);
                 let meta = (self.make)(src[p]);
                 self.pos = if le < len { le + 1 } else { len };
-                return Some((meta, Span::new(cs as u32, le as u32)));
+                return Some((meta, Span::new(cs as u32, ce as u32)));
             }
 
             // Marker at line start without its separator: the line is ruled
@@ -141,18 +152,19 @@ where
                 return None;
             }
             let le = find_line_end(src, self.pos, self.eol);
+            let ce = self.breaks.content_end(src, self.pos, le);
 
             let mut p = self.pos;
-            while p < le && (src[p] == self.sep || src[p] == self.tab) {
+            while p < ce && (src[p] == self.sep || src[p] == self.tab) {
                 p += 1;
             }
 
-            if p < le && (self.matches)(src[p]) {
+            if p < ce && (self.matches)(src[p]) {
                 let nxt = p + 1;
-                if nxt < le && (src[nxt] == self.sep || src[nxt] == self.tab) {
+                if nxt < ce && (src[nxt] == self.sep || src[nxt] == self.tab) {
                     let cs = nxt + 1;
                     let meta = (self.make)(src[p]);
-                    let span = Span::new(cs as u32, le as u32);
+                    let span = Span::new(cs as u32, ce as u32);
                     self.pos = if le < len { le + 1 } else { len };
                     return Some((meta, span));
                 }

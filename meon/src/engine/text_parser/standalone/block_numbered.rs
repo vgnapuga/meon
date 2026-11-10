@@ -29,6 +29,7 @@ where
     F: Fn(u32, u8) -> T,
 {
     src: &'a [u8],
+    breaks: LineBreaks,
     eol: u8,
     sep: u8,
     tab: u8,
@@ -55,7 +56,7 @@ where
     /// # Parameters
     ///
     /// - `src` — source byte slice to scan.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte; allowed as leading indentation and required
     ///   immediately after the delimiter byte.
     /// - `tab` — tab byte; treated equivalently to `sep`.
@@ -67,13 +68,14 @@ where
     ///   the metadata value `T`.
     pub fn new(
         src: &'a [u8],
-        eol: u8,
+        breaks: impl Into<LineBreaks>,
         sep: u8,
         tab: u8,
         digit_matches: D,
         end_matches: E,
         make: F,
     ) -> Self {
+        let breaks: LineBreaks = breaks.into();
         let mut needles = [0u8; 3];
         let (nn, streaming) = match probe_matcher(&end_matches, &mut needles) {
             Some(n) => (n, true),
@@ -82,7 +84,8 @@ where
         let overlap = needles[..nn].iter().any(|&b| digit_matches(b));
         Self {
             src,
-            eol,
+            breaks,
+            eol: breaks.eol,
             sep,
             tab,
             digit_matches,
@@ -166,9 +169,10 @@ where
                 let num = Self::number(&src[k..p]);
                 let cs = nxt + 1;
                 let le = find_line_end(src, cs, self.eol);
+                let ce = self.breaks.content_end(src, cs, le);
                 let meta = (self.make)(num, src[p]);
                 self.pos = if le < len { le + 1 } else { len };
-                return Some((meta, Span::new(cs as u32, le as u32)));
+                return Some((meta, Span::new(cs as u32, ce as u32)));
             }
 
             self.pos = p + 1;
@@ -195,27 +199,28 @@ where
                 return None;
             }
             let le = find_line_end(src, self.pos, self.eol);
+            let ce = self.breaks.content_end(src, self.pos, le);
 
             let mut p = self.pos;
-            while p < le && (src[p] == self.sep || src[p] == self.tab) {
+            while p < ce && (src[p] == self.sep || src[p] == self.tab) {
                 p += 1;
             }
 
-            if p < le && (self.digit_matches)(src[p]) {
+            if p < ce && (self.digit_matches)(src[p]) {
                 let mut i = p;
                 let mut dc = 0u8;
-                while i < le && (self.digit_matches)(src[i]) && dc < 9 {
+                while i < ce && (self.digit_matches)(src[i]) && dc < 9 {
                     i += 1;
                     dc += 1;
                 }
                 let num = Self::number(&src[p..i]);
-                if dc > 0 && i < le && (self.end_matches)(src[i]) {
+                if dc > 0 && i < ce && (self.end_matches)(src[i]) {
                     let kind = src[i];
                     i += 1;
-                    if i < le && (src[i] == self.sep || src[i] == self.tab) {
+                    if i < ce && (src[i] == self.sep || src[i] == self.tab) {
                         let cs = i + 1;
                         let meta = (self.make)(num, kind);
-                        let span = Span::new(cs as u32, le as u32);
+                        let span = Span::new(cs as u32, ce as u32);
                         self.pos = if le < len { le + 1 } else { len };
                         return Some((meta, span));
                     }

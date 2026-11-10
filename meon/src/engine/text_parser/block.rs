@@ -2,8 +2,10 @@
 //!
 //! # Overview
 //!
-//! `parse_block!` handles structured multi-line constructs: fenced code blocks,
-//! blockquote continuations, bullet lists, and ordered lists. It is called by
+//! `parse_block!` handles the grammar's block rules: `fence` and `cont` frames,
+//! which span lines, and `block` items — marker and `num` items — which are
+//! one line each (fenced code, blockquotes and list items, for instance). It
+//! is called by
 //! `parse_text!` at the start of each line and, in a single call, fully
 //! resolves that line's block structure:
 //!
@@ -13,7 +15,7 @@
 //!   is closed (together with everything nested inside it).
 //! - **Open phase**: at the position left after peeling, new block frames are
 //!   opened (as many as nest on one line, e.g. a fence opening inside a
-//!   blockquote), bounded by `max_nest`.
+//!   `cont` frame), bounded by `max_nest`.
 //!
 //! It is not meant to be called by users directly.
 //!
@@ -46,9 +48,9 @@
 //!   (where open and close are indistinguishable, so an identical key can't
 //!   nest), a `cont` opens positionally — at the line start, after the outer
 //!   markers have been peeled — and closes by *absence* of its marker, so
-//!   `> >` is two genuinely nested blockquote frames.
+//!   `> >` (with `cont(b'>')`) is two genuinely nested frames.
 //!
-//! `block` items (bullets, ordered) are per-line leaves: they push nothing onto
+//! `block` items (marker and `num` items) are per-line leaves: they push nothing onto
 //! the stack and so consume no depth. They may still open *inside* a `cont`,
 //! but only when `max_nest > 1`; at `max_nest = 1` the open phase never runs
 //! inside an already-open block.
@@ -90,8 +92,25 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_block {
+    // A line whose `eol` comes right after its content: the next line starts
+    // past it.
     (
         $stack:ident, $depth:ident, $state:ident, $src:ident, $pos:expr, $le:expr,
+        sep = $sep:literal, tab = $tab:literal, max_nest = $maxn:literal ;
+        block_simple { $($sr:tt)* }
+        block        { $($br:tt)* }
+    ) => {{
+        let _le: usize = $le;
+        $crate::parse_block!(
+            $stack, $depth, $state, $src, $pos, _le,
+            nl = if _le < $src.len() { _le + 1 } else { $src.len() },
+            sep = $sep, tab = $tab, max_nest = $maxn ;
+            block_simple { $($sr)* }
+            block        { $($br)* }
+        )
+    }};
+    (
+        $stack:ident, $depth:ident, $state:ident, $src:ident, $pos:expr, $le:expr, nl = $nl:expr,
         sep = $sep:literal, tab = $tab:literal, max_nest = $maxn:literal ;
         block_simple { $($sr:tt)* }
         block        { $($br:tt)* }
@@ -99,6 +118,9 @@ macro_rules! parse_block {
         let src: &[u8] = $src;
         let pos: usize = $pos;
         let le:  usize = $le;
+        // Where the next line starts: past the line's `eol`, and past
+        // whatever the caller counts as part of the line end before it.
+        let nl:  usize = $nl;
 
         // ---- PEEL: walk the active frames outermost → innermost from `pos`. //
         let mut _cur: usize = pos;
@@ -139,13 +161,12 @@ macro_rules! parse_block {
                 let mut _fc: u32 = 0;
                 while _i < le && src[_i] == _ab { _fc += 1; _i += 1; }
                 if _fc >= _ac && src[_i..le].iter().all(|&b| b == $sep || b == $tab) {
-                    let _end = if le < src.len() { le + 1 } else { src.len() };
                     $crate::parse_block!(@close_frame
-                        $state, src, _end as u32, _ac, _astart ; $($sr)*);
+                        $state, src, nl as u32, _ac, _astart ; $($sr)*);
                     $depth -= 1;
                 }
                 // Closed or not, the fence line is fully consumed.
-                _consumed_np = if le < src.len() { le + 1 } else { src.len() };
+                _consumed_np = nl;
                 _line_consumed = true;
                 break;
             }
@@ -174,7 +195,7 @@ macro_rules! parse_block {
                     let mut _or: ::core::option::Option<(bool, usize)> = None;
                     if $depth < $maxn {
                         $crate::parse_block!(@open_simple _or, $stack, $depth, $state,
-                            src, _open_cur, le, $sep, $tab ; $($sr)*);
+                            src, _open_cur, le, nl, $sep, $tab ; $($sr)*);
                     }
                     if let Some((_o, _cs)) = _or {
                         _opened_any = true;
@@ -182,7 +203,7 @@ macro_rules! parse_block {
                         _go = true;          // a frame opened — try to nest further
                         continue;
                     }
-                    // A leaf `block` item (bullet / num) counts as a nesting
+                    // A leaf `block` item (marker / num) counts as a nesting
                     // level and is gated by the same `max_nest` cap as a
                     // frame: at `max_nest = 1` an item never opens inside an
                     // already-open block and the remainder goes to inline. At
@@ -263,7 +284,7 @@ macro_rules! parse_block {
     // stack. The depth-vs-max_nest gate is applied by the caller.        //
     // ------------------------------------------------------------------ //
     (@open_simple $res:ident, $stack:ident, $depth:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ;
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ;
      fence($pat:pat, min = $min:literal) => $field:ident $($rest:tt)*
     ) => {
         if $res.is_none() && $pos < $le && matches!($src[$pos], $pat) {
@@ -274,15 +295,14 @@ macro_rules! parse_block {
             if _c >= $min && $src[_i..$le].iter().all(|&b| b != _byte) {
                 $stack[$depth] = (_c, $pos as u32);
                 $depth += 1;
-                let np = if $le < $src.len() { $le + 1 } else { $src.len() };
-                $res = Some((true, np));
+                $res = Some((true, $nl));
             }
         }
-        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
 
     (@open_simple $res:ident, $stack:ident, $depth:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ;
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ;
      cont($byte:literal) => $field:ident $($rest:tt)*
     ) => {
         if $res.is_none() && $pos < $le && $src[$pos] == $byte {
@@ -293,23 +313,23 @@ macro_rules! parse_block {
             { $pos + 2 } else { $pos + 1 };
             $res = Some((true, cs));
         }
-        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
 
     (@open_simple $r:ident, $stk:ident, $d:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ; , $($rest:tt)*) => {
-        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ; , $($rest:tt)*) => {
+        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
     (@open_simple $r:ident, $stk:ident, $d:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ; ; $($rest:tt)*) => {
-        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ; ; $($rest:tt)*) => {
+        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
     (@open_simple $r:ident, $stk:ident, $d:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ;) => {};
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ;) => {};
 
 
     // ------------------------------------------------------------------ //
-    // @open_block: try to open one leaf `block` item (bullet / num).     //
+    // @open_block: try to open one leaf `block` item (marker / num).     //
     // Pushes a `(Type, Span)` entry; touches no stack frame.             //
     // ------------------------------------------------------------------ //
     (@open_block $res:ident, $st:ident, $src:ident,

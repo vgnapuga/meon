@@ -5,8 +5,8 @@
 //! and settings may come in any order, with or without a trailing `;` or `,`.
 //! The runtime macros are `macro_rules!` patterns and accept exactly one token
 //! shape: sub-rules inside `on_trigger { ... }` in the order `symmetric`,
-//! `asymmetric`, `chained`, `key_value`; `parse_inside` before `balanced` in a
-//! `symmetric` body and after it in an `asymmetric` body; the `prefix` last in
+//! `asymmetric`, `chained`, `key_value`; `parse_inside` first in a `symmetric`
+//! body and after `balanced` in an `asymmetric` body; the `prefix` last in
 //! a `chained` body; `eq`, `allow_sep`, `end`, `key`, `value` in that order in
 //! a `key_value` body; every setting terminated by `;` and every arm by `,`.
 //!
@@ -83,7 +83,7 @@ fn canonicalize_on_trigger(ts: TS2) -> TS2 {
     out.extend(lead);
     for (kw, unit) in units {
         let body: fn(TS2) -> TS2 = match kw.as_str() {
-            "symmetric" => |b| canonicalize_flag_body(b, &["parse_inside", "balanced"]),
+            "symmetric" => |b| canonicalize_flag_body(b, &["parse_inside"]),
             "asymmetric" => |b| canonicalize_flag_body(b, &["balanced", "parse_inside"]),
             "chained" => canonicalize_chained_body,
             _ => canonicalize_kv_body,
@@ -377,7 +377,7 @@ mod tests {
             merge_simple = true ;
             hard_break(b'\\', b' ', 2) => hard_breaks ;
             on_trigger(b'*', b'<') {
-                symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , 2 => bolds , }
+                symmetric b'*' { parse_inside = true ; 1 => italics , 2 => bolds , }
                 asymmetric b'<', b'>' { balanced = false ; parse_inside = false ; 1 => autolinks , }
             }
             fallback => texts ;
@@ -398,12 +398,12 @@ mod tests {
                         prefix | b'!' | => is_image ,
                     } => links
                     asymmetric b'<', b'>' { balanced = false ; parse_inside = false ; 1 => autolinks , }
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                 }
             },
             quote! {
                 on_trigger(b'*', b'<', b'[', b'=') {
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                     asymmetric b'<', b'>' { balanced = false ; parse_inside = false ; 1 => autolinks , }
                     chained: Link {
                         | b'[', b']' | { parse_inside = false ; balanced = false ; } => text ,
@@ -422,14 +422,14 @@ mod tests {
         eq(
             quote! {
                 on_trigger(b'`', b'*') {
-                    symmetric b'`' { parse_inside = false ; balanced = false ; 1 => codes , }
-                    symmetric b'*' { parse_inside = true ; balanced = true ; 1 => italics , }
+                    symmetric b'`' { parse_inside = false ; 1 => codes , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                 }
             },
             quote! {
                 on_trigger(b'`', b'*') {
-                    symmetric b'`' { parse_inside = false ; balanced = false ; 1 => codes , }
-                    symmetric b'*' { parse_inside = true ; balanced = true ; 1 => italics , }
+                    symmetric b'`' { parse_inside = false ; 1 => codes , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                 }
             },
         );
@@ -441,13 +441,13 @@ mod tests {
         eq(
             quote! {
                 on_trigger(b'*', b'<') {
-                    symmetric b'*' { balanced = true ; parse_inside = true ; 1 => italics , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                     asymmetric b'<', b'>' { parse_inside = false ; balanced = false ; 1 => autolinks , }
                 }
             },
             quote! {
                 on_trigger(b'*', b'<') {
-                    symmetric b'*' { parse_inside = true ; balanced = true ; 1 => italics , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                     asymmetric b'<', b'>' { balanced = false ; parse_inside = false ; 1 => autolinks , }
                 }
             },
@@ -461,12 +461,12 @@ mod tests {
         eq(
             quote! {
                 on_trigger(b'*') {
-                    symmetric b'*' { 1 => italics ; 2 => bolds parse_inside = true ; balanced = false }
+                    symmetric b'*' { 1 => italics ; 2 => bolds parse_inside = true }
                 }
             },
             quote! {
                 on_trigger(b'*') {
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , 2 => bolds , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , 2 => bolds , }
                 }
             },
         );
@@ -539,12 +539,12 @@ mod tests {
             quote! {
                 on_trigger(b'*', b'<') {
                     asymmetric b'<', b'>' { balanced = false ; parse_inside = false ; 1 => autolinks , } ;
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , } ,
+                    symmetric b'*' { parse_inside = true ; 1 => italics , } ,
                 }
             },
             quote! {
                 on_trigger(b'*', b'<') {
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                     asymmetric b'<', b'>' { balanced = false ; parse_inside = false ; 1 => autolinks , }
                 }
             },
@@ -558,7 +558,7 @@ mod tests {
             fallback => texts
             on_trigger(b'*', b'<') {
                 asymmetric b'<', b'>' { parse_inside = false ; balanced = false ; 1 => autolinks }
-                symmetric b'*' { balanced = false ; parse_inside = true ; 1 => italics }
+                symmetric b'*' { parse_inside = true ; 1 => italics }
             }
         };
         let once = canonicalize_inline(g);
@@ -572,12 +572,12 @@ mod tests {
         eq(
             quote! {
                 on_trigger(b'*') {
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , _ => rest }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , _ => rest }
                 }
             },
             quote! {
                 on_trigger(b'*') {
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , _ => rest , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , _ => rest , }
                 }
             },
         );
@@ -592,7 +592,7 @@ mod tests {
                     key_value: Pair { end = b'\n' ; eq = b'=' ; allow_sep = true ; key => key , value => value } => pairs
                 }
                 on_trigger(b'*') {
-                    symmetric b'*' { balanced = false ; parse_inside = true ; 1 => italics }
+                    symmetric b'*' { parse_inside = true ; 1 => italics }
                 }
             },
             quote! {
@@ -600,7 +600,7 @@ mod tests {
                     key_value: Pair { eq = b'=' ; allow_sep = true ; end = b'\n' ; key => key , value => value , } => pairs
                 }
                 on_trigger(b'*') {
-                    symmetric b'*' { parse_inside = true ; balanced = false ; 1 => italics , }
+                    symmetric b'*' { parse_inside = true ; 1 => italics , }
                 }
             },
         );

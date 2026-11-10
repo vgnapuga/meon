@@ -76,7 +76,6 @@ define_parser!(Json {
         on_trigger(b'{', b'}', b'[', b']', b'"', b':') {
             symmetric b'"' {
                 parse_inside = false;
-                balanced     = false;
                 1 => strings [16],
             }
             asymmetric b'{', b'}' {

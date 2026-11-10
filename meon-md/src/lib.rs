@@ -25,8 +25,11 @@
 //!
 //! **Line:** ATX headings (`#`–`######`), thematic breaks (`---`, `***`, `___`).
 //!
-//! **Block:** fenced code blocks (`` ``` ``/`~~~`), blockquotes (`>`),
-//! bullet lists (`-`, `*`, `+`), ordered lists (`1.`, `1)`), paragraphs.
+//! **Block:** fenced code blocks (`` ``` ``), blockquotes (`>`), bullet lists
+//! (`-`, `*`, `+`), ordered lists (`1.`, `1)`), paragraphs.
+//!
+//! Lines end at `\n` or `\r\n` (`crlf = true`). A line of spaces and tabs
+//! alone is blank.
 //!
 //! # Nesting
 //!
@@ -40,10 +43,10 @@
 //!   fenced code block opened on a continuation line inside a blockquote
 //!   (`"> ```\n> code\n> ```"`) is scoped to its own fence span without
 //!   absorbing the surrounding `>` markers.
-//! - **Bold and italic** (`symmetric b'*' { parse_inside = true; balanced =
-//!   true; ... }`) share the inline bounded stack. `"**bold *italic*
-//!   still-bold**"` resolves both the outer bold and the inner italic as
-//!   separate, correctly-bounded spans.
+//! - **Bold and italic** (`symmetric b'*' { parse_inside = true; ... }`) share
+//!   the inline bounded stack. `"**bold *italic* still-bold**"` resolves both
+//!   the outer bold and the inner italic as separate, correctly-bounded
+//!   spans.
 //!
 //! `max_nest = 4` means up to four such levels self-nest correctly per
 //! family. Past the cap, a fifth inline level collapses via the inline
@@ -51,10 +54,15 @@
 //! level does not open, and its marker is content of the innermost frame
 //! (see [`meon::parse_block!`]).
 //!
-//! Autolinks and the `[text](url)` / `![alt](url)` link/image syntax are
-//! `balanced = false, parse_inside = false` by design — a self-contained
-//! forward search that does not participate in nesting (e.g. `[a [b] c](url)`
-//! does not nest its own brackets).
+//! Autolinks are `balanced = false, parse_inside = false`: a forward search
+//! for the first `>`. The text and url of `[text](url)` / `![alt](url)` are
+//! `balanced = true, parse_inside = false`: brackets and parentheses inside
+//! them are counted as bytes, so `[a [b] c](url)` and
+//! `[t](https://x.y/a_(b))` are one link each, and nothing else is parsed
+//! inside them.
+//!
+//! The lines of one blockquote are one inline run, as the lines of a
+//! paragraph are: `"> **a\n> b**"` is one bold span.
 //!
 //! # Known limitations
 //!
@@ -77,7 +85,8 @@ define_parser!(Markdown {
     eol = b'\n',
     tab = b'\t',
     escape = b'\\',
-    max_nest = 4;
+    max_nest = 4,
+    crlf = true;
 
     inline {
         merge_simple = true;
@@ -86,12 +95,10 @@ define_parser!(Markdown {
         on_trigger(b'*', b'`', b'[', b'<') {
             symmetric b'`' {
                 parse_inside = false;
-                balanced     = false;
                 1 => codes [80],
             }
             symmetric b'*' {
                 parse_inside = true;
-                balanced     = true;
                 1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
             }
             asymmetric b'<', b'>' {
@@ -102,11 +109,11 @@ define_parser!(Markdown {
             chained: Link {
                 | b'[', b']' | {
                     parse_inside = false;
-                    balanced     = false;
+                    balanced     = true;
                 } => text,
                 | b'(', b')' | {
                     parse_inside = false;
-                    balanced     = false;
+                    balanced     = true;
                 } => url,
                 prefix | b'!' | => is_image,
             } => links [100]

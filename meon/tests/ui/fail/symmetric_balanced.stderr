@@ -1,0 +1,5 @@
+error: `symmetric` takes no `balanced`: it opens and closes with one byte, so a run never nests in a run of its own count
+ --> tests/ui/fail/symmetric_balanced.rs:7:51
+  |
+7 |             symmetric b'*' { parse_inside = true; balanced = true; 1 => italics [40], }
+  |                                                   ^^^^^^^^

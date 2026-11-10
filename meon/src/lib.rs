@@ -74,10 +74,11 @@ pub mod swar;
 pub use meon_macros::define_parser;
 
 pub use engine::text_parser::standalone::{
-    asymmetric::{AsymmetricExactIter, AsymmetricStackIter},
+    asymmetric::{AsymmetricBalancedIter, AsymmetricExactIter, AsymmetricStackIter},
     block_marker::BlockMarkerIter,
     block_numbered::BlockNumberedIter,
     chained::ChainedIter,
+    common::LineBreaks,
     cont::ContIter,
     fence::FenceIter,
     key_value::KvIter,

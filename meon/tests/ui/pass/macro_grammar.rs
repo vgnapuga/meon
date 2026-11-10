@@ -15,7 +15,7 @@ macro_rules! grammar {
             sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = $nest;
             inline {
                 on_trigger($em) {
-                    symmetric $em { parse_inside = true; balanced = true; 1 => ems [$cap], }
+                    symmetric $em { parse_inside = true; 1 => ems [$cap], }
                 }
                 fallback => texts [10];
             }

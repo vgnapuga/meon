@@ -79,8 +79,10 @@ pub(crate) enum StandaloneRule {
         count: Literal,
         /// See [`StandaloneRule::SymmetricExact::opaque`].
         opaque: bool,
-        /// The rule's `balanced` flag. With it or `parse_inside = true` the
-        /// full parse keeps the rule on its stack, and `count` is `1`.
+        /// The rule's `balanced` flag. With it or `parse_inside = true` each
+        /// open byte is an open of its own, and `count` is `1`: on the full
+        /// parse's stack when transparent, in one forward search that counts
+        /// the rule's bytes when opaque.
         balanced: bool,
         /// See [`StandaloneRule::SymmetricExact::cap`].
         cap: Literal,
@@ -96,12 +98,12 @@ pub(crate) enum StandaloneRule {
         pf: Ident,
         ff: Ident,
         sf: Ident,
-        /// The `parse_inside` and `balanced` flags of the text component.
+        /// The `parse_inside` and `balanced` flags of the first component.
         /// With both components `parse_inside = false` the rule is a context
         /// source.
-        text_flags: ChainedFlags,
-        /// The `parse_inside` and `balanced` flags of the url component.
-        url_flags: ChainedFlags,
+        first_flags: ChainedFlags,
+        /// The `parse_inside` and `balanced` flags of the second component.
+        second_flags: ChainedFlags,
         /// See [`StandaloneRule::SymmetricExact::cap`].
         cap: Literal,
     },

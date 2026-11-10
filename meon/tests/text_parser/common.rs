@@ -101,12 +101,10 @@ macro_rules! run_inline {
             on_trigger(b'*', b'`', b'<', b'[') {
                 symmetric b'`' {
                     parse_inside = false;
-                    balanced     = false;
                     _ => codes
                 }
                 symmetric b'*' {
                     parse_inside = true;
-                    balanced     = false;
                     1 => italics, 2 => bolds, _ => bold_italics
                 }
                 asymmetric b'<', b'>' {
@@ -160,7 +158,7 @@ macro_rules! run_inline_balanced_nested {
             on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
-                    parse_inside = false;
+                    parse_inside = true;
                     1 => objects
                 }
             }
@@ -179,7 +177,6 @@ macro_rules! run_inline_sym_nested {
             on_trigger(b'*') {
                 symmetric b'*' {
                     parse_inside = true;
-                    balanced     = true;
                     1 => n_italics, 2 => n_bolds
                 }
             }
@@ -260,7 +257,7 @@ macro_rules! run_block_nested {
     }};
 }
 
-macro_rules! run_sym_balanced {
+macro_rules! run_sym_opaque {
     ($src:expr) => {{
         let src: &[u8] = $src;
         let le = src.len();
@@ -270,7 +267,6 @@ macro_rules! run_sym_balanced {
             on_trigger(b'"') {
                 symmetric b'"' {
                     parse_inside = false;
-                    balanced     = true;
                     _ => codes,
                 }
             }
@@ -312,7 +308,7 @@ macro_rules! run_inline_kv_json {
         let consumed = meon::parse_inline!(
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
             on_trigger(b'{', b'}', b'[', b']', b'"', b':') {
-                symmetric b'"' { parse_inside = false; balanced = false; _ => codes }
+                symmetric b'"' { parse_inside = false; _ => codes }
                 asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
                 asymmetric b'[', b']' { balanced = true; parse_inside = true; 1 => autolinks }
                 key_value: KeyValue {

@@ -118,10 +118,16 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     c.advance();
                     let byte_lit = c.expect_lit("symmetric byte")?;
                     let body = c.next_group(Delimiter::Brace, "symmetric body")?;
-                    collect_match_arms(body.stream(), &["parse_inside", "balanced"], cf)?;
+                    if let Some(span) = setting_span(body.stream(), "balanced") {
+                        return Err(Error::new(
+                            span,
+                            "`symmetric` takes no `balanced`: it opens and closes with one \
+                             byte, so a run never nests in a run of its own count",
+                        ));
+                    }
+                    collect_match_arms(body.stream(), &["parse_inside"], cf)?;
                     let parse_inside =
                         require_flag(body.stream(), "parse_inside", body.span(), "symmetric")?;
-                    require_flag(body.stream(), "balanced", body.span(), "symmetric")?;
                     collect_symmetric_standalone(body.stream(), byte_lit, !parse_inside, cf)?;
                 }
                 "asymmetric" => {
@@ -179,6 +185,14 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
 
 /// Read the boolean value of a `name = true|false;` flag inside a rule body.
 /// Returns `None` when the flag is absent or its value is not `true` / `false`.
+/// The span of a `name = ...` setting in a rule body, if the body has one.
+fn setting_span(ts: TS2, name: &str) -> Option<PS> {
+    ts.into_iter().find_map(|tt| match tt {
+        TT::Ident(id) if id == name => Some(id.span()),
+        _ => None,
+    })
+}
+
 fn flag_value(ts: TS2, name: &str) -> Option<bool> {
     let mut c = Cursor::new(ts);
     while let Some(tt) = c.peek().cloned() {
@@ -463,8 +477,8 @@ fn collect_chained_standalone(
                 pf: pfi,
                 ff: ffi,
                 sf: sfi,
-                text_flags: f1,
-                url_flags: f2,
+                first_flags: f1,
+                second_flags: f2,
                 cap,
             });
             Ok(())
@@ -863,7 +877,7 @@ mod tests {
     fn test_02_on_trigger_symmetric_exact() {
         let cf = ci(quote! {
             on_trigger(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], }
+                symmetric b'*' { parse_inside = true; 1 => italics [40], }
             }
         });
         assert_eq!(cf.standalone.len(), 1);
@@ -876,7 +890,7 @@ mod tests {
         let cf = ci(quote! {
             on_trigger(b'*') {
                 symmetric b'*' {
-                    parse_inside = true; balanced = false;
+                    parse_inside = true;
                     1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
                 }
             }
@@ -912,16 +926,16 @@ mod tests {
         assert_eq!(cf.inline[0].0.to_string(), "links");
         assert_eq!(standalone_field(&cf.standalone[0]).to_string(), "links");
         let StandaloneRule::Chained {
-            text_flags,
-            url_flags,
+            first_flags,
+            second_flags,
             cap,
             ..
         } = &cf.standalone[0]
         else {
             panic!("expected a Chained rule");
         };
-        assert!(!text_flags.parse_inside && !text_flags.balanced);
-        assert!(!url_flags.parse_inside && !url_flags.balanced);
+        assert!(!first_flags.parse_inside && !first_flags.balanced);
+        assert!(!second_flags.parse_inside && !second_flags.balanced);
         assert_eq!(cap.to_string(), "100");
     }
 
@@ -938,15 +952,15 @@ mod tests {
             }
         });
         let StandaloneRule::Chained {
-            text_flags,
-            url_flags,
+            first_flags,
+            second_flags,
             ..
         } = &cf.standalone[0]
         else {
             panic!("expected a Chained rule");
         };
-        assert!(text_flags.parse_inside && text_flags.balanced);
-        assert!(!url_flags.parse_inside && !url_flags.balanced);
+        assert!(first_flags.parse_inside && first_flags.balanced);
+        assert!(!second_flags.parse_inside && !second_flags.balanced);
     }
 
     // 06. on_trigger: key_value block produces a typed inline field and a KeyValue rule
@@ -979,7 +993,7 @@ mod tests {
     fn test_08_memchr_is_unknown_keyword() {
         let e = err_inline(quote! {
             memchr(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], }
+                symmetric b'*' { parse_inside = true; 1 => italics [40], }
             }
         });
         assert!(e.contains("unknown keyword `memchr` in `inline`"), "{e}");
@@ -1049,16 +1063,19 @@ mod tests {
         assert!(e.contains("unknown keyword `number` in `block`"), "{e}");
     }
 
-    // 17. A symmetric / asymmetric body must state both flags, as true|false
+    // 17. A symmetric body must state `parse_inside`, and takes no
+    //     `balanced`; an asymmetric body must state both, as true|false
     #[test]
     fn test_17_missing_or_invalid_flags() {
-        let e = err_inline(
-            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } },
-        );
+        let e = err_inline(quote! { on_trigger(b'*') { symmetric b'*' { 1 => italics [40], } } });
         assert!(
-            e.contains("`symmetric` body is missing `balanced = true|false;`"),
+            e.contains("`symmetric` body is missing `parse_inside = true|false;`"),
             "{e}"
         );
+        let e = err_inline(quote! {
+            on_trigger(b'*') { symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], } }
+        });
+        assert!(e.contains("`symmetric` takes no `balanced`"), "{e}");
 
         let e = err_inline(
             quote! { on_trigger(b'<') { asymmetric b'<', b'>' { balanced = false; 1 => autolinks [100], } } },
@@ -1069,7 +1086,7 @@ mod tests {
         );
 
         let e = err_inline(
-            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = maybe; balanced = false; 1 => italics [40], } } },
+            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = maybe; 1 => italics [40], } } },
         );
         assert!(e.contains("missing `parse_inside = true|false;`"), "{e}");
     }
@@ -1079,7 +1096,7 @@ mod tests {
     fn test_18_flags_any_order() {
         let cf = ci(quote! {
             on_trigger(b'`') {
-                symmetric b'`' { balanced = false; parse_inside = false; 1 => codes [80], }
+                symmetric b'`' { parse_inside = false; 1 => codes [80], }
             }
         });
         assert!(matches!(

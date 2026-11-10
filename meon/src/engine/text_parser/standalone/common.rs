@@ -17,6 +17,76 @@
 
 pub use crate::span::Span;
 
+use super::context::ByteSet;
+
+/// How lines end, for the scans that read lines and paragraphs: the `eol`
+/// byte; with `crlf`, a `\r` right before it, which is part of the line end
+/// and of no line content; and the bytes a blank line may hold besides — the
+/// grammar's `sep` and `tab` — so that a line of them alone ends a paragraph
+/// as an empty line does.
+///
+/// A bare `eol` byte converts into one with no `crlf` and no blank bytes:
+/// only an empty line is blank then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineBreaks {
+    /// The line terminator byte.
+    pub eol: u8,
+    /// Is a `\r` right before `eol` part of the line end?
+    pub crlf: bool,
+    /// The bytes a blank line may hold.
+    pub blank: ByteSet,
+}
+
+impl LineBreaks {
+    /// Line ends at `eol`, `\r\n`-style when `crlf`, with a line of the
+    /// bytes in `blank` alone counted blank.
+    pub const fn new(eol: u8, crlf: bool, blank: &[u8]) -> Self {
+        Self {
+            eol,
+            crlf,
+            blank: ByteSet::from_bytes(blank),
+        }
+    }
+
+    /// Where the content of the line `[ls, le)` ends: before a `\r` right
+    /// before `le` when `crlf` is set, at `le` otherwise.
+    #[inline(always)]
+    pub fn content_end(&self, src: &[u8], ls: usize, le: usize) -> usize {
+        if self.crlf && le > ls && src[le - 1] == b'\r' {
+            le - 1
+        } else {
+            le
+        }
+    }
+
+    /// Is the line starting at `ls` blank: empty, or of `blank` bytes alone,
+    /// up to its line end or the end of input?
+    #[inline(always)]
+    pub fn blank_at(&self, src: &[u8], ls: usize) -> bool {
+        let len = src.len();
+        let mut i = ls;
+        while i < len && self.blank.contains(src[i]) {
+            i += 1;
+        }
+        i >= len
+            || src[i] == self.eol
+            || (self.crlf && src[i] == b'\r' && (i + 1 >= len || src[i + 1] == self.eol))
+    }
+
+    /// Does a paragraph end at the `eol` at `q`: with the end of input, or a
+    /// blank line, right after it?
+    #[inline(always)]
+    pub fn ends_paragraph(&self, src: &[u8], q: usize) -> bool {
+        q + 1 >= src.len() || self.blank_at(src, q + 1)
+    }
+}
+
+impl From<u8> for LineBreaks {
+    fn from(eol: u8) -> Self {
+        Self::new(eol, false, &[])
+    }
+}
+
 /// Return the byte offset of the next `eol` byte at or after `from`, or
 /// `src.len()` if none is found. This is the exclusive end of the current line.
 #[inline(always)]
@@ -29,8 +99,8 @@ pub fn find_line_end(src: &[u8], from: usize, eol: u8) -> usize {
 /// The next `needle` at or after `from` within the current paragraph, or
 /// `None` when the paragraph ends first.
 ///
-/// A single `eol` is crossed as ordinary content; an empty line (two
-/// consecutive `eol` bytes) or the end of input ends the paragraph. The
+/// A single `eol` is crossed as ordinary content; a blank line (see
+/// [`LineBreaks::blank_at`]) or the end of input ends the paragraph. The
 /// returned position is a candidate only: the caller validates it (escape,
 /// run length, context coverage) and resumes from a position of its choice.
 ///
@@ -44,15 +114,15 @@ pub fn next_in_paragraph(
     src: &[u8],
     from: usize,
     needle: u8,
-    eol: u8,
+    breaks: impl Into<LineBreaks>,
     enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Option<usize> {
-    scan_paragraph(src, from, needle, eol, enter_line).ok()
+    scan_paragraph(src, from, needle, breaks, enter_line).ok()
 }
 
 /// [`next_in_paragraph`], telling on failure where the paragraph ends:
 /// `Err(stop)` when no `needle` lies in `[from, stop)` and `stop` ends the
-/// paragraph — the first `eol` of an empty line, the `eol` before a line
+/// paragraph — the `eol` before a blank line, the `eol` before a line
 /// `enter_line` refuses, or the end of input. Bytes `enter_line` skips are
 /// not searched.
 ///
@@ -65,13 +135,15 @@ pub fn scan_paragraph(
     src: &[u8],
     from: usize,
     needle: u8,
-    eol: u8,
+    breaks: impl Into<LineBreaks>,
     enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, usize> {
+    let breaks: LineBreaks = breaks.into();
+    let eol = breaks.eol;
     scan_paragraph_by(
         src,
         from,
-        eol,
+        breaks,
         |h| memchr::memchr2(needle, eol, h),
         enter_line,
     )
@@ -84,10 +156,11 @@ pub fn scan_paragraph(
 pub fn scan_paragraph_by(
     src: &[u8],
     from: usize,
-    eol: u8,
+    breaks: impl Into<LineBreaks>,
     find: impl Fn(&[u8]) -> Option<usize>,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, usize> {
+    let breaks: LineBreaks = breaks.into();
     let len = src.len();
     let mut j = from;
     loop {
@@ -95,10 +168,10 @@ pub fn scan_paragraph_by(
             return Err(len);
         };
         let q = j + r;
-        if src[q] != eol {
+        if src[q] != breaks.eol {
             return Ok(q);
         }
-        if q + 1 >= len || src[q + 1] == eol {
+        if breaks.ends_paragraph(src, q) {
             return Err(q);
         }
         j = enter_line(q + 1).ok_or(q)?;

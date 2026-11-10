@@ -52,6 +52,7 @@ pub(crate) fn build_standalone_dsl(
     tab: &Literal,
     esc: &Literal,
     max_nest: &Literal,
+    crlf: &Ident,
     rules: &[StandaloneRule],
 ) -> TS2 {
     // The context spec: the capacity divisors of every fence and opaque
@@ -102,12 +103,12 @@ pub(crate) fn build_standalone_dsl(
                 close1,
                 open2,
                 close2,
-                text_flags,
-                url_flags,
+                first_flags,
+                second_flags,
                 cap,
                 ..
-            } if !text_flags.parse_inside && !url_flags.parse_inside => {
-                let (tb, ub) = (text_flags.balanced, url_flags.balanced);
+            } if !first_flags.parse_inside && !second_flags.parse_inside => {
+                let (tb, ub) = (first_flags.balanced, second_flags.balanced);
                 ctx_caps.push(quote! { #cap });
                 ctx_chained.push(quote! { (#open1, #close1, #tb, #open2, #close2, #ub) });
             }
@@ -160,18 +161,19 @@ pub(crate) fn build_standalone_dsl(
             quote! { symmetric_exact(#byte, #count, #o) => #field; }
         }
         StandaloneRule::AsymmetricExact { field, open, close, count, opaque, balanced, .. } => {
-            let o = opacity(*opaque);
-            if *balanced || !*opaque {
-                quote! { asymmetric_stack(#open, #close, #balanced, #o) => #field; }
+            if !*opaque {
+                quote! { asymmetric_stack(#open, #close, #balanced) => #field; }
+            } else if *balanced {
+                quote! { asymmetric_balanced(#open, #close) => #field; }
             } else {
-                quote! { asymmetric_exact(#open, #close, #count, #o) => #field; }
+                quote! { asymmetric_exact(#open, #close, #count, opaque) => #field; }
             }
         }
         StandaloneRule::Chained {
-            field, open1, close1, open2, close2, prefix, ty, pf, ff, sf, text_flags, url_flags, ..
+            field, open1, close1, open2, close2, prefix, ty, pf, ff, sf, first_flags, second_flags, ..
         } => {
-            let (tb, ub) = (text_flags.balanced, url_flags.balanced);
-            let tr = text_flags.parse_inside || url_flags.parse_inside;
+            let (tb, ub) = (first_flags.balanced, second_flags.balanced);
+            let tr = first_flags.parse_inside || second_flags.parse_inside;
             quote! {
                 chained(#open1, #close1, #tb, #open2, #close2, #ub, #tr, #prefix, #ty, #pf, #ff, #sf)
                     => #field;
@@ -202,5 +204,5 @@ pub(crate) fn build_standalone_dsl(
             quote! { block_numbered((#digits), (#ends), #ty, #num_var, #kind_var, #i) { #body } => #field; }
         }
     }).collect();
-    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest; #ctx_hdr #(#items)* }
+    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest, crlf=#crlf; #ctx_hdr #(#items)* }
 }

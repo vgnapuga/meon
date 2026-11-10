@@ -626,26 +626,27 @@ fn test_48_stack_survives_many_lines_deep_indent() {
 // 49. An unterminated object still finalises its open key_value pair at end
 //     of input (the kv frame's own end-of-run drain): the member is
 //     committed, but the unclosed container span itself is discarded
-//     (`Vec::remove` on the never-closed placeholder). Nothing leaks into
-//     `scalars` here because the kv drain explicitly advances `text_start`
-//     past the committed value before the final flush runs.
+//     (`Vec::remove` on the never-closed placeholder). Its open byte is bare
+//     text; the member's bytes are not, because the kv drain advances
+//     `text_start` past the committed value before the final flush runs.
 #[test]
 fn test_49_unterminated_object_member_committed_container_discarded() {
     let c = JsonParser::parse(br#"{"a":1"#);
     assert_eq!(c.objects.len(), 0);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
-    assert!(c.scalars.is_empty());
+    assert_eq!(texts(&c, &c.scalars), vec!["{"]);
 }
 
 // 50. An unterminated *bare* (unwrapped) array: the array placeholder is
 //     discarded, and with no key_value frame to move `text_start` past the
-//     content, the final flush sweeps the array's tail into `scalars`. This
-//     asymmetry with the object case follows from the drain order.
+//     content, the final flush sweeps the array, open byte included, into
+//     `scalars`. This asymmetry with the object case follows from the drain
+//     order.
 #[test]
 fn test_50_unterminated_array_discarded_tail_leaks_to_scalars() {
     let c = JsonParser::parse(br#"[1,2"#);
     assert_eq!(c.arrays.len(), 0);
-    assert_eq!(texts(&c, &c.scalars), vec!["1,2"]);
+    assert_eq!(texts(&c, &c.scalars), vec!["[1,2"]);
 }
 
 // 51. A top-level unterminated string: the off-stack string search
@@ -1062,23 +1063,26 @@ fn test_80_unterminated_member_value_excludes_newline() {
 }
 
 // 81. A `{` past the nesting cap starts the bare text that follows it, and the
-//     text before it is not repeated.
+//     text before it, the unclosed arrays' open bytes included, is not
+//     repeated.
 #[test]
 fn test_81_open_past_cap_does_not_repeat_text() {
     let mut src = vec![b'['; 64];
     src.extend_from_slice(b"x{y");
     let c = JsonParser::parse(&src);
-    assert_eq!(texts(&c, &c.scalars), vec!["x", "{y"]);
+    let opens = "[".repeat(64) + "x";
+    assert_eq!(texts(&c, &c.scalars), vec![opens.as_str(), "{y"]);
 }
 
-// 82. An array opened past the nesting cap and closed again keeps its bare
-//     content in the text of the still-open outer array.
+// 82. An array opened past the nesting cap and closed again keeps its bytes
+//     in the text of the still-open outer array.
 #[test]
 fn test_82_array_past_cap_keeps_its_content() {
     let mut src = vec![b'['; 64];
     src.extend_from_slice(b"[a]b");
     let c = JsonParser::parse(&src);
-    assert_eq!(texts(&c, &c.scalars), vec!["a", "b"]);
+    let all = "[".repeat(65) + "a]b";
+    assert_eq!(texts(&c, &c.scalars), vec![all.as_str()]);
 }
 
 // 83. Two empty strings do not pair up as one string: every member between
@@ -1104,7 +1108,8 @@ fn test_84_member_past_cap_keeps_its_key() {
     src.extend_from_slice(b"a b:1");
     let c = JsonParser::parse(&src);
     assert!(c.members.is_empty());
-    assert_eq!(texts(&c, &c.scalars), vec!["a b:1"]);
+    let all = "{".repeat(64) + "a b:1";
+    assert_eq!(texts(&c, &c.scalars), vec![all.as_str()]);
 }
 
 // 85. A doubled `:` starts the value at the second one.
@@ -1115,7 +1120,8 @@ fn test_85_doubled_colon_is_value_content() {
 }
 
 // 86. A doubled `,` in an object that never closes keeps the second one as
-//     bare text, and the next member keeps its own key.
+//     bare text, as is the object's open byte, and the next member keeps its
+//     own key.
 #[test]
 fn test_86_doubled_comma_keeps_bare_text() {
     let c = JsonParser::parse(br#"{"a":1,,"b":2"#);
@@ -1126,5 +1132,5 @@ fn test_86_doubled_comma_keeps_bare_text() {
             (r#""b""#.to_string(), "2".to_string()),
         ]
     );
-    assert_eq!(texts(&c, &c.scalars), vec![","]);
+    assert_eq!(texts(&c, &c.scalars), vec!["{", ","]);
 }

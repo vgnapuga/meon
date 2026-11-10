@@ -31,6 +31,7 @@ where
     src: &'a [u8],
     fence_matches: M,
     min: u32,
+    breaks: LineBreaks,
     eol: u8,
     sep: u8,
     tab: u8,
@@ -53,11 +54,19 @@ where
     ///   may consist of (e.g. `` b'`' `` or `b'~'`).
     /// - `min` — minimum number of consecutive fence bytes required to open
     ///   a fence.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte allowed (with `tab`) on a closing fence line
     ///   after the fence run.
     /// - `tab` — tab byte allowed on a closing fence line after the fence run.
-    pub fn new(src: &'a [u8], fence_matches: M, min: u32, eol: u8, sep: u8, tab: u8) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        fence_matches: M,
+        min: u32,
+        breaks: impl Into<LineBreaks>,
+        sep: u8,
+        tab: u8,
+    ) -> Self {
+        let breaks: LineBreaks = breaks.into();
         let mut needles = [0u8; 3];
         let (nn, streaming) = match probe_matcher(&fence_matches, &mut needles) {
             Some(n) => (n, true),
@@ -67,7 +76,8 @@ where
             src,
             fence_matches,
             min,
-            eol,
+            breaks,
+            eol: breaks.eol,
             sep,
             tab,
             pos: 0,
@@ -154,8 +164,8 @@ where
                     j += 1;
                 }
                 let cle = find_line_end(src, j, self.eol);
-                if cc >= fence_count && src[j..cle].iter().all(|&b| b == self.sep || b == self.tab)
-                {
+                let ce = self.breaks.content_end(src, j, cle);
+                if cc >= fence_count && src[j..ce].iter().all(|&b| b == self.sep || b == self.tab) {
                     break if cle < len { cle + 1 } else { len };
                 }
                 search = if cle < len { cle + 1 } else { len };

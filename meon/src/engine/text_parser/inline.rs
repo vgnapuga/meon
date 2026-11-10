@@ -1,8 +1,8 @@
 //! Inline element parser — the `parse_inline!` macro.
 //!
 //! Scans one *run* of source in a single pass and emits spans for every
-//! inline element it recognises: emphasis, code spans, links, images,
-//! autolinks, key-value pairs and hard breaks. A run is either the trailing
+//! inline rule of the grammar — `symmetric`, `asymmetric`, `chained` and
+//! `key_value` — and for hard breaks. A run is either the trailing
 //! content of a line that matched a line/block rule, or a whole multi-line
 //! fallthrough span handed over by `parse_text!` (see its docs for how runs
 //! are accumulated). Called by `parse_text!` only.
@@ -39,8 +39,7 @@
 //!
 //! # The unified stack
 //!
-//! Every construct that tracks nesting — `symmetric` with `parse_inside =
-//! true, balanced = true`, `asymmetric` with `balanced = true` or
+//! Every construct that tracks nesting — `symmetric` and `asymmetric` with
 //! `parse_inside = true`, and `key_value` — lives on one bounded stack,
 //! `frames: [(u8, u8, u32); max_nest]`, with a single depth counter
 //! `fdepth`. A frame stores `(byte, count, vidx)` and no kind tag:
@@ -51,8 +50,8 @@
 //! | `symmetric`  | the delimiter  | run length | index of the placeholder span   |
 //! | `key_value`  | the `end` byte | `0`        | unused; data is in `kv_pending` |
 //!
-//! A frame's kind, close byte, opacity and output field are recovered by
-//! matching `byte` against each rule's literal. This assumes a byte has one
+//! A frame's kind, close byte and output field are recovered by matching
+//! `byte` against each rule's literal. This assumes a byte has one
 //! meaning across the stack-eligible rules of a grammar, the same assumption
 //! every trigger-byte dispatch in the engine makes.
 //!
@@ -67,105 +66,110 @@
 //! Plain text found while a frame is open is written to the fallback field
 //! as usual, and every frame records the fallback vector's length at its
 //! open. When the frame closes the vector is rolled back to that length: the
-//! frame's span covers those bytes. When the frame is still open at the end
-//! of the run it is discarded and the text stays: everything after an
-//! unmatched opener is plain text. A `chained` match with a transparent
+//! frame's span covers those bytes. A frame's open run is text until the
+//! frame closes. When the frame is still open at the end of the run it is
+//! discarded and the text stays: an unmatched opener and everything after it
+//! is plain text. A `chained` match with a transparent
 //! component holds its text the same way: the text inside it, opener
 //! included, is written as usual and rolled back when the match completes,
 //! and it stays when the match fails or is still open at the end of the run.
 //!
 //! # Off-stack constructs
 //!
-//! - `symmetric` with `parse_inside = true, balanced = false` — a single
-//!   `pending` slot: the first run opens, the next run of the same byte and
-//!   count closes; a different-count run replaces the slot. Text flushed
-//!   between the open and the close, by another rule or an internal `eol`, is
-//!   rolled back when the pair emits its element, as for a frame (see "Plain
-//!   text and open frames"). The pair may cross a frame or a transparent
-//!   `chained` match: the text before its opener belongs to a frame open at
-//!   the slot's open that closes inside the pair, and to a match the pair
-//!   opens in that completes before it; a frame or match opened inside the
-//!   pair and still open at its close holds only the text after that close.
-//!   A pair whose opener lies inside a `key_value` key keeps the text flushed
-//!   inside it.
-//! - `symmetric` with `parse_inside = false` — a forward search for the
-//!   closing run; the content is opaque to every other rule. With
-//!   `balanced = true` a doubled run is skipped as literal content.
-//! - `asymmetric` with `balanced = false, parse_inside = false` — a forward
-//!   `memchr` search for the close byte; the close byte need not be in the
-//!   `on_trigger` set.
-//! - `chained` — two sequential phases (text, then url), one slot each. With
+//! - `symmetric` with `parse_inside = false` — a forward search for the next
+//!   unescaped run of the same byte and count; a run of another count is
+//!   content. The content is opaque to every other rule.
+//! - `asymmetric` with `parse_inside = false` — a forward search for the
+//!   close byte, which need not be in the `on_trigger` set (see
+//!   [`asymmetric`](#asymmetric)). The content is opaque to every other rule.
+//! - `chained` — two sequential phases (the first component, then the
+//!   second), one slot each. With
 //!   both components opaque it is a self-contained forward search; with a
 //!   transparent component it is a two-phase state machine that lets other
 //!   rules fire on the bytes it scans over. Of a run of the open byte only
 //!   the last byte opens the match, and the prefix is the byte before it,
-//!   when that byte lies in the run: in `![[a](u)` the text is `![` and the
-//!   match is `[a](u)`, not an image, and a `!` that is a block marker before
-//!   the run makes no image.
+//!   when that byte lies in the run: with `[`, `]`, `(`, `)` and the prefix
+//!   `!`, in `![[a](u)` the text is `![` and the match is `[a](u)`, with no
+//!   prefix, and a prefix byte that is a block marker before the run is no
+//!   prefix.
 //!   With `balanced = true` the bytes before it are text too, so they never
 //!   nest in the match. Inside a transparent match the bytes of a close run
 //!   act one by one. With `balanced = true` each open byte of the component
 //!   nests one level and each close byte leaves one; the first close byte
-//!   with no level left closes the component, the url component opens only
+//!   with no level left closes the component, the second component opens only
 //!   on the byte right after it, and the rest of the run is read again. With
 //!   `balanced = false` the rule's open byte inside its own match is text.
 //!   The other `chained` rules leave the match alone: they match inside its
 //!   transparent components, like any other rule, and not inside its opaque
 //!   ones.
 //!
-//! In the pending slot and in both forward searches a run whose count matches
-//! no declared arm is literal text: it opens nothing, and no close is searched
-//! for, so nothing after it is skipped.
+//! In the forward searches a run whose count matches no declared arm is
+//! literal text: it opens nothing, and no close is searched for, so nothing
+//! after it is skipped.
 //!
 //! Every forward search skips escaped close candidates. The forward
-//! searches (off-stack `asymmetric`, opaque `chained` components) remember
-//! a close byte they did not find and where they started: a later search
-//! for that byte from there on stops at that start, so later openers of the
-//! same kind are rejected without a rescan. The text component of an opaque
+//! searches (`asymmetric`, opaque `chained` components) remember a close
+//! byte they did not find and where they started: a later search for that
+//! byte from there on stops at that start, so later openers of the same
+//! kind are rejected without a rescan. The first component of an opaque
 //! `chained` rule with `balanced = false` also remembers the close it found
 //! when the match fails after it, for the openers before that close. With
-//! `balanced = true` a component's search counts depth, and one that meets
-//! close bytes without returning to depth zero is not remembered: a later
-//! opener inside it can still balance. Openers like that, `k` of them
-//! before the end of an `n`-byte run, cost `O(k·n)`.
+//! `balanced = true` a search counts depth. One of an `asymmetric` rule that
+//! meets close bytes without returning to depth zero remembers the opens
+//! inside it that no close balances: a later open byte of the rule in its
+//! range fails at once when it is one of them and closes otherwise, so the
+//! scan stays linear. A `chained` component's search keeps no such record:
+//! a later opener inside it can still balance, and openers like that, `k` of
+//! them before the end of an `n`-byte run, cost `O(k·n)`.
 //!
 //! # `asymmetric`
 //!
-//! `balanced` sets how the rule's frames nest: with `true` they nest in one
+//! `parse_inside` sets where the rule lives. With `true` it lives on the
+//! stack and is transparent: every other rule fires inside its frames.
+//! `balanced` then sets how its frames nest: with `true` they nest in one
 //! another up to `max_nest`; with `false` the rule holds one frame at a
 //! time, which opens at any depth the stack has room for, under other rules'
-//! frames too. `parse_inside` sets opacity: with `false`, no other rule fires
-//! inside the frame — no other stack rule opens or closes, no `chained`
-//! component opens or closes, no `symmetric` or `key_value` rule acts — and
-//! only the frame's own rule nests in it and closes it. Hard breaks found
-//! inside an opaque frame are taken back when it closes, as an opaque forward
-//! search never sees them; a frame left open at the end of the run keeps
-//! them with the rest of its plain text. Either flag `true` puts the rule on
-//! the stack; its close byte must then be listed in the same `on_trigger`
-//! set, because closes are found by the same search as opens. Each byte of
-//! an open run is its own open event: `{{` is two opens. An open of a
+//! frames too. Its close byte must be listed in the same `on_trigger` set,
+//! because closes are found by the same search as opens. Each byte of an
+//! open run is its own open event: `{{` is two opens. An open of a
 //! `balanced = true` rule beyond the cap, with that rule's own frame on top,
 //! bumps a one-shot overflow counter, consumed by the next same-type close.
-//! That open and that close are dropped; the text between them is plain text
-//! of the frame on the stack, rolled back or kept with the rest of its
-//! content (see "Plain text and open frames"). Any other open the stack
-//! cannot take (a second frame of a `balanced = false` rule, a full stack
-//! under another rule's frame) is refused and stays literal text.
+//! That open and that close are content of the frame on the stack, rolled
+//! back or kept with the rest of its text (see "Plain text and open
+//! frames"). Any other open the stack cannot take (a second frame of a
+//! `balanced = false` rule, a full stack under another rule's frame) is
+//! refused and stays literal text.
 //!
 //! A close byte runs one pass per character: a `key_value` frame on top of
 //! the stack is committed first (its value ends where its container closes),
 //! then the frame below is popped if its rule's close byte is this
 //! character. Two rules may share a close byte; dispatch is by the frame's
-//! own open byte.
+//! own open byte. A close byte with another rule's frame on top closes
+//! nothing: frames that cross do not close.
+//!
+//! With `parse_inside = false` the rule is a forward search, off the stack
+//! and opaque: no other rule fires inside its match, and `max_nest` plays no
+//! part. With `balanced = false` a run of `n` open bytes selects the `n` arm
+//! and the first unescaped close byte closes it. With `balanced = true` the
+//! search counts the rule's own bytes, as bytes only: each byte of an open
+//! run is an open of its own, the first one opens the outer ring and every
+//! other open byte nests in it, and the close byte that returns the count to
+//! zero closes the ring. The element is the ring, one per ring, whatever
+//! nests in it. A ring that never closes is text, and the next open byte
+//! tries, the rest of its own run included.
 //!
 //! # `symmetric` on the stack
 //!
-//! With `parse_inside = true, balanced = true`, a run whose `(byte, count)`
-//! matches the top frame closes it; otherwise, with room, it opens a new
-//! frame. An identical `(byte, count)` never nests directly in itself, so
-//! `**a **b** c**` is two adjacent runs, but it opens again above a frame of
-//! another count: in `*a **b *c* d** e` the second `*` opens a second italic
-//! frame. The run length selects the field arm.
+//! With `parse_inside = true`, a run whose `(byte, count)` matches the top
+//! frame closes it; otherwise, with room, it opens a new frame, so runs of
+//! different counts of one byte nest in one another. An identical
+//! `(byte, count)` never nests directly in itself, so `**a **b** c**` is two
+//! adjacent runs, but it opens again above a frame of another count: in
+//! `*a **b *c* d** e` the second `*` opens a second count-1 frame. A frame
+//! below the top one is never closed: frames that cross do not close. The
+//! run length selects the field arm; a run with no arm, or one the full stack
+//! cannot take, is literal text. The rule has no `balanced` setting: its open
+//! and close are one byte, so a run of one count never nests in itself.
 //!
 //! # Internal `eol`
 //!
@@ -184,14 +188,15 @@
 //!
 //! The rule triggers on `eq`. The key is found by scanning back from `eq`,
 //! clamped to the start of the current key segment: the position after the
-//! last transparent container open run, or after the `end` run that closed
-//! the previous value. When an opaque span ends right before `eq`, or before
-//! the `sep` run trimmed when `allow_sep` — the match of an opaque
-//! `symmetric` rule (a quoted key), of an opaque `asymmetric` rule, kept on
-//! the stack or not, or of a `chained` rule with both components opaque, its
-//! prefix included — that span with its delimiters is the key, `sep` bytes
-//! inside it included. Otherwise the key is the word before `eq`: the scan
-//! stops at `sep`, `tab`, `eol` and at the end of an earlier opaque span. The value starts after `eq` (skipping
+//! last open run or close of a stack frame, or after the `end` run that
+//! closed the previous value, so a key takes no byte of an element before
+//! it, nor of an open frame's opener. When an opaque span ends right before
+//! `eq`, or before the `sep` run trimmed when `allow_sep` — the match of an
+//! opaque `symmetric` rule (a quoted key), of an opaque `asymmetric` rule, or
+//! of a `chained` rule with both components opaque, its prefix included —
+//! that span with its delimiters is the key, `sep` bytes inside it included.
+//! Otherwise the key is the word before `eq`: the scan stops at `sep`, `tab`,
+//! `eol` and at the end of an earlier opaque span. The value starts after `eq` (skipping
 //! `sep` when `allow_sep`) and is tracked by a stack frame; a second `eq`
 //! while a `key_value` frame is on top is value content, and so is the rest
 //! of an `eq` run. With the stack full, `eq` opens no frame and the key, `eq`
@@ -211,11 +216,46 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_inline {
+    // A multi-line run whose lines after the first are led by the `cont`
+    // markers `$cs[..$cd]`, outermost first (see `parse_text!`).
+    ($state:ident, $src:ident, $start:expr, $le:expr,
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal,
+     cont($cs:ident, $cd:expr), crlf = $crl:ident ;
+     $($tail:tt)*) => {
+        $crate::parse_inline!(
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true,
+                      [$cs, $cd], $crl)
+            (hard_break: )
+            finders  = []
+            sy_rules = []
+            as_rules = []
+            ch_rules = []
+            kv_rules = []
+            tail = [$($tail)*]
+        )
+    };
+    // A run whose internal `eol` bytes, with `crlf = true`, take the `\r`
+    // right before them as part of the line end.
+    ($state:ident, $src:ident, $start:expr, $le:expr,
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt,
+     crlf = $crl:ident ;
+     $($tail:tt)*) => {
+        $crate::parse_inline!(
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], $crl)
+            (hard_break: )
+            finders  = []
+            sy_rules = []
+            as_rules = []
+            ch_rules = []
+            kv_rules = []
+            tail = [$($tail)*]
+        )
+    };
     ($state:ident, $src:ident, $start:expr, $le:expr,
      $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt ;
      $($tail:tt)*) => {
         $crate::parse_inline!(
-            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], false)
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -232,7 +272,7 @@ macro_rules! parse_inline {
 
     // hard_break rule
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
      (hard_break: )
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -242,7 +282,7 @@ macro_rules! parse_inline {
      tail = [hard_break($hb_esc:literal, $sp:literal, $sp_min:literal) => $hb:ident ; $($rest:tt)*]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl)
             (hard_break: $hb_esc, $sp, $sp_min => $hb)
             finders  = [$($fi)*]
             sy_rules = [$($sr)*]
@@ -255,7 +295,7 @@ macro_rules! parse_inline {
 
     // on_trigger(...) { ... }
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
      (hard_break: $($hb:tt)*)
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -266,7 +306,6 @@ macro_rules! parse_inline {
          on_trigger($($fn_b:literal),+) {
              $( symmetric $sb:literal {
                  parse_inside = $pi:ident ;
-                 balanced     = $bal:ident ;
                  $( $sn:tt => $sf:ident ),* $(,)?
              } )*
              $( asymmetric $ao:literal, $ac:literal {
@@ -297,10 +336,10 @@ macro_rules! parse_inline {
      ]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl)
             (hard_break: $($hb)*)
             finders  = [$($fi)* { $($fn_b),+ $(, $kv_end)* }]
-            sy_rules = [$($sr)* $( ($sb, $pi, $bal, { $( $sn => $sf ),* }) )*]
+            sy_rules = [$($sr)* $( ($sb, $pi, { $( $sn => $sf ),* }) )*]
             as_rules = [$($ar)* $( ($ao, $ac, $abal, $api, { $( $an => $af ),* }) )*]
             ch_rules = [$($cr)* $( ($co, $cc, $tpi, $tbal, $uo, $uc, $upi, $ubal, $cp, $cpi => $ct, $cu, $ch_ty, $cf) )*]
             kv_rules = [$($kv)* $( ($kv_eq, $kv_allow, $kv_end, $kv_kf, $kv_vf, $kv_ty, $kv_f) )*]
@@ -311,10 +350,10 @@ macro_rules! parse_inline {
     // Transition: all sections consumed — flatten buckets and enter @body.
     (
         @collect ($st:ident, $src:ident, $s:expr, $le:expr,
-                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
+                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
         (hard_break: $($hb:tt)*)
         finders  = [$($fi:tt)*]
-        sy_rules = [$( ($sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* }) )*]
+        sy_rules = [$( ($sb:literal, $pi:tt, { $( $sn:tt => $sf:ident ),* }) )*]
         as_rules = [$( ($ao:literal, $ac:literal, $abal:tt, $api:tt, { $( $an:tt => $af:ident ),* }) )*]
         ch_rules = [$( ($co:literal, $cc:literal, $tpi:tt, $tbal:tt, $uo:literal, $uc:literal,
                         $upi:tt, $ubal:tt, $cp:literal, $cpi:ident => $ct:ident, $cu:ident,
@@ -323,10 +362,10 @@ macro_rules! parse_inline {
                         $kv_kf:ident, $kv_vf:ident, $kv_ty:ident, $kv_f:ident) )*]
         tail = []
     ) => {
-        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml)
+        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl)
             (hard_break: $($hb)*)
             finders  = [$($fi)*]
-            sy_rules = [$( $sb, $pi, $bal, { $( $sn => $sf ),* } )*]
+            sy_rules = [$( $sb, $pi, { $( $sn => $sf ),* } )*]
             as_rules = [$( $ao, $ac, $abal, $api, { $( $an => $af ),* } )*]
             ch_rules = [$( $co, $cc, $tpi, $tbal, $uo, $uc, $upi, $ubal, $cp,
                            $cpi => $ct, $cu, $ch_ty, $cf )*]
@@ -340,10 +379,10 @@ macro_rules! parse_inline {
 
     (
         @body ($state:ident, $src:ident, $start:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
         (hard_break: $($hb_esc:literal, $sp:literal, $sp_min:literal => $hb:ident)*)
         finders  = [$( { $($fn_b:literal),+ } )*]
-        sy_rules = [$( $sb:literal, $pi:tt, $bal:tt, { $( $sn:tt => $sf:ident ),* } )*]
+        sy_rules = [$( $sb:literal, $pi:tt, { $( $sn:tt => $sf:ident ),* } )*]
         as_rules = [$( $ao:literal, $ac:literal, $abal:tt, $api:tt, { $( $an:tt => $af:ident ),* } )*]
         ch_rules = [$( $co:literal, $cc:literal, $tpi:tt, $tbal:tt, $uo:literal, $uc:literal,
                        $upi:tt, $ubal:tt, $cp:literal, $cpi:ident => $ct:ident, $cu:ident,
@@ -357,11 +396,43 @@ macro_rules! parse_inline {
         // Every `on_trigger` byte.
         #[allow(dead_code)]
         const _TRIGGERS: &[u8] = &[$($($fn_b),+),*];
-        // Does the grammar have a `key_value` rule, and an opaque asymmetric
-        // rule on the stack? Without one, the tests of the top frame for it
-        // fold away.
+        // Does the grammar have a `key_value` rule? Without one, the tests of
+        // the top frame for it fold away.
         const _HAS_KV: bool = false $( || { let _ = $kv_end; true } )*;
-        const _HAS_OPAQUE_FRAMES: bool = false $( || ($abal && !$api) )*;
+        // With `crlf`, the `\r` right before an internal `eol` is part of the
+        // line end, and so of no element or text.
+        #[allow(dead_code)]
+        const _CRLF: bool = $crl;
+        // Where the content of the line ending at the `eol` at `$e` ends.
+        #[allow(unused_macros)]
+        macro_rules! content_end {
+            ($e:expr) => {{
+                let _e: usize = $e;
+                if _CRLF && _e > $start && src[_e - 1] == b'\r' { _e - 1 } else { _e }
+            }};
+        }
+        // Is `eol` a `key_value` rule's `end`? The `end` check owns it then.
+        #[allow(dead_code)]
+        const _KV_EOL: bool = false $( || $kv_end == $eol )*;
+
+        // The line prefixes of a `cont` run: every line after the first starts
+        // with the markers of the `_cd` frames the run is in, which belong to
+        // no element. `skip_markers!` moves a line start past them; `in_hole!`
+        // tells a position among them. Both are no-ops for any other run,
+        // where `_cd` is `0`.
+        let _cd: usize = $crate::parse_inline!(@cdepth $holes);
+        #[allow(unused_macros)]
+        macro_rules! skip_markers {
+            ($ls:ident) => {
+                $crate::parse_inline!(@cskip $holes, src, $ls, parse_end, $sep, $tab)
+            };
+        }
+        #[allow(unused_macros)]
+        macro_rules! in_hole {
+            ($p:expr) => {
+                $crate::parse_inline!(@inhole $holes, src, $p, $start, parse_end, $eol, $sep, $tab)
+            };
+        }
 
         macro_rules! push_il {
             ($field:ident, $span:expr) => {
@@ -379,8 +450,8 @@ macro_rules! parse_inline {
         //                the field arm), vidx = placeholder index.
         //   key_value  : byte = $kv_end, count and vidx unused; the frame's
         //                data lives in `kv_pending` at the same index.
-        // Close byte, opacity and field routing are recovered from `byte` by
-        // matching it against each rule's literal.
+        // Close byte and field routing are recovered from `byte` by matching
+        // it against each rule's literal.
         //
         // `count` is a `u8`: a run longer than 255 bytes aliases with the run
         // whose length is equal modulo 256. No grammar declares counts near
@@ -399,21 +470,6 @@ macro_rules! parse_inline {
         // it in place. The second field restores the previous last span's
         // `end`, which `push_merge_*` may have extended into the held region.
         let mut held_base: [(u32, u32); $maxn] = [(0u32, 0u32); $maxn];
-        // Per-frame length of the hard-break vector at an asymmetric frame's
-        // open: an opaque frame that closes takes back the hard breaks found
-        // inside it, as an opaque forward search never sees them.
-        let mut hb_base: [u32; $maxn] = [0u32; $maxn];
-        #[allow(unused_macros)]
-        macro_rules! hb_len {
-            () => { (0u32 $( + $state.$hb.len() as u32 )*) };
-        }
-        #[allow(unused_macros)]
-        macro_rules! hb_take_back {
-            ($n:expr) => {{
-                let _n: u32 = $n;
-                $( $state.$hb.truncate(_n as usize); )*
-            }};
-        }
 
         #[allow(unused_macros)]
         macro_rules! hold_base {
@@ -468,50 +524,26 @@ macro_rules! parse_inline {
 
         let mut pos: usize = $start;
         let mut text_start: usize = $start;
-        // Single pending slot for `parse_inside = true`, `balanced = false`:
-        // `(byte, open position, count)`.
-        let mut pending: Option<(u8, u32, u32)> = None;
-        // Taken when the slot opens: the fallback snapshot (`hold_base!`), the
-        // text cursor and the stack depth. `_pending_low` is the lowest depth
-        // the stack has reached since (see `pop_frame!`). `_pending_clean`
-        // stays `true` while no `key_value` key starts before the opener.
-        // `_pending_ch` is the chained match the pair stands in (see
-        // `ch_state!`).
-        let mut _pending_base: (u32, u32) = (0u32, 0u32);
-        let mut _pending_text_start: usize = $start;
-        let mut _pending_depth: usize = 0;
-        let mut _pending_low: usize = 0;
-        let mut _pending_clean: bool = true;
-        let mut _pending_ch: (bool, u32) = (false, 0u32);
-        // Taken when a transparent `chained` match opens, as for the pending
-        // slot: the fallback snapshot the match rolls back to when it
-        // completes, the text cursor and the stack depth. `_ch_low` is the
-        // lowest depth the stack has reached since (see `pop_frame!`).
-        // `_ch_seq` counts the matches opened, telling two of them apart.
+        // Taken when a transparent `chained` match opens: the fallback
+        // snapshot (`hold_base!`) the match rolls back to when it completes,
+        // the text cursor and the stack depth. `_ch_low` is the lowest depth
+        // the stack has reached since (see `pop_frame!`).
         let mut _ch_base: (u32, u32) = (0u32, 0u32);
-        let mut _ch_seq: u32 = 0;
         let mut _ch_text_start: usize = $start;
         let mut _ch_depth: usize = 0;
         let mut _ch_low: usize = 0;
-        // Pop the top frame on a normal close, lower `_pending_low` and
-        // `_ch_low` when the stack drops below them, and roll the fallback
-        // vector back to the frame's snapshot. A frame open since before the
-        // pending pair or a chained match rolls back below their own
-        // snapshots, which then follow it down.
+        // Pop the top frame on a normal close, lower `_ch_low` when the stack
+        // drops below it, and roll the fallback vector back to the frame's
+        // snapshot. A frame open since before a chained match rolls back
+        // below the match's own snapshot, which then follows it down.
         #[allow(unused_macros)]
         macro_rules! pop_frame {
             () => {{
                 fdepth -= 1;
-                if fdepth < _pending_low {
-                    _pending_low = fdepth;
-                }
                 if fdepth < _ch_low {
                     _ch_low = fdepth;
                 }
                 release_held!(held_base[fdepth]);
-                if held_base[fdepth] < _pending_base {
-                    _pending_base = held_base[fdepth];
-                }
                 if held_base[fdepth] < _ch_base {
                     _ch_base = held_base[fdepth];
                 }
@@ -519,29 +551,18 @@ macro_rules! parse_inline {
         }
 
         // Two-phase transparent state for `chained` (off the stack).
-        let mut ch_in_text: bool = false;
-        let mut ch_text_opaque: bool = false;
-        let mut ch_text_depth: u32 = 0;
-        let mut ch_text_start: u32 = 0;
+        let mut ch_in_first: bool = false;
+        let mut ch_first_opaque: bool = false;
+        let mut ch_first_depth: u32 = 0;
+        let mut ch_first_start: u32 = 0;
         let mut ch_is_prefix: bool = false;
         let mut ch_real_start: u32 = 0;
 
-        let mut ch_in_url: bool = false;
-        let mut ch_url_opaque: bool = false;
-        let mut ch_url_depth: u32 = 0;
-        let mut ch_url_start: u32 = 0;
-        let mut ch_saved_text_end: u32 = 0;
-        // Where the scan stands to a transparent `chained` match: inside one
-        // or not, and which one.
-        #[allow(unused_macros)]
-        macro_rules! ch_state {
-            () => {
-                (
-                    ch_in_text || ch_in_url,
-                    if ch_in_text || ch_in_url { _ch_seq } else { 0u32 },
-                )
-            };
-        }
+        let mut ch_in_second: bool = false;
+        let mut ch_second_opaque: bool = false;
+        let mut ch_second_depth: u32 = 0;
+        let mut ch_second_start: u32 = 0;
+        let mut ch_saved_first_end: u32 = 0;
 
         // Close bytes known to be absent (unescaped) from part of the run.
         // The forward searches below (asymmetric with `balanced = false` and
@@ -551,8 +572,8 @@ macro_rules! parse_inline {
         // `_dead_close` holds, one bit per byte value, the bytes absent from
         // the scan position on: their search started there, and `pos` moves
         // back only to read the rest of a delimiter run again, never before a
-        // search already made. The url component's search starts past the
-        // text component, ahead of the scan: its byte and start go to
+        // search already made. The second component's search starts past the
+        // first component, ahead of the scan: its byte and start go to
         // `_dead_ahead`, and a later search stops where that one started.
         let mut _dead_close: [u64; 4] = [0u64; 4];
         let mut _dead_ahead: (u8, usize) = (0u8, usize::MAX);
@@ -593,9 +614,21 @@ macro_rules! parse_inline {
                 }
             }};
         }
+        // Failed searches of `balanced = true` opaque asymmetric rules: per
+        // slot, one for each such rule, the rule's open byte, where the search
+        // stopped (`0` marks a free slot) and a cursor into `_bal_open`, the
+        // opens inside the search that no close balances, ascending. An
+        // opener of the rule inside that range fails when it is one of them
+        // and closes otherwise, so no range is searched twice in vain. A
+        // grammar without such rules has no slot.
+        const _NBAL: usize = 0 $( + (($abal && !$api) as usize) )*;
+        let mut _bal_memo: [(u8, usize, usize); _NBAL] = [(0u8, 0usize, 0usize); _NBAL];
+        let mut _bal_open: [::std::vec::Vec<u32>; _NBAL] =
+            ::core::array::from_fn(|_| ::std::vec::Vec::new());
+        let mut _bal_next: usize = 0;
         // Close bytes found: `(byte, from, at)` says that the first unescaped
         // byte at or after any position in `from..=at` is at `at`. An opaque
-        // `chained` match that fails after its text close fills it: a later
+        // `chained` match that fails after its first close fills it: a later
         // opener of the same rule before that close searches for it again.
         // Four close bytes are kept; `from == usize::MAX` marks a free slot.
         let mut _found_close: [(u8, usize, usize); 4] = [(0u8, usize::MAX, 0usize); 4];
@@ -675,15 +708,6 @@ macro_rules! parse_inline {
                 $( if _tb == $kv_end { _k = true; } )*
                 _k
             };
-            // Is the top frame an opaque (`parse_inside = false`) asymmetric
-            // frame? Inside one only its own rule's bytes act: the rest is
-            // content.
-            let _top_opaque_active = _HAS_OPAQUE_FRAMES && fdepth > 0 && {
-                let _tb = frames[fdepth - 1].0;
-                let mut _op = false;
-                $( if ($abal || $api) && _tb == $ao { _op = !$api; } )*
-                _op
-            };
 
             // ---------------------------------------------------------------- //
             // Internal eol of a multi-line run. Present only when `hard_break` //
@@ -701,9 +725,10 @@ macro_rules! parse_inline {
             // ---------------------------------------------------------------- //
             $(
                 if src[pos] == $eol && !_top_is_kv {
-                    let _ep = $crate::parse_inline!(@hb_mark src, pos, $start, $esc,
+                    let _ce = content_end!(pos);
+                    let _ep = $crate::parse_inline!(@hb_mark src, _ce, $start, $esc,
                         $hb_esc, $sp, $sp_min);
-                    let _ehb = _ep < pos;
+                    let _ehb = _ep < _ce;
                     if text_start < _ep {
                         push_il!($tx, $crate::span::Span::new(text_start as u32, _ep as u32));
                     }
@@ -713,10 +738,29 @@ macro_rules! parse_inline {
                         }
                     }
                     pos += 1;
+                    skip_markers!(pos);
                     text_start = pos;
+                    if _cd > 0 {
+                        _kv_seg_start = pos;
+                    }
                     continue;
                 }
             )*
+            // The same for a `cont` run with no `hard_break`, or with a
+            // `key_value` frame on top whose `end` is no `eol`: the text before
+            // the `eol` is flushed and the scan goes on past the next line's
+            // markers.
+            if _cd > 0 && src[pos] == $eol && !(_top_is_kv && _KV_EOL) {
+                let _ce = content_end!(pos);
+                if text_start < _ce {
+                    push_il!($tx, $crate::span::Span::new(text_start as u32, _ce as u32));
+                }
+                pos += 1;
+                skip_markers!(pos);
+                text_start = pos;
+                _kv_seg_start = pos;
+                continue;
+            }
 
             // Skip escaped delimiters (odd number of preceding backslashes).
             if pos > $start {
@@ -750,7 +794,9 @@ macro_rules! parse_inline {
                 if _HB_CLIP
                     && (delim == $sp || delim == $hb_esc)
                     && pos < parse_end
-                    && src[pos] == $eol
+                    && (src[pos] == $eol
+                        || (_CRLF && src[pos] == b'\r' && pos + 1 < parse_end
+                            && src[pos + 1] == $eol))
                     && !_top_is_kv
                 {
                     let _mk = $crate::parse_inline!(@hb_mark src, pos, $start, $esc,
@@ -784,7 +830,11 @@ macro_rules! parse_inline {
                     $crate::paste::paste! {
                         $state.[<push_ $kv_f>]($kv_ty {
                             $kv_kf: $crate::span::Span::new(_ks, _ke),
-                            $kv_vf: $crate::span::Span::new(_vs, delim_start),
+                            $kv_vf: $crate::span::Span::new(_vs, if delim == $eol {
+                                (content_end!(delim_start as usize) as u32).max(_vs)
+                            } else {
+                                delim_start
+                            }),
                         });
                     }
                     pop_frame!();
@@ -795,8 +845,13 @@ macro_rules! parse_inline {
             if _kv_hit {
                 // The first byte of the run ends the value; the rest of the
                 // run is read again as content. The next key segment starts
-                // past the whole run.
+                // past the whole run, and past the next line's markers when
+                // the value ended at an `eol` of a `cont` run.
                 text_start = delim_start as usize + 1;
+                if _cd > 0 && delim == $eol {
+                    skip_markers!(text_start);
+                    _kv_seg_start = text_start;
+                }
                 pos = text_start;
                 continue;
             }
@@ -805,26 +860,23 @@ macro_rules! parse_inline {
             // asymmetric (kind 0): unified open + unified close cascade.  //
             // ---------------------------------------------------------- //
             let _chained_opaque_active =
-                (ch_in_text && ch_text_opaque) || (ch_in_url && ch_url_opaque);
+                (ch_in_first && ch_first_opaque) || (ch_in_second && ch_second_opaque);
 
             let mut _asym_bal_handled = false;
             if !_chained_opaque_active {
                 // --- open side ---
                 $(
-                    if ($abal || $api) && delim == $ao
-                        && !(_top_opaque_active && frames[fdepth - 1].0 != $ao)
-                    {
+                    if $api && delim == $ao {
                         // The text before the run is flushed and the text
-                        // cursor moves to the run. An open byte the stack takes
-                        // moves the cursor past itself; one it refuses stays as
-                        // literal text after the flushed part.
+                        // cursor moves to the run: an open byte stays text
+                        // until its frame closes, and one the stack refuses
+                        // stays literal text.
                         if text_start < delim_start as usize {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, delim_start));
                         }
                         text_start = delim_start as usize;
                         for _k in 0..count {
                             let _char_pos = delim_start + _k;
-                            let mut _consumed = false;
                             // `balanced = false`: one frame of the rule at a
                             // time, at any depth the stack has room for.
                             if fdepth < $maxn
@@ -838,10 +890,8 @@ macro_rules! parse_inline {
                                             _content_start, _content_start));
                                         frames[fdepth] = ($ao, 1u8, _vidx);
                                         held_base[fdepth] = hold_base!();
-                                        hb_base[fdepth] = hb_len!();
                                         fdepth += 1;
                                         asym_overflow = 0;
-                                        _consumed = true;
                                     } )*
                                     _ => {}
                                 }
@@ -849,18 +899,10 @@ macro_rules! parse_inline {
                                 && frames[fdepth - 1].0 == $ao
                             {
                                 asym_overflow += 1;
-                                _consumed = true;
-                            }
-                            if _consumed {
-                                text_start = (_char_pos + 1) as usize;
                             }
                         }
-                        // A container just opened: a key may begin right
-                        // after it. Anchor the next key segment past the run.
-                        // No key begins inside an opaque one.
-                        if $api {
-                            _kv_seg_start = pos;
-                        }
+                        // A key begins after the run.
+                        _kv_seg_start = pos;
                         _asym_bal_handled = true;
                     }
                 )*
@@ -868,7 +910,7 @@ macro_rules! parse_inline {
                 // --- close side: single unified pass, with kv drain. ---
                 if !_asym_bal_handled {
                     let mut _asym_is_close_byte = false;
-                    $( if ($abal || $api) && delim == $ac { _asym_is_close_byte = true; } )*
+                    $( if $api && delim == $ac { _asym_is_close_byte = true; } )*
 
                     if _asym_is_close_byte {
                         for _k in 0..count {
@@ -884,7 +926,7 @@ macro_rules! parse_inline {
                                 if _top_is_kv_now {
                                     let _below_b = frames[fdepth - 2].0;
                                     let mut _below_closes_here = false;
-                                    $( if ($abal || $api) && _below_b == $ao && $ac == delim {
+                                    $( if $api && _below_b == $ao && $ac == delim {
                                         _below_closes_here = true;
                                     } )*
                                     if _below_closes_here {
@@ -907,32 +949,22 @@ macro_rules! parse_inline {
                             if fdepth > 0 {
                                 let _ob = frames[fdepth - 1].0;
                                 let mut _closes_here = false;
-                                $( if ($abal || $api) && _ob == $ao && $ac == delim {
+                                $( if $api && _ob == $ao && $ac == delim {
                                     _closes_here = true;
                                 } )*
                                 if _closes_here {
                                     if asym_overflow > 0 {
                                         // The close pairs with an open absorbed
-                                        // past the cap. Like that open, the byte
-                                        // is dropped; the text before it is
-                                        // plain text of the frame on the stack.
-                                        if text_start < _close_char_pos as usize {
-                                            push_il!($tx, $crate::span::Span::new(
-                                                text_start as u32, _close_char_pos));
-                                        }
+                                        // past the cap: like that open, it is
+                                        // content of the frame on the stack.
                                         asym_overflow -= 1;
                                     } else {
                                         let _vidx = frames[fdepth - 1].2;
                                         $(
-                                            if ($abal || $api) && _ob == $ao {
+                                            if $api && _ob == $ao {
                                                 match 1u32 {
                                                     $( $an => {
                                                         $state.$af[_vidx as usize].end = _close_char_pos;
-                                                        if !$api {
-                                                            let _os = $state.$af[_vidx as usize].start as usize - 1;
-                                                            _kv_opaque = Some((_os, _close_char_pos as usize + 1));
-                                                            hb_take_back!(hb_base[fdepth - 1]);
-                                                        }
                                                     } )*
                                                     _ => {}
                                                 }
@@ -940,8 +972,9 @@ macro_rules! parse_inline {
                                         )*
                                         pop_frame!();
                                         asym_overflow = 0;
+                                        text_start = (_close_char_pos + 1) as usize;
+                                        _kv_seg_start = text_start;
                                     }
-                                    text_start = (_close_char_pos + 1) as usize;
                                 }
                             }
                         }
@@ -959,14 +992,15 @@ macro_rules! parse_inline {
             // The phase state belongs to the rule with a transparent
             // component; the other `chained` rules leave it alone.
             let mut _chained_handled = false;
-            if !_top_opaque_active { $(
-                if ($tpi || $upi) && !ch_in_text && !ch_in_url && delim == $co
+            $(
+                if ($tpi || $upi) && !ch_in_first && !ch_in_second && delim == $co
                 {
                     // The last byte of the run opens the match; the bytes
                     // before it are text.
                     let _open = pos - 1;
                     let _is_prefix = _open > $start
                         && src[_open - 1] == $cp
+                        && !in_hole!(_open - 1)
                         && {
                             let mut _bs: u32 = 0;
                             let mut _i = _open - 1;
@@ -978,38 +1012,37 @@ macro_rules! parse_inline {
                     // opener included, is rolled back to this snapshot when
                     // the match completes and stays when it fails.
                     _ch_base = hold_base!();
-                    _ch_seq = _ch_seq.wrapping_add(1);
                     _ch_text_start = text_start;
                     _ch_depth = fdepth;
                     _ch_low = fdepth;
-                    ch_in_text = true;
-                    ch_text_opaque = !$tpi;
-                    ch_text_depth = 0;
-                    ch_text_start = pos as u32;
+                    ch_in_first = true;
+                    ch_first_opaque = !$tpi;
+                    ch_first_depth = 0;
+                    ch_first_start = pos as u32;
                     ch_is_prefix = _is_prefix;
                     ch_real_start = _real_start as u32;
                     _chained_handled = true;
-                } else if ($tpi || $upi) && ch_in_text && delim == $co && $tbal {
+                } else if ($tpi || $upi) && ch_in_first && delim == $co && $tbal {
                     // Each byte of the run nests one level.
-                    ch_text_depth += count;
+                    ch_first_depth += count;
                     _chained_handled = true;
-                } else if ($tpi || $upi) && ch_in_text && delim == $cc {
+                } else if ($tpi || $upi) && ch_in_first && delim == $cc {
                     // Each byte of the run closes one nested level; the next
-                    // one closes the text component, and the url component
+                    // one closes the first component, and the second component
                     // must open on the byte right after it.
-                    if count <= ch_text_depth {
-                        ch_text_depth -= count;
+                    if count <= ch_first_depth {
+                        ch_first_depth -= count;
                     } else {
-                        let _ct_end = delim_start + ch_text_depth;
+                        let _ct_end = delim_start + ch_first_depth;
                         let _next = _ct_end as usize + 1;
-                        ch_text_depth = 0;
-                        ch_in_text = false;
+                        ch_first_depth = 0;
+                        ch_in_first = false;
                         if _next < parse_end && src[_next] == $uo {
-                            ch_in_url = true;
-                            ch_url_opaque = !$upi;
-                            ch_url_depth = 0;
-                            ch_url_start = (_next + 1) as u32;
-                            ch_saved_text_end = _ct_end;
+                            ch_in_second = true;
+                            ch_second_opaque = !$upi;
+                            ch_second_depth = 0;
+                            ch_second_start = (_next + 1) as u32;
+                            ch_saved_first_end = _ct_end;
                             pos = _next + 1;
                         } else {
                             // The match fails and its bytes, opener included,
@@ -1018,26 +1051,25 @@ macro_rules! parse_inline {
                         }
                     }
                     _chained_handled = true;
-                } else if ($tpi || $upi) && ch_in_url && delim == $uo && $ubal {
-                    ch_url_depth += count;
+                } else if ($tpi || $upi) && ch_in_second && delim == $uo && $ubal {
+                    ch_second_depth += count;
                     _chained_handled = true;
-                } else if ($tpi || $upi) && ch_in_url && delim == $uc {
-                    // As for the text component; the rest of the run after
+                } else if ($tpi || $upi) && ch_in_second && delim == $uc {
+                    // As for the first component; the rest of the run after
                     // the closing byte is read again.
-                    if count <= ch_url_depth {
-                        ch_url_depth -= count;
+                    if count <= ch_second_depth {
+                        ch_second_depth -= count;
                     } else {
-                        let _cu_end = delim_start + ch_url_depth;
-                        ch_url_depth = 0;
-                        ch_in_url = false;
+                        let _cu_end = delim_start + ch_second_depth;
+                        ch_second_depth = 0;
+                        ch_in_second = false;
                         pos = _cu_end as usize + 1;
                         // The match covers the text flushed inside it: roll it
                         // back and emit the text before the opener once, unless
                         // a frame open at the match's open has closed inside
-                        // it and owns that text. A frame or pending pair opened
-                        // since and still open gets the snapshot of the vector
-                        // as it now ends; the text before the pair's opener is
-                        // the match's.
+                        // it and owns that text. A frame opened since and
+                        // still open gets the snapshot of the vector as it now
+                        // ends.
                         release_held!(_ch_base);
                         if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
                             push_il!($tx, $crate::span::Span::new(_ch_text_start as u32, ch_real_start));
@@ -1046,29 +1078,23 @@ macro_rules! parse_inline {
                         for _k in _ch_low..fdepth {
                             held_base[_k] = _after;
                         }
-                        if let Some((_, _pop, _)) = pending {
-                            if _pending_ch == (true, _ch_seq) {
-                                _pending_base = _after;
-                                _pending_text_start = _pop as usize;
-                            }
-                        }
                         $crate::paste::paste! {
                             $state.[<push_ $cf>]($ch_ty {
                                 $cpi: ch_is_prefix,
-                                $ct: $crate::span::Span::new(ch_text_start, ch_saved_text_end),
-                                $cu: $crate::span::Span::new(ch_url_start, _cu_end),
+                                $ct: $crate::span::Span::new(ch_first_start, ch_saved_first_end),
+                                $cu: $crate::span::Span::new(ch_second_start, _cu_end),
                             });
                         }
                         text_start = pos;
                     }
                     _chained_handled = true;
                 }
-            )* }
+            )*
             if _chained_handled {
                 continue;
             }
 
-            if _top_opaque_active || _chained_opaque_active {
+            if _chained_opaque_active {
                 continue;
             }
 
@@ -1081,6 +1107,7 @@ macro_rules! parse_inline {
                     let _open = pos - 1;
                     let is_prefix = _open > $start
                         && src[_open - 1] == $cp
+                        && !in_hole!(_open - 1)
                         && {
                             let mut _bs: u32 = 0;
                             let mut _i = _open - 1;
@@ -1088,7 +1115,7 @@ macro_rules! parse_inline {
                             _bs % 2 == 0
                         };
                     let mut _i = pos;
-                    let close_text: Option<usize> = if $tbal {
+                    let close_first: Option<usize> = if $tbal {
                         // Past the point where the close byte is known absent
                         // the depth cannot return to zero. A search that meets
                         // no close byte records it.
@@ -1096,18 +1123,22 @@ macro_rules! parse_inline {
                         let mut _depth: i32 = 1;
                         let mut _met = false;
                         let mut _found: Option<usize> = None;
-                        while _i < _lim {
-                            if !$crate::parse_inline!(@is_escaped src, _i, $start, $esc) {
-                                // A close byte that is also the open byte
-                                // nests, yet the byte is present.
-                                if src[_i] == $cc { _met = true; }
-                                if src[_i] == $co { _depth += 1; }
-                                else if src[_i] == $cc {
-                                    _depth -= 1;
-                                    if _depth == 0 { _found = Some(_i); break; }
-                                }
+                        while let Some(_h) = $crate::memchr::memchr2($co, $cc, &src[_i.._lim]) {
+                            let _q = _i + _h;
+                            _i = _q + 1;
+                            if $crate::parse_inline!(@is_escaped src, _q, $start, $esc)
+                                || in_hole!(_q)
+                            {
+                                continue;
                             }
-                            _i += 1;
+                            // A close byte that is also the open byte nests,
+                            // yet the byte is present.
+                            if src[_q] == $cc { _met = true; }
+                            if src[_q] == $co { _depth += 1; }
+                            else {
+                                _depth -= 1;
+                                if _depth == 0 { _found = Some(_q); break; }
+                            }
                         }
                         if !_met {
                             dead_close_set!($cc, pos);
@@ -1118,40 +1149,47 @@ macro_rules! parse_inline {
                     } else {
                         let _lim = dead_limit!($cc, pos);
                         let mut _found: Option<usize> = None;
-                        while _i < _lim {
-                            if src[_i] == $cc
-                                && !$crate::parse_inline!(@is_escaped src, _i, $start, $esc)
+                        while let Some(_h) = $crate::memchr::memchr($cc, &src[_i.._lim]) {
+                            let _q = _i + _h;
+                            _i = _q + 1;
+                            if !$crate::parse_inline!(@is_escaped src, _q, $start, $esc)
+                                && !in_hole!(_q)
                             {
-                                _found = Some(_i);
+                                _found = Some(_q);
                                 break;
                             }
-                            _i += 1;
                         }
                         if _found.is_none() {
                             dead_close_set!($cc, pos);
                         }
                         _found
                     };
-                    if let Some(ct_end) = close_text {
+                    if let Some(ct_end) = close_first {
                         let next = ct_end + 1;
                         if next < parse_end && src[next] == $uo {
                             let mut _j = next + 1;
-                            let close_url: Option<usize> = if $ubal {
-                                // As for the text component.
+                            let close_second: Option<usize> = if $ubal {
+                                // As for the first component.
                                 let _lim = dead_limit!($uc, next + 1);
                                 let mut _depth: i32 = 1;
                                 let mut _met = false;
                                 let mut _found: Option<usize> = None;
-                                while _j < _lim {
-                                    if !$crate::parse_inline!(@is_escaped src, _j, $start, $esc) {
-                                        if src[_j] == $uc { _met = true; }
-                                        if src[_j] == $uo { _depth += 1; }
-                                        else if src[_j] == $uc {
-                                            _depth -= 1;
-                                            if _depth == 0 { _found = Some(_j); break; }
-                                        }
+                                while let Some(_h) =
+                                    $crate::memchr::memchr2($uo, $uc, &src[_j.._lim])
+                                {
+                                    let _q = _j + _h;
+                                    _j = _q + 1;
+                                    if $crate::parse_inline!(@is_escaped src, _q, $start, $esc)
+                                        || in_hole!(_q)
+                                    {
+                                        continue;
                                     }
-                                    _j += 1;
+                                    if src[_q] == $uc { _met = true; }
+                                    if src[_q] == $uo { _depth += 1; }
+                                    else {
+                                        _depth -= 1;
+                                        if _depth == 0 { _found = Some(_q); break; }
+                                    }
                                 }
                                 if !_met {
                                     dead_close_set!($uc, next + 1);
@@ -1160,21 +1198,22 @@ macro_rules! parse_inline {
                             } else {
                                 let _lim = dead_limit!($uc, next + 1);
                                 let mut _found: Option<usize> = None;
-                                while _j < _lim {
-                                    if src[_j] == $uc
-                                        && !$crate::parse_inline!(@is_escaped src, _j, $start, $esc)
+                                while let Some(_h) = $crate::memchr::memchr($uc, &src[_j.._lim]) {
+                                    let _q = _j + _h;
+                                    _j = _q + 1;
+                                    if !$crate::parse_inline!(@is_escaped src, _q, $start, $esc)
+                                        && !in_hole!(_q)
                                     {
-                                        _found = Some(_j);
+                                        _found = Some(_q);
                                         break;
                                     }
-                                    _j += 1;
                                 }
                                 if _found.is_none() {
                                     dead_close_set!($uc, next + 1);
                                 }
                                 _found
                             };
-                            if let Some(cu_end) = close_url {
+                            if let Some(cu_end) = close_second {
                                 let real_start = if is_prefix { _open - 1 } else { _open };
                                 if text_start < real_start {
                                     push_il!($tx, $crate::span::Span::new(
@@ -1193,7 +1232,7 @@ macro_rules! parse_inline {
                                 continue;
                             }
                         }
-                        // The match failed after its text close: an opener of
+                        // The match failed after its first close: an opener of
                         // this rule before that close finds the same one.
                         if !$tbal {
                             found_close_set!($cc, pos, ct_end);
@@ -1203,124 +1242,45 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- symmetric: stack mode, pending slot, or greedy forward search ---
+            // --- symmetric: on the stack, or a forward search when opaque ---
             $(
                 if delim == $sb {
                     if $pi {
-                        if $bal {
-                            let _matches_top = fdepth > 0
-                                && frames[fdepth - 1].0 == $sb
-                                && frames[fdepth - 1].1 == count as u8;
+                        let _matches_top = fdepth > 0
+                            && frames[fdepth - 1].0 == $sb
+                            && frames[fdepth - 1].1 == count as u8;
 
-                            if _matches_top {
-                                let _vidx = frames[fdepth - 1].2;
-                                let mut _closed = false;
-                                match count {
-                                    $( $sn => {
-                                        $state.$sf[_vidx as usize].end = delim_start;
-                                        _closed = true;
-                                    } )*
-                                    _ => {}
-                                }
-                                if _closed {
+                        if _matches_top {
+                            let _vidx = frames[fdepth - 1].2;
+                            match count {
+                                $( $sn => {
+                                    $state.$sf[_vidx as usize].end = delim_start;
                                     pop_frame!();
                                     text_start = pos;
-                                    continue;
-                                } else {
-                                    text_start = delim_start as usize;
-                                    continue;
-                                }
-                            } else if fdepth < $maxn {
-                                let mut _pushed = false;
-                                match count {
-                                    $( $sn => {
-                                        if text_start < delim_start as usize {
-                                            push_il!($tx, $crate::span::Span::new(
-                                            text_start as u32, delim_start));
-                                        }
-                                        let _vidx = $state.$sf.len() as u32;
-                                        push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
-                                        frames[fdepth] = ($sb, count as u8, _vidx);
-                                        held_base[fdepth] = hold_base!();
-                                        _pushed = true;
-                                    } )*
-                                    _ => {}
-                                }
-                                if _pushed {
-                                    fdepth += 1;
-                                    text_start = pos;
-                                    continue;
-                                } else {
+                                    _kv_seg_start = pos;
+                                } )*
+                                _ => {}
+                            }
+                        } else if fdepth < $maxn {
+                            // The run stays text until its frame closes. A
+                            // run with no arm for its count, or with the
+                            // stack full, is literal text.
+                            match count {
+                                $( $sn => {
                                     if text_start < delim_start as usize {
                                         push_il!($tx, $crate::span::Span::new(
                                         text_start as u32, delim_start));
                                     }
+                                    let _vidx = $state.$sf.len() as u32;
+                                    push_il!($sf, $crate::span::Span::new(pos as u32, pos as u32));
+                                    frames[fdepth] = ($sb, count as u8, _vidx);
+                                    held_base[fdepth] = hold_base!();
+                                    fdepth += 1;
                                     text_start = delim_start as usize;
-                                    continue;
-                                }
-                            } else {
-                                if text_start < delim_start as usize {
-                                    push_il!($tx, $crate::span::Span::new(
-                                    text_start as u32, delim_start));
-                                }
-                                text_start = delim_start as usize;
-                                continue;
+                                    _kv_seg_start = pos;
+                                } )*
+                                _ => {}
                             }
-                        } else {
-                            // Single pending slot: `parse_inside = true`, `balanced = false`.
-                            // A run with no arm for its count is literal text: it
-                            // neither opens, closes nor replaces the slot.
-                            if !(match count { $( $sn => true, )* _ => false }) {
-                                continue;
-                            }
-                            if let Some((pb, op, oc)) = pending {
-                                if pb == $sb && oc == count {
-                                    // Text flushed since the open (by another rule
-                                    // or an internal eol) belongs to this pair:
-                                    // roll it back and emit the text before the
-                                    // opener once, unless a frame open at the
-                                    // slot's open has closed inside the pair and
-                                    // owns that text. A frame opened since and
-                                    // still open gets the snapshot of the vector
-                                    // as it now ends, and so does a chained match
-                                    // opened since, whose text before its opener
-                                    // is the pair's. A key starting before the
-                                    // opener owns part of that text: then nothing
-                                    // is rolled back.
-                                    if _pending_clean {
-                                        release_held!(_pending_base);
-                                        if _pending_low >= _pending_depth
-                                            && (_pending_text_start as u32) < op
-                                        {
-                                            push_il!($tx, $crate::span::Span::new(
-                                                _pending_text_start as u32, op));
-                                        }
-                                        let _after = hold_base!();
-                                        for _k in _pending_low..fdepth {
-                                            held_base[_k] = _after;
-                                        }
-                                        let _cur = ch_state!();
-                                        if _cur.0 && _cur != _pending_ch {
-                                            _ch_base = _after;
-                                            _ch_text_start = ch_real_start as usize;
-                                        }
-                                    } else if (text_start as u32) < op {
-                                        push_il!($tx, $crate::span::Span::new(text_start as u32, op));
-                                    }
-                                    let clean = $crate::span::Span::new(op + count, delim_start);
-                                    match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
-                                    text_start = pos;
-                                    pending = None;
-                                    continue;
-                                }
-                            }
-                            pending = Some(($sb, delim_start, count));
-                            _pending_base = hold_base!();
-                            _pending_text_start = text_start;
-                            _pending_depth = fdepth;
-                            _pending_low = fdepth;
-                            _pending_clean = true;
-                            _pending_ch = ch_state!();
                         }
                     } else {
                         // A run with no arm for its count is literal text, not
@@ -1328,59 +1288,32 @@ macro_rules! parse_inline {
                         if !(match count { $( $sn => true, )* _ => false }) {
                             continue;
                         }
+                        // The close is the next unescaped run of the same
+                        // count; a run of another count is content.
                         let cs = pos;
                         let mut _i = pos;
-                        let close: Option<(usize, usize)> = if $bal {
-                            let mut _found: Option<(usize, usize)> = None;
-                            loop {
-                                match $crate::memchr::memchr($sb, &src[_i..parse_end]) {
-                                    None => break,
-                                    Some(r) => {
-                                        let p = _i + r;
-                                        if $crate::parse_inline!(@is_escaped src, p, $start, $esc) {
-                                            _i = p + 1;
-                                            continue;
-                                        }
-                                        let mut c: u32 = 0;
-                                        let mut tmp = p;
-                                        while tmp < parse_end && src[tmp] == $sb {
-                                            c += 1; tmp += 1;
-                                        }
-                                        if c == count * 2 {
-                                            _i = tmp;
-                                        } else if c == count {
-                                            _found = Some((p, tmp));
-                                            break;
-                                        } else {
-                                            _i = tmp;
-                                        }
+                        let mut close: Option<(usize, usize)> = None;
+                        loop {
+                            match $crate::memchr::memchr($sb, &src[_i..parse_end]) {
+                                None => break,
+                                Some(r) => {
+                                    let p = _i + r;
+                                    if $crate::parse_inline!(@is_escaped src, p, $start, $esc)
+                                        || in_hole!(p)
+                                    {
+                                        _i = p + 1;
+                                        continue;
                                     }
+                                    let mut c: u32 = 0;
+                                    let mut tmp = p;
+                                    while tmp < parse_end && src[tmp] == $sb {
+                                        c += 1; tmp += 1;
+                                    }
+                                    if c == count { close = Some((p, tmp)); break; }
+                                    _i = tmp;
                                 }
                             }
-                            _found
-                        } else {
-                            let mut _found: Option<(usize, usize)> = None;
-                            loop {
-                                match $crate::memchr::memchr($sb, &src[_i..parse_end]) {
-                                    None => break,
-                                    Some(r) => {
-                                        let p = _i + r;
-                                        if $crate::parse_inline!(@is_escaped src, p, $start, $esc) {
-                                            _i = p + 1;
-                                            continue;
-                                        }
-                                        let mut c: u32 = 0;
-                                        let mut tmp = p;
-                                        while tmp < parse_end && src[tmp] == $sb {
-                                            c += 1; tmp += 1;
-                                        }
-                                        if c == count { _found = Some((p, tmp)); break; }
-                                        _i = tmp;
-                                    }
-                                }
-                            }
-                            _found
-                        };
+                        }
                         if let Some((p, end)) = close {
                             if text_start < delim_start as usize {
                                 push_il!($tx, $crate::span::Span::new(
@@ -1397,31 +1330,120 @@ macro_rules! parse_inline {
                 }
             )*
 
-            // --- asymmetric, balanced = false and parse_inside = false: forward search ---
+            // --- asymmetric, parse_inside = false: forward search ---
             $(
-                if delim == $ao {
+                if !$api && $abal && delim == $ao {
+                    // Each byte of the run is an open of its own: the first one
+                    // opens the outer ring, the rest nest in it, and when the
+                    // ring never closes the next byte tries. A run that opens
+                    // no ring is text.
+                    let mut _ring: Option<(usize, usize)> = None;
+                    let mut _o = delim_start as usize;
+                    while _o < pos {
+                        let _lim = dead_limit!($ac, _o + 1);
+                        // A failed search of this rule over `_o` tells whether
+                        // `_o` balances.
+                        let mut _m = usize::MAX;
+                        for (_k, _e) in _bal_memo.iter().enumerate() {
+                            if _e.0 == $ao && _o < _e.1 {
+                                _m = _k;
+                                break;
+                            }
+                        }
+                        let mut _fails = _lim <= _o + 1;
+                        if !_fails && _m != usize::MAX {
+                            let _v = &_bal_open[_m];
+                            let mut _c = _bal_memo[_m].2;
+                            while _c < _v.len() && (_v[_c] as usize) < _o {
+                                _c += 1;
+                            }
+                            _bal_memo[_m].2 = _c;
+                            _fails = _c < _v.len() && _v[_c] as usize == _o;
+                        }
+                        if !_fails {
+                            // A search no failed one covers records the opens
+                            // inside it that no close balances: on the stack of
+                            // a slot of its own while it runs, ascending when it
+                            // ends.
+                            let _rec = _m == usize::MAX;
+                            let mut _r = 0usize;
+                            if _rec {
+                                _r = _bal_next;
+                                for (_k, _e) in _bal_memo.iter().enumerate() {
+                                    if _e.0 == $ao {
+                                        _r = _k;
+                                        break;
+                                    }
+                                }
+                                if _r == _bal_next {
+                                    _bal_next = (_bal_next + 1) % _NBAL.max(1);
+                                }
+                                _bal_memo[_r] = (0u8, 0usize, 0usize);
+                                _bal_open[_r].clear();
+                            }
+                            let mut _depth: usize = 1;
+                            let mut _met = false;
+                            let mut _i = _o + 1;
+                            while let Some(_h) = $crate::memchr::memchr2($ao, $ac, &src[_i.._lim]) {
+                                let _q = _i + _h;
+                                _i = _q + 1;
+                                if $crate::parse_inline!(@is_escaped src, _q, $start, $esc)
+                                    || in_hole!(_q)
+                                {
+                                    continue;
+                                }
+                                // A close byte that is also the open byte
+                                // nests, yet the byte is present.
+                                if src[_q] == $ac {
+                                    _met = true;
+                                }
+                                if src[_q] == $ao {
+                                    _depth += 1;
+                                    if _rec {
+                                        _bal_open[_r].push(_q as u32);
+                                    }
+                                } else {
+                                    _depth -= 1;
+                                    if _depth == 0 {
+                                        _ring = Some((_o, _q));
+                                        break;
+                                    }
+                                    if _rec {
+                                        _bal_open[_r].pop();
+                                    }
+                                }
+                            }
+                            if _ring.is_some() {
+                                break;
+                            }
+                            if !_met {
+                                dead_close_set!($ac, _o + 1);
+                            } else if _rec {
+                                _bal_memo[_r] = ($ao, _lim, 0usize);
+                            }
+                        }
+                        _o += 1;
+                    }
+                    if let Some((_o, cp)) = _ring {
+                        if text_start < _o {
+                            push_il!($tx, $crate::span::Span::new(text_start as u32, _o as u32));
+                        }
+                        let clean = $crate::span::Span::new((_o + 1) as u32, cp as u32);
+                        match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
+                        pos = cp + 1;
+                        text_start = pos;
+                        _kv_opaque = Some((_o, pos));
+                    }
+                    continue;
+                }
+                if !$api && delim == $ao {
                     // A run with no arm for its count is literal text, not an
                     // opener: no forward search, nothing skipped.
                     if !(match count { $( $an => true, )* _ => false }) {
                         continue;
                     }
                     let cs = pos;
-                    let close_pos: Option<usize> = if $abal {
-                        let mut depth: usize = 1;
-                        let mut _i = pos;
-                        let mut found = None;
-                        while _i < parse_end {
-                            if !$crate::parse_inline!(@is_escaped src, _i, $start, $esc) {
-                                if src[_i] == $ao { depth += 1; }
-                                else if src[_i] == $ac {
-                                    depth -= 1;
-                                    if depth == 0 { found = Some(_i); break; }
-                                }
-                            }
-                            _i += 1;
-                        }
-                        found
-                    } else {
+                    let close_pos: Option<usize> = {
                         let _lim = dead_limit!($ac, pos);
                         let mut _i = pos;
                         let mut _found: Option<usize> = None;
@@ -1430,7 +1452,9 @@ macro_rules! parse_inline {
                                 None => break,
                                 Some(r) => {
                                     let p = _i + r;
-                                    if $crate::parse_inline!(@is_escaped src, p, $start, $esc) {
+                                    if $crate::parse_inline!(@is_escaped src, p, $start, $esc)
+                                        || in_hole!(p)
+                                    {
                                         _i = p + 1;
                                     } else {
                                         _found = Some(p);
@@ -1496,11 +1520,6 @@ macro_rules! parse_inline {
                                 ks -= 1;
                             }
                         }
-                        if let Some((_, _op, _)) = pending {
-                            if (ks as u32) < _op {
-                                _pending_clean = false;
-                            }
-                        }
                         // The first byte of the run is `eq`; the rest of the
                         // run is value content.
                         let _eq_end = delim_start as usize + 1;
@@ -1562,7 +1581,7 @@ macro_rules! parse_inline {
             } else {
                 let mut _matched_asym = false;
                 $(
-                    if ($abal || $api) && _fb == $ao {
+                    if $api && _fb == $ao {
                         match 1u32 {
                             $( $an => { $state.$af.remove(_fv as usize); } )*
                             _ => {}
@@ -1572,7 +1591,7 @@ macro_rules! parse_inline {
                 )*
                 if !_matched_asym {
                     $(
-                        if $bal && $pi && _fb == $sb {
+                        if $pi && _fb == $sb {
                             match _fc {
                                 $( $sn => { $state.$sf.remove(_fv as usize); } )*
                                 _ => {}
@@ -1597,6 +1616,54 @@ macro_rules! parse_inline {
         // Returns `$le` unchanged. The single-line call site resumes at `$le + 1`
         // itself; the multi-line call site ignores the value.
         $le
+    }};
+
+    // ------------------------------------------------------------------ //
+    // @cdepth / @cskip: how many markers lead a line of a run, and where  //
+    // the content of the line starting at `$ls` begins past them: each    //
+    // marker byte of `$cs[..$cd]`, then one optional `sep`/`tab`.         //
+    // ------------------------------------------------------------------ //
+    (@cdepth []) => { 0usize };
+    (@cdepth [$cs:ident, $cd:expr]) => { $cd };
+    (@cskip [], $src:ident, $ls:ident, $end:expr, $sep:literal, $tab:literal) => {};
+    (@cskip [$cs:ident, $cd:expr], $src:ident, $ls:ident, $end:expr, $sep:literal, $tab:literal) => {{
+        let _end: usize = $end;
+        let mut _k: usize = 0;
+        while _k < $cd {
+            if $ls < _end && $src[$ls] == $cs[_k] {
+                $ls += if $ls + 1 < _end && ($src[$ls + 1] == $sep || $src[$ls + 1] == $tab) {
+                    2
+                } else {
+                    1
+                };
+            } else {
+                break;
+            }
+            _k += 1;
+        }
+    }};
+    // @inhole: is `$p` among the markers leading a line of the run after
+    // its first? A prefix is at most a marker and a `sep` per frame, so the
+    // line start lies at most that far back.
+    (@inhole [], $src:ident, $p:expr, $start:expr, $end:expr, $eol:literal, $sep:literal, $tab:literal) => {
+        false
+    };
+    (@inhole [$cs:ident, $cd:expr], $src:ident, $p:expr, $start:expr, $end:expr,
+     $eol:literal, $sep:literal, $tab:literal) => {{
+        let _p: usize = $p;
+        let _lo = _p.saturating_sub(2 * $cd + 1).max($start);
+        let mut _j = _p;
+        let mut _in = false;
+        while _j > _lo {
+            _j -= 1;
+            if $src[_j] == $eol {
+                let mut _ls = _j + 1;
+                $crate::parse_inline!(@cskip [$cs, $cd], $src, _ls, $end, $sep, $tab);
+                _in = _p < _ls;
+                break;
+            }
+        }
+        _in
     }};
 
     // ------------------------------------------------------------------ //

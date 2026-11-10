@@ -184,9 +184,9 @@ fn text_21_no_text_when_fully_code() {
     assert!(st.texts.is_empty());
 }
 
-// 22. A pending symmetric open closes on matching count from the left
+// 22. An open symmetric frame closes on the next run of its count
 #[test]
-fn text_22_star_closes_pending_with_same_count() {
+fn text_22_star_closes_open_frame_with_same_count() {
     let src = b"*a *b";
     let (st, _) = run_inline!(src);
     assert_eq!(st.italics.len(), 1);
@@ -318,9 +318,9 @@ fn bold_11_start_le_end() {
     assert!(st.bolds[0].start <= st.bolds[0].end);
 }
 
-// 12. A pending bold open closes on the first matching count from the left
+// 12. An open bold closes on the next run of its count
 #[test]
-fn bold_12_pending_closes_on_same_count() {
+fn bold_12_open_closes_on_same_count() {
     let src = b"**a **b**";
     let (st, _) = run_inline!(src);
     assert_eq!(st.bolds.len(), 1);
@@ -444,9 +444,9 @@ fn italic_08_mismatched_two_stars_close_no_italic() {
     assert!(st.italics.is_empty());
 }
 
-// 09. A pending italic open closes on the first matching count from the left
+// 09. An open italic closes on the next run of its count
 #[test]
-fn italic_09_pending_closes_on_same_count() {
+fn italic_09_open_closes_on_same_count() {
     let src = b"*a *b*";
     let (st, _) = run_inline!(src);
     assert_eq!(st.italics.len(), 1);
@@ -559,9 +559,9 @@ fn bold_italic_06_two_on_same_input() {
     assert_eq!(txt(src, st.bold_italics[1]), "b");
 }
 
-// 07. A pending bold-italic open closes on the first matching count
+// 07. An open bold-italic closes on the next run of its count
 #[test]
-fn bold_italic_07_pending_closes_on_same_count() {
+fn bold_italic_07_open_closes_on_same_count() {
     let src = b"***a ***b***";
     let (st, _) = run_inline!(src);
     assert_eq!(st.bold_italics.len(), 1);
@@ -1435,8 +1435,12 @@ fn kv_13_key_stops_at_opaque_span_end() {
 }
 
 // ================================================================
-// balanced asymmetric (objects)
+// opaque balanced asymmetric (objects): the outer ring
 // ================================================================
+//
+// `run_inline_balanced!` declares `{`/`}` with `balanced = true` and
+// `parse_inside = false`: one forward search per open byte that counts the
+// rule's own bytes, and one element per outer ring.
 
 // 01. A simple brace pair produces one object span
 #[test]
@@ -1525,33 +1529,136 @@ fn balanced_09_span_bounds() {
     assert_eq!(st.objects[0].end, 5);
 }
 
+// 10. An outer ring that never closes is text, and the next open byte tries:
+//     an inner pair that balances is the element
+#[test]
+fn balanced_10_unclosed_ring_next_open_tries() {
+    let src = b"{a {b} c";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["{a ", " c"]);
+}
+
+// 11. Each byte of an open run is an open of its own: the first one opens the
+//     ring, the rest nest in it or try next
+#[test]
+fn balanced_11_open_run_bytes() {
+    let src = b"<{{a}}> {{b}";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["{a}", "b"]);
+    assert_eq!(all(src, &st.texts), vec!["<", "> {"]);
+}
+
+// 12. A close byte with no ring open is text
+#[test]
+fn balanced_12_stray_close_is_text() {
+    let src = b"{a} b} c";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["a"]);
+    assert_eq!(all(src, &st.texts), vec![" b} c"]);
+}
+
+// 13. Escaped bytes of the rule inside the ring are content and count for
+//     nothing
+#[test]
+fn balanced_13_escaped_bytes_inside_ring() {
+    let src = b"{a \\} b} {c \\{ d}";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["a \\} b", "c \\{ d"]);
+}
+
+macro_rules! run_balanced_opaque_with_stack {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
+            on_trigger(b'{', b'*') {
+                symmetric b'*' { parse_inside = true; 1 => italics }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = false; 1 => objects }
+            }
+        );
+        st
+    }};
+}
+
+// 14. No other rule acts inside a ring that closes; one that never closes is
+//     text, where they do
+#[test]
+fn balanced_14_ring_is_opaque() {
+    let src = b"{a *b* c} *d*";
+    let st = run_balanced_opaque_with_stack!(src, 4);
+    assert_eq!(all(src, &st.objects), vec!["a *b* c"]);
+    assert_eq!(all(src, &st.italics), vec!["d"]);
+    let src = b"{a *b* c";
+    let st = run_balanced_opaque_with_stack!(src, 4);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.italics), vec!["b"]);
+}
+
+// 15. The ring is no stack frame: `max_nest` bounds neither its depth nor
+//     whether it opens, and it opens inside a frame of another rule
+#[test]
+fn balanced_15_ring_ignores_max_nest() {
+    let src = b"{a {b {c} d} e}";
+    let st = run_balanced_opaque_with_stack!(src, 0);
+    assert_eq!(all(src, &st.objects), vec!["a {b {c} d} e"]);
+    let src = b"*x {a {b} c} y*";
+    let st = run_balanced_opaque_with_stack!(src, 1);
+    assert_eq!(all(src, &st.italics), vec!["x {a {b} c} y"]);
+    assert_eq!(all(src, &st.objects), vec!["a {b} c"]);
+}
+
+// 16. Open bytes no close balances cost no search of their own: the scan
+//     stays linear however many there are
+#[test]
+fn balanced_16_unbalanced_opens_linear() {
+    let started = std::time::Instant::now();
+    let mut src = vec![b'{'; 100_000];
+    src.extend(std::iter::repeat_n(b'}', 50_000));
+    let (st, _) = run_inline_balanced!(&src);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(st.objects[0].end - st.objects[0].start, 99_998);
+    let mut src = b"{".to_vec();
+    for _ in 0..50_000 {
+        src.extend_from_slice(b"{{x}");
+    }
+    let (st, _) = run_inline_balanced!(&src);
+    assert_eq!(st.objects.len(), 50_000);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "unbalanced-open scan is not linear"
+    );
+}
+
 // ================================================================
-// symmetric balanced
+// symmetric opaque (forward search)
 // ================================================================
 
 // 01. A basic double-quote pair produces one code span
 #[test]
-fn sym_bal_01_basic() {
+fn sym_opaque_01_basic() {
     let src = b"\"hello\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "hello");
 }
 
 // 02. A doubled inner quote is treated as balanced content, not a closer
 #[test]
-fn sym_bal_02_doubled_is_escape() {
+fn sym_opaque_02_doubled_is_escape() {
     let src = b"\"hello \"\"world\"\" end\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "hello \"\"world\"\" end");
 }
 
 // 03. Two independent quoted spans are captured separately
 #[test]
-fn sym_bal_03_two_spans() {
+fn sym_opaque_03_two_spans() {
     let src = b"\"a\" \"b\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 2);
     assert_eq!(txt(src, st.codes[0]), "a");
     assert_eq!(txt(src, st.codes[1]), "b");
@@ -1559,34 +1666,34 @@ fn sym_bal_03_two_spans() {
 
 // 04. An unclosed quote produces no code span
 #[test]
-fn sym_bal_04_unclosed_no_span() {
+fn sym_opaque_04_unclosed_no_span() {
     let src = b"\"unclosed";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert!(st.codes.is_empty());
 }
 
 // 05. A double-quote pair inside a triple-quote is captured as the inner content
 #[test]
-fn sym_bal_05_double_quote_paired_independently() {
+fn sym_opaque_05_double_quote_paired_independently() {
     let src = b"\"hello \"\"world\"\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "world");
 }
 
 // 06. Two adjacent double-quotes form a count-2 opener that finds no closer
 #[test]
-fn sym_bal_06_adjacent_quotes_is_count2_opener() {
+fn sym_opaque_06_adjacent_quotes_is_count2_opener() {
     let src = b"\"\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 0);
 }
 
 // 07. Text before and after a quoted span is captured as separate text spans
 #[test]
-fn sym_bal_07_text_before_and_after() {
+fn sym_opaque_07_text_before_and_after() {
     let src = b"before \"inside\" after";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "inside");
     assert_eq!(st.texts.len(), 2);
@@ -1594,9 +1701,9 @@ fn sym_bal_07_text_before_and_after() {
 
 // 08. A count-2 opener matches a count-2 closer to capture the inner content
 #[test]
-fn sym_bal_08_count2_opener_and_closer() {
+fn sym_opaque_08_count2_opener_and_closer() {
     let src = b"\"\"hello\"\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "hello");
 }
@@ -1740,10 +1847,11 @@ fn chained_tbal_12_multiple_links_sequence() {
 // balanced asymmetric - multi-level (max_nest > 1)
 // ================================================================
 //
-// All of these use `run_inline_balanced_nested!`, the same grammar as
-// `run_inline_balanced!` above with a caller-supplied `max_nest`. The
-// `balanced_*` tests above already cover `max_nest = 1` (the collapsing
-// behaviour) - these specifically exercise depth > 1.
+// All of these use `run_inline_balanced_nested!`, the `{`/`}` rule of
+// `run_inline_balanced!` above with `parse_inside = true`, which keeps its
+// frames on the stack, and a caller-supplied `max_nest`. The `balanced_*`
+// tests above cover the opaque rule, one element per outer ring - these
+// exercise frames that nest.
 
 // 01. At depth 2, a single level of nesting is split into two spans,
 // sorted by start: outer first, inner second.
@@ -1793,9 +1901,8 @@ fn balanced_nested_04_cap_below_actual_depth() {
     assert_eq!(txt(src, st.objects[1]), "b {c} d");
 }
 
-// 05. A cap of 1 on a multi-level input reproduces the exact collapsing
-// behaviour of `run_inline_balanced!` - the explicit depth-1 boundary,
-// not just its default.
+// 05. A cap of 1 on a multi-level input gives the one span the opaque rule of
+// `run_inline_balanced!` gives - the explicit depth-1 boundary.
 #[test]
 fn balanced_nested_05_depth1_collapses() {
     let src = b"{a {b} c}";
@@ -1849,13 +1956,12 @@ fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
 }
 
 // ================================================================
-// symmetric balanced (parse_inside = true) - different-key nesting fix
+// symmetric on the stack (parse_inside = true) - different-count nesting
 // ================================================================
 //
 // All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
-// true; balanced = true; ... }` fixture with its own `n_italics` / `n_bolds`
-// fields, separate from the `italics` / `bolds` fixtures above, which use
-// `balanced = false` and the single pending slot.
+// true; ... }` fixture with its own `n_italics` / `n_bolds` fields and a
+// caller-supplied `max_nest`.
 
 // 01. With the bounded stack (depth >= 2) a different-count occurrence of the
 // same byte opens an inner frame instead of replacing the outer one, so both
@@ -1894,7 +2000,7 @@ fn sym_nested_03_identical_key_toggles_not_nests() {
     assert_eq!(txt(src, st.n_bolds[1]), " c");
 }
 
-// 04. A frame still pending at line end is discarded - neither delimiter
+// 04. A frame still open at line end is discarded - neither delimiter
 // closes within the line, so neither produces a span.
 #[test]
 fn sym_nested_04_unclosed_both_discarded() {
@@ -2265,7 +2371,7 @@ fn shared_close_07_nested_different_open_bytes_shared_close() {
 // these rules scan their own content for other rules' triggers, before or
 // after this fix. What changed is purely whether the *closing* delimiter
 // itself is correctly distinguished from a literal, backslash-escaped
-// occurrence of the same byte. The existing `sym_bal_02_doubled_is_escape`
+// occurrence of the same byte. The existing `sym_opaque_02_doubled_is_escape`
 // test (unescaped doubled-quote content) already covers the regression
 // case that this fix must not disturb - content with no backslash involved
 // at all - so it isn't duplicated here.
@@ -2311,7 +2417,7 @@ fn escape_close_03_code_span_escaped_then_immediate_close() {
 #[test]
 fn escape_close_04_balanced_symmetric_escaped_quote() {
     let src = b"\"a\\\"b\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "a\\\"b");
 }
@@ -2560,14 +2666,13 @@ fn kvn_16_key_after_crlf() {
 }
 
 // ================================================================
-// held text: stack-mode frames (`balanced = true`) that never close
+// held text: stack frames that never close
 // ================================================================
 //
-// `run_inline!` declares `*` with `balanced = false` (the off-stack `pending`
-// slot). The cases below use the stack path instead - `balanced = true` plus a
-// declared `hard_break`, exactly meon-md's configuration - where plain text
-// flushed while a frame is open is *held* in the fallback vector and either
-// rolled back when the frame closes or kept when the frame is discarded.
+// `run_inline_stack!` keeps `*` and `<`/`>` on the stack, with a declared
+// `hard_break`. Plain text flushed while a frame is open, its open run
+// included, is *held* in the fallback vector and either rolled back when the
+// frame closes or kept when the frame is discarded.
 
 macro_rules! run_inline_stack {
     ($src:expr, $merge:tt) => {{
@@ -2580,12 +2685,10 @@ macro_rules! run_inline_stack {
             on_trigger(b'*', b'`', b'<', b'>') {
                 symmetric b'`' {
                     parse_inside = false;
-                    balanced     = false;
                     _ => codes
                 }
                 symmetric b'*' {
                     parse_inside = true;
-                    balanced     = true;
                     1 => italics, 2 => bolds, _ => bold_italics
                 }
                 asymmetric b'<', b'>' {
@@ -2608,7 +2711,7 @@ fn all(src: &[u8], v: &[meon::span::Span]) -> Vec<String> {
 fn held_01_unclosed_star_with_newline_keeps_text() {
     let src = b"*no close\n";
     let st = run_inline_stack!(src, false);
-    assert_eq!(all(src, &st.texts), vec!["no close"]);
+    assert_eq!(all(src, &st.texts), vec!["*no close"]);
     assert!(st.italics.is_empty());
 }
 
@@ -2617,7 +2720,7 @@ fn held_01_unclosed_star_with_newline_keeps_text() {
 fn held_02_unclosed_star_multi_line_keeps_all_lines() {
     let src = b"*a\nb\nc\n";
     let st = run_inline_stack!(src, false);
-    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert_eq!(all(src, &st.texts), vec!["*a", "b", "c"]);
     assert!(st.italics.is_empty());
 }
 
@@ -2626,7 +2729,7 @@ fn held_02_unclosed_star_multi_line_keeps_all_lines() {
 fn held_03_unclosed_star_multi_line_merged() {
     let src = b"*a\nb\n";
     let st = run_inline_stack!(src, true);
-    assert_eq!(all(src, &st.texts), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["*a\nb"]);
 }
 
 // 04. Text inside a frame that does close is not emitted as text
@@ -2649,14 +2752,14 @@ fn held_05_rollback_restores_merged_previous_span() {
 }
 
 // 06. Unclosed outer frame, closed inner frame: the inner span is kept, the
-//     outer's text is released as plain text around it
+//     outer's open run and text are released as plain text around it
 #[test]
 fn held_06_unclosed_outer_closed_inner() {
     let src = b"**a *b* c\n";
     let st = run_inline_stack!(src, false);
     assert!(st.bolds.is_empty());
     assert_eq!(all(src, &st.italics), vec!["b"]);
-    assert_eq!(all(src, &st.texts), vec!["a ", " c"]);
+    assert_eq!(all(src, &st.texts), vec!["**a ", " c"]);
 }
 
 // 07. A closed opaque span inside an unclosed frame: text around it survives
@@ -2665,7 +2768,7 @@ fn held_07_unclosed_frame_with_inner_code_span() {
     let src = b"*a `c` b\n";
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.codes), vec!["c"]);
-    assert_eq!(all(src, &st.texts), vec!["a ", " b"]);
+    assert_eq!(all(src, &st.texts), vec!["*a ", " b"]);
 }
 
 // 08. Same rule for a stack-mode asymmetric frame left unclosed
@@ -2674,7 +2777,7 @@ fn held_08_unclosed_asymmetric_keeps_text() {
     let src = b"<a\nb\n";
     let st = run_inline_stack!(src, false);
     assert!(st.autolinks.is_empty());
-    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+    assert_eq!(all(src, &st.texts), vec!["<a", "b"]);
 }
 
 // 09. A closed asymmetric frame rolls its held text back
@@ -2693,7 +2796,7 @@ fn held_10_unclosed_frame_with_hard_break() {
     let src = b"*a  \nb\n";
     let st = run_inline_stack!(src, false);
     assert_eq!(st.hard_breaks.len(), 1);
-    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+    assert_eq!(all(src, &st.texts), vec!["*a", "b"]);
 }
 
 // 11. A run without any newline: the final flush alone releases the text
@@ -2701,7 +2804,7 @@ fn held_10_unclosed_frame_with_hard_break() {
 fn held_11_single_line_without_newline() {
     let src = b"*no close";
     let st = run_inline_stack!(src, false);
-    assert_eq!(all(src, &st.texts), vec!["no close"]);
+    assert_eq!(all(src, &st.texts), vec!["*no close"]);
 }
 
 // ================================================================
@@ -2793,33 +2896,31 @@ fn dead_07_many_unclosed_openers_linear() {
 }
 
 // ================================================================
-// pending slot (`parse_inside = true`, `balanced = false`): contract
+// symmetric frames on the stack: contract
 // ================================================================
 //
-// The off-stack pending slot tracks one symmetric opener at a time and never
-// nests. 01-06 pin the open/close contract and the rollback of text flushed
-// inside a pair with the `run_inline!` grammar (`*`); 07-09 add a stack rule
-// (`run_pending_with_stack!`), 10-13 check that a pair crossing another
-// construct keeps its text, 14-15 check the snapshot itself, and 16-17 a run
-// whose count has no declared arm.
+// A symmetric rule with `parse_inside = true` keeps its frames on the stack:
+// a run of another count of the same byte opens a frame above the open one.
+// 01-06 pin the open/close contract and the rollback of text flushed inside a
+// frame with the `run_inline!` grammar (`*`); 07-11 add an asymmetric stack
+// rule (`run_sym_with_stack!`), 12 a key, 13 a chained match, 14-15 check the
+// snapshot itself, and 16-17 a run whose count has no declared arm.
 
-// 01. A different-count opener while one is pending replaces the slot:
-//     `**a *b* c**` yields the inner italic only, never the outer bold
+// 01. A run of another count opens a frame above the open one when the stack
+//     has room (see `sym_nested_01`); with `max_nest = 1` it is content of the
+//     open frame
 #[test]
-fn pending_01_different_count_replaces_slot() {
+fn sym_stack_01_different_count_is_content_at_cap() {
     let src = b"**a *b* c**";
     let (st, _) = run_inline!(src);
-    assert!(st.bolds.is_empty());
-    assert_eq!(st.italics.len(), 1);
-    assert_eq!(txt(src, st.italics[0]), "b");
-    assert_eq!(st.texts.len(), 2);
-    assert_eq!(txt(src, st.texts[0]), "**a ");
-    assert_eq!(txt(src, st.texts[1]), " c**");
+    assert_eq!(all(src, &st.bolds), vec!["a *b* c"]);
+    assert!(st.italics.is_empty());
+    assert!(st.texts.is_empty());
 }
 
-// 02. A same-count occurrence closes the slot; the next one opens afresh
+// 02. A run of the open frame's count closes it; the next one opens afresh
 #[test]
-fn pending_02_same_count_closes_then_reopens() {
+fn sym_stack_02_same_count_closes_then_reopens() {
     let src = b"*a* *b*";
     let (st, _) = run_inline!(src);
     assert_eq!(st.italics.len(), 2);
@@ -2827,10 +2928,10 @@ fn pending_02_same_count_closes_then_reopens() {
     assert_eq!(txt(src, st.italics[1]), "b");
 }
 
-// 03. Text flushed by a code span inside the pair belongs to the pair: the
+// 03. Text flushed by a code span inside the frame belongs to the frame: the
 //     opener and the content are not also emitted as fallback text
 #[test]
-fn pending_03_inner_code_span_text_is_not_fallback() {
+fn sym_stack_03_inner_code_span_text_is_not_fallback() {
     let src = b"x *a `c` b* y";
     let (st, _) = run_inline!(src);
     assert_eq!(all(src, &st.italics), vec!["a `c` b"]);
@@ -2840,16 +2941,16 @@ fn pending_03_inner_code_span_text_is_not_fallback() {
 
 // 04. The same for the text flushed at an internal eol of a multi-line run
 #[test]
-fn pending_04_internal_eol_text_is_not_fallback() {
+fn sym_stack_04_internal_eol_text_is_not_fallback() {
     let src = b"x *a\nb* y";
     let (st, _) = run_inline!(src);
     assert_eq!(all(src, &st.italics), vec!["a\nb"]);
     assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
 }
 
-// 05. A hard break inside the pair keeps its own span
+// 05. A hard break inside the frame keeps its own span
 #[test]
-fn pending_05_hard_break_inside_pair_is_kept() {
+fn sym_stack_05_hard_break_inside_frame_is_kept() {
     let src = b"*a  \nb*";
     let (st, _) = run_inline!(src);
     assert_eq!(all(src, &st.italics), vec!["a  \nb"]);
@@ -2858,18 +2959,18 @@ fn pending_05_hard_break_inside_pair_is_kept() {
     assert!(st.texts.is_empty());
 }
 
-// 06. A pair that never closes leaves its opener and content as text, also
+// 06. A frame that never closes leaves its opener and content as text, also
 //     when another rule fired inside it
 #[test]
-fn pending_06_unclosed_pair_keeps_its_text() {
+fn sym_stack_06_unclosed_frame_keeps_its_text() {
     let src = b"x *a `c` b";
     let (st, _) = run_inline!(src);
     assert!(st.italics.is_empty());
     assert_eq!(all(src, &st.codes), vec!["c"]);
-    assert_eq!(all(src, &st.texts), vec!["x *a ", " b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", "*a ", " b"]);
 }
 
-macro_rules! run_pending_with_stack {
+macro_rules! run_sym_with_stack {
     ($src:expr, $maxn:literal) => {{
         let src: &[u8] = $src;
         let le = src.len();
@@ -2877,7 +2978,7 @@ macro_rules! run_pending_with_stack {
         meon::parse_inline!(
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
             on_trigger(b'~', b'{', b'}') {
-                symmetric b'~' { parse_inside = true; balanced = false; 1 => italics }
+                symmetric b'~' { parse_inside = true; 1 => italics }
                 asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
             }
         );
@@ -2885,30 +2986,35 @@ macro_rules! run_pending_with_stack {
     }};
 }
 
-// 07. A stack frame that opens and closes inside the pair: the text flushed at
-//     its open belongs to the pair
+// 07. A frame of another rule that opens and closes inside the frame: the
+//     text flushed at its open belongs to the outer frame
 #[test]
-fn pending_07_frame_inside_pair_text_is_not_fallback() {
+fn sym_stack_07_frame_inside_frame_text_is_not_fallback() {
     let src = b"~a {b} c~";
-    let st = run_pending_with_stack!(src, 4);
+    let st = run_sym_with_stack!(src, 4);
     assert_eq!(all(src, &st.italics), vec!["a {b} c"]);
     assert_eq!(all(src, &st.objects), vec!["b"]);
     assert!(st.texts.is_empty());
 }
 
-// 08. A pair opened after an open absorbed past the cap and closed after the
-//     close it pairs with: the text before the pair stays, and no byte lands
-//     both in the fallback text and in the pair
+// 08. With the stack full a run opens nothing: it is literal content of the
+//     frame on top, kept with the rest of its text when that frame never
+//     closes
 #[test]
-fn pending_08_pair_across_overflow_close_does_not_overlap() {
-    let src = b"{a{~b}c~d";
-    let st = run_pending_with_stack!(src, 1);
-    assert_eq!(all(src, &st.italics), vec!["b}c"]);
-    assert_eq!(all(src, &st.texts), vec!["a", "d"]);
+fn sym_stack_08_full_stack_run_is_content() {
+    let src = b"{a ~b~ c}";
+    let st = run_sym_with_stack!(src, 1);
+    assert_eq!(all(src, &st.objects), vec!["a ~b~ c"]);
+    assert!(st.italics.is_empty());
+    assert!(st.texts.is_empty());
+    let src = b"{a ~b~ c";
+    let st = run_sym_with_stack!(src, 1);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["{a ~b~ c"]);
 }
 
 /// Fails when a span is inverted, or when a fallback span overlaps one of
-/// `spans` - elements the checked pair does not own.
+/// `spans` - elements the checked frame does not own.
 fn assert_text_clear_of(texts: &[meon::span::Span], spans: &[meon::span::Span]) {
     for t in texts {
         assert!(t.start <= t.end, "inverted text span {t:?}");
@@ -2918,56 +3024,67 @@ fn assert_text_clear_of(texts: &[meon::span::Span], spans: &[meon::span::Span]) 
     }
 }
 
-// 09. A frame that opens and closes inside the pair, nested in a frame that
-//     encloses the whole pair: the rollback leaves the outer frame's
-//     snapshot intact
+// 09. A frame that opens and closes inside the frame, nested in a frame that
+//     encloses it all: the rollback leaves the outer frame's snapshot intact
 #[test]
-fn pending_09_pair_inside_frame_with_inner_frame() {
+fn sym_stack_09_frame_inside_frame_with_inner_frame() {
     let src = b"{x ~a {b} c~ y}";
-    let st = run_pending_with_stack!(src, 4);
+    let st = run_sym_with_stack!(src, 4);
     assert_eq!(all(src, &st.italics), vec!["a {b} c"]);
     assert_eq!(all(src, &st.objects), vec!["x ~a {b} c~ y", "b"]);
     assert!(st.texts.is_empty());
 }
 
-// 10. A frame open at the slot's open closes before the pair does: the pair
-//     crosses it, and the frame's text is not emitted again as fallback
+// 10. Frames that cross do not close: a close byte with another rule's frame
+//     on top is content of that frame, and the frame below it is discarded
+//     with its open byte as text
 #[test]
-fn pending_10_frame_closed_inside_pair_keeps_its_text() {
-    let src = b"{a~b}{c~d";
-    let st = run_pending_with_stack!(src, 4);
-    assert_eq!(all(src, &st.objects), vec!["a~b"]);
-    assert_text_clear_of(&st.texts, &st.objects);
-    let src = b"{~a} {b~ {c} d}";
-    let st = run_pending_with_stack!(src, 4);
-    assert_text_clear_of(&st.texts, &st.objects);
+fn sym_stack_10_crossing_close_is_content() {
+    let src = b"{a~b}c~";
+    let st = run_sym_with_stack!(src, 4);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.italics), vec!["b}c"]);
+    assert_eq!(all(src, &st.texts), vec!["{a"]);
+    assert_text_clear_of(&st.texts, &st.italics);
 }
 
-// 11. A frame opened inside the pair is still open at its close: the pair
-//     rolls its text back, and the frame's later close keeps only the text
-//     after the pair
+// 11. A run of the rule opens again above another rule's frame, so a frame
+//     still open there takes the run, not the frame below: nothing closes
+//     but the innermost frame, and every byte of the others is text
 #[test]
-fn pending_11_frame_open_at_close_keeps_its_snapshot() {
+fn sym_stack_11_run_above_other_frame_opens_again() {
     let src = b"~a {b~ {c} d}";
-    let st = run_pending_with_stack!(src, 4);
-    assert_eq!(all(src, &st.italics), vec!["a {b"]);
-    assert_eq!(all(src, &st.objects), vec!["b~ {c} d", "c"]);
-    assert!(st.texts.is_empty());
+    let st = run_sym_with_stack!(src, 4);
+    assert!(st.italics.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["~a ", "{b", "~ ", " d}"]);
 }
 
-// 12. A key that starts before the opener owns that text: it is not emitted
-//     again as fallback
+// 12. A key begins after the opener of an open frame: it never takes the
+//     bytes before it
 #[test]
-fn pending_12_key_before_opener_is_not_fallback() {
-    let src = b"x k*=v\nb* y";
-    let (st, _) = run_inline!(src);
+fn sym_stack_12_key_begins_after_opener() {
+    let src: &[u8] = b"x a*k=v\nb* y";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 2, true;
+        on_trigger(b'=', b'*') {
+            symmetric b'*' { parse_inside = true; 1 => italics }
+            key_value: KeyValue {
+                eq = b'='; allow_sep = true; end = b'\n';
+                key => key, value => value,
+            } => key_values
+        }
+    );
     let keys: Vec<meon::span::Span> = st.key_values.iter().map(|kv| kv.key).collect();
-    assert_eq!(all(src, &keys), vec!["k*"]);
+    assert_eq!(all(src, &keys), vec!["k"]);
+    assert_eq!(all(src, &st.italics), vec!["k=v\nb"]);
     assert_text_clear_of(&st.texts, &keys);
-    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+    assert_eq!(all(src, &st.texts), vec!["x a", " y"]);
 }
 
-macro_rules! run_pending_with_chained {
+macro_rules! run_sym_with_chained {
     ($src:expr, $tpi:tt, $upi:tt) => {{
         let src: &[u8] = $src;
         let le = src.len();
@@ -2975,7 +3092,7 @@ macro_rules! run_pending_with_chained {
         meon::parse_inline!(
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
             on_trigger(b'*', b'[', b']', b'(', b')') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                symmetric b'*' { parse_inside = true; 1 => italics }
                 chained: Link {
                     | b'[', b']' | { parse_inside = $tpi; balanced = false; } => text,
                     | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
@@ -2987,34 +3104,34 @@ macro_rules! run_pending_with_chained {
     }};
 }
 
-// 13. A pair crossing a chained match: the text before the pair's opener is
-//     emitted once, and no text lands inside the pair or the match
+// 13. A frame crossing a chained match: the text before the frame's opener is
+//     emitted once, and no text lands inside the frame or the match
 #[test]
-fn pending_13_pair_crossing_chained_match() {
+fn sym_stack_13_frame_crossing_chained_match() {
     // Closed inside the text phase.
     let src = b"x *a [b* c](u)";
-    let st = run_pending_with_chained!(src, true, false);
+    let st = run_sym_with_chained!(src, true, false);
     assert_eq!(st.links.len(), 1);
     assert_eq!(all(src, &st.italics), vec!["a [b"]);
     assert_eq!(all(src, &st.texts), vec!["x "]);
     // Closed inside the url phase.
     let src = b"x *a [b](c* d)";
-    let st = run_pending_with_chained!(src, false, true);
+    let st = run_sym_with_chained!(src, false, true);
     assert_eq!(st.links.len(), 1);
     assert_eq!(all(src, &st.italics), vec!["a [b](c"]);
     assert_eq!(all(src, &st.texts), vec!["x "]);
     // Opened inside the text phase, closed after the match.
     let src = b"[x *a](u) b*";
-    let st = run_pending_with_chained!(src, true, false);
+    let st = run_sym_with_chained!(src, true, false);
     let link_text: Vec<meon::span::Span> = st.links.iter().map(|l| l.text).collect();
     assert_eq!(all(src, &st.italics), vec!["a](u) b"]);
     assert_text_clear_of(&st.texts, &link_text);
     assert!(st.texts.is_empty());
 }
 
-// 14. The rollback keeps the text flushed before the slot opened
+// 14. The rollback keeps the text flushed before the frame opened
 #[test]
-fn pending_14_rollback_keeps_earlier_text() {
+fn sym_stack_14_rollback_keeps_earlier_text() {
     let src = b"p `c` x *a `c` b* y";
     let (st, _) = run_inline!(src);
     assert_eq!(all(src, &st.italics), vec!["a `c` b"]);
@@ -3022,9 +3139,9 @@ fn pending_14_rollback_keeps_earlier_text() {
 }
 
 // 15. With merge_simple the rollback also restores the end of a span the
-//     pair's text was merged into
+//     frame's text was merged into
 #[test]
-fn pending_15_rollback_restores_merged_span() {
+fn sym_stack_15_rollback_restores_merged_span() {
     let src: &[u8] = b"p\nx *a\nb* y";
     let le = src.len();
     let mut st = ParseState::new(le);
@@ -3032,7 +3149,7 @@ fn pending_15_rollback_restores_merged_span() {
         st, src, 0, le, texts, true, b'\\', b' ', b'\t', b'\n', 1, true;
         hard_break(b'\\', b' ', 2) => hard_breaks;
         on_trigger(b'*') {
-            symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+            symmetric b'*' { parse_inside = true; 1 => italics }
         }
     );
     assert_eq!(all(src, &st.italics), vec!["a\nb"]);
@@ -3040,47 +3157,48 @@ fn pending_15_rollback_restores_merged_span() {
 }
 
 // 16. A run whose count has no declared arm is literal text: it opens no
-//     pair, and the text around it stays
+//     frame, and the text around it stays
 #[test]
-fn pending_16_run_without_arm_is_literal() {
+fn sym_stack_16_run_without_arm_is_literal() {
     let src = b"~~a {b} c~~ d";
-    let st = run_pending_with_stack!(src, 4);
+    let st = run_sym_with_stack!(src, 4);
     assert!(st.italics.is_empty());
     assert_eq!(all(src, &st.objects), vec!["b"]);
     assert_eq!(all(src, &st.texts), vec!["~~a ", " c~~ d"]);
 }
 
-// 17. Such a run inside a pending pair neither closes nor replaces it
+// 17. Such a run inside an open frame neither closes it nor opens another
 #[test]
-fn pending_17_run_without_arm_leaves_the_slot_alone() {
+fn sym_stack_17_run_without_arm_leaves_the_frame_alone() {
     let src = b"~a ~~ b~";
-    let st = run_pending_with_stack!(src, 4);
+    let st = run_sym_with_stack!(src, 4);
     assert_eq!(all(src, &st.italics), vec!["a ~~ b"]);
     assert!(st.texts.is_empty());
 }
 
-// 18. A frame opened inside the pair and closed after it: the text before
-//     the opener is emitted, the pair's own text is not
+// 18. A key begins after the close of an element before it, symmetric or
+//     asymmetric: it never takes the element's bytes
 #[test]
-fn pending_18_frame_opened_inside_closed_after() {
-    let src = b"x ~a {b~ c} d";
-    let st = run_pending_with_stack!(src, 4);
-    assert_eq!(all(src, &st.italics), vec!["a {b"]);
-    assert_eq!(all(src, &st.objects), vec!["b~ c"]);
-    assert_eq!(all(src, &st.texts), vec!["x ", " d"]);
+fn sym_stack_18_key_begins_after_closed_element() {
+    let src: &[u8] = b"~a~k=v\n{b}j=w\n";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 2, true;
+        on_trigger(b'=', b'~', b'{', b'}') {
+            symmetric b'~' { parse_inside = true; 1 => italics }
+            asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+            key_value: KeyValue {
+                eq = b'='; allow_sep = true; end = b'\n';
+                key => key, value => value,
+            } => key_values
+        }
+    );
+    let keys: Vec<meon::span::Span> = st.key_values.iter().map(|kv| kv.key).collect();
+    assert_eq!(all(src, &keys), vec!["k", "j"]);
+    assert_eq!(all(src, &st.italics), vec!["a"]);
+    assert_eq!(all(src, &st.objects), vec!["b"]);
 }
-
-// 19. A frame open at the slot's open and closed inside the pair, with text
-//     flushed inside the pair after that close: the pair rolls it back
-#[test]
-fn pending_19_frame_closed_inside_then_text() {
-    let src = b"{a ~b} {c} d~ e";
-    let st = run_pending_with_stack!(src, 4);
-    assert_eq!(all(src, &st.objects), vec!["a ~b", "c"]);
-    assert_eq!(all(src, &st.italics), vec!["b} {c} d"]);
-    assert_eq!(all(src, &st.texts), vec![" e"]);
-}
-
 // ================================================================
 // output vectors allocate on first push, not up front
 // ================================================================
@@ -3254,7 +3372,7 @@ fn merge_04_consecutive_runs_keep_text_apart() {
         meon::parse_inline!(
             st, src, s, e, texts, true, b'\\', b' ', b'\t', b'\n', 1, false;
             on_trigger(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                symmetric b'*' { parse_inside = true; 1 => italics }
             }
         );
     }
@@ -3271,7 +3389,7 @@ fn merge_04_consecutive_runs_keep_text_apart() {
 fn asym_refused_01_full_stack_keeps_text_once() {
     let src = b"[a{b";
     let (st, _) = run_inline_kv_json!(src, 1);
-    assert_eq!(all(src, &st.texts), vec!["a", "{b"]);
+    assert_eq!(all(src, &st.texts), vec!["[a", "{b"]);
 }
 
 // 02. A second open of a `balanced = false` rule, refused by its cap of one,
@@ -3287,7 +3405,7 @@ fn asym_refused_02_unbalanced_cap_keeps_text_once() {
             asymmetric b'(', b')' { balanced = false; parse_inside = true; 1 => objects }
         }
     );
-    assert_eq!(all(src, &st.texts), vec!["a", "(b"]);
+    assert_eq!(all(src, &st.texts), vec!["(a", "(b"]);
     assert!(st.objects.is_empty());
 }
 
@@ -3310,23 +3428,23 @@ fn asym_refused_03_inside_open_chained_match_keeps_text() {
         }
     );
     assert!(st.links.is_empty());
-    assert_eq!(all(src, &st.texts), vec!["see [x", "y", "<z"]);
+    assert_eq!(all(src, &st.texts), vec!["see [x", "<y", "<z"]);
 }
 
 // ================================================================
 // overflow pairs: an open absorbed past the cap and the close it pairs with
 // ================================================================
 //
-// `run_inline_balanced_nested!` declares `{`/`}` with `parse_inside = false`
-// (an opaque frame); 03 and 04 use transparent frames.
+// `run_inline_balanced_nested!` declares `{`/`}` as a frame with no other rule
+// next to it; 03 and 04 add another one.
 
-// 01. In a frame that never closes, the text between an overflow open and its
-//     close stays fallback text, like the rest of the frame's content
+// 01. In a frame that never closes, an overflow open, its close and the text
+//     between them stay fallback text, like the rest of the frame
 #[test]
 fn overflow_01_text_between_pair_kept_in_unclosed_frame() {
     let src = b"{a{b}c";
     let (st, _) = run_inline_balanced_nested!(src, 1);
-    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert_eq!(all(src, &st.texts), vec!["{a", "{b}c"]);
     assert!(st.objects.is_empty());
 }
 
@@ -3340,16 +3458,17 @@ fn overflow_02_text_between_pair_rolled_back_when_frame_closes() {
     assert_eq!(all(src, &st.objects), vec!["a{b}c"]);
 }
 
-// 03. The same for a transparent frame
+// 03. The same with other rules in the grammar
 #[test]
 fn overflow_03_transparent_frame_keeps_text_between_pair() {
     let src = b"[a[b]c";
     let (st, _) = run_inline_kv_json!(src, 1);
-    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert_eq!(all(src, &st.texts), vec!["[a", "[b]c"]);
 }
 
-// 04. Inside a chained match that closes, the text before an overflow close
-//     belongs to the link and is not emitted as fallback
+// 04. Inside a chained match that closes, the overflow pair belongs to the
+//     link and is not emitted as fallback; the unclosed frame's text before
+//     the match is
 #[test]
 fn overflow_04_inside_closed_chained_match_text_stays_in_link() {
     let src: &[u8] = b"{a[b{c}d](u)";
@@ -3366,7 +3485,7 @@ fn overflow_04_inside_closed_chained_match_text_stays_in_link() {
             } => links
         }
     );
-    assert_eq!(all(src, &st.texts), vec!["a"]);
+    assert_eq!(all(src, &st.texts), vec!["{a"]);
     assert_eq!(st.links.len(), 1);
     assert_eq!(txt(src, st.links[0].text), "b{c}d");
     assert_eq!(txt(src, st.links[0].url), "u");
@@ -3389,8 +3508,8 @@ fn undeclared_01_opaque_symmetric_run_is_text() {
     meon::parse_inline!(
         st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
         on_trigger(b'`', b'*') {
-            symmetric b'`' { parse_inside = false; balanced = false; 1 => codes }
-            symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+            symmetric b'`' { parse_inside = false; 1 => codes }
+            symmetric b'*' { parse_inside = true; 1 => italics }
         }
     );
     assert_eq!(all(src, &st.codes), vec!["c"]);
@@ -3422,8 +3541,8 @@ fn undeclared_03_asymmetric_single_open_after_run() {
 // ================================================================
 //
 // `run_inline_stack!` declares `*` on the stack. A frame still open at the
-// end of the run is discarded; elements of the same field that closed above
-// it stay.
+// end of the run is discarded and its open run is text; elements of the same
+// field that closed above it stay.
 
 // 01. An unclosed italic around a bold that holds a closed italic: the inner
 //     italic stays
@@ -3433,7 +3552,7 @@ fn drain_01_closed_inner_italic_survives_unclosed_outer() {
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.italics), vec!["c"]);
     assert_eq!(all(src, &st.bolds), vec!["b *c* d"]);
-    assert_eq!(all(src, &st.texts), vec!["a ", " e"]);
+    assert_eq!(all(src, &st.texts), vec!["*a ", " e"]);
 }
 
 // 02. The same with the counts swapped
@@ -3443,7 +3562,7 @@ fn drain_02_closed_inner_bold_survives_unclosed_outer() {
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.bolds), vec!["c"]);
     assert_eq!(all(src, &st.italics), vec!["b **c** d"]);
-    assert_eq!(all(src, &st.texts), vec!["a ", " e"]);
+    assert_eq!(all(src, &st.texts), vec!["**a ", " e"]);
 }
 
 // 03. Several unclosed frames of the same field drain without touching the
@@ -3454,7 +3573,7 @@ fn drain_03_several_unclosed_frames() {
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.italics), vec!["c"]);
     assert!(st.bolds.is_empty());
-    assert_eq!(all(src, &st.texts), vec!["a ", "b ", " d"]);
+    assert_eq!(all(src, &st.texts), vec!["*a ", "**b ", " d"]);
 }
 
 // ================================================================
@@ -3472,7 +3591,7 @@ fn kv_cap_01_word_key_kept_in_unclosed_object() {
     let src = b"{a b:1";
     let (st, _) = run_inline_kv_json!(src, 1);
     assert!(st.key_values.is_empty());
-    assert_eq!(all(src, &st.texts), vec!["a b:1"]);
+    assert_eq!(all(src, &st.texts), vec!["{a b:1"]);
 }
 
 // 02. A quoted key stays its own span; `eq` and the value stay text
@@ -3482,7 +3601,7 @@ fn kv_cap_02_quoted_key_kept_in_unclosed_object() {
     let (st, _) = run_inline_kv_json!(src, 1);
     assert!(st.key_values.is_empty());
     assert_eq!(all(src, &st.codes), vec!["k"]);
-    assert_eq!(all(src, &st.texts), vec![":1"]);
+    assert_eq!(all(src, &st.texts), vec!["{", ":1"]);
 }
 
 // 03. An `end` byte after an untracked pair is text as well
@@ -3491,7 +3610,7 @@ fn kv_cap_03_end_after_untracked_pair_is_text() {
     let src = b"{a:1,b:2";
     let (st, _) = run_inline_kv_json!(src, 1);
     assert!(st.key_values.is_empty());
-    assert_eq!(all(src, &st.texts), vec!["a:1,b:2"]);
+    assert_eq!(all(src, &st.texts), vec!["{a:1,b:2"]);
 }
 
 // 04. With room for one more frame the same pair is tracked
@@ -3502,7 +3621,7 @@ fn kv_cap_04_pair_tracked_below_cap() {
     assert_eq!(st.key_values.len(), 1);
     assert_eq!(txt(src, st.key_values[0].key), "b");
     assert_eq!(txt(src, st.key_values[0].value), "1");
-    assert_eq!(all(src, &st.texts), vec!["a "]);
+    assert_eq!(all(src, &st.texts), vec!["{a "]);
 }
 
 // ================================================================
@@ -3547,7 +3666,7 @@ fn chained_run_03_opaque_prefix_before_run() {
 #[test]
 fn chained_run_04_transparent_double_open() {
     let src = b"see [[a](u) here";
-    let st = run_pending_with_chained!(src, true, false);
+    let st = run_sym_with_chained!(src, true, false);
     assert_eq!(st.links.len(), 1);
     assert_eq!(txt(src, st.links[0].text), "a");
     assert_eq!(all(src, &st.texts), vec!["see [", " here"]);
@@ -3557,7 +3676,7 @@ fn chained_run_04_transparent_double_open() {
 #[test]
 fn chained_run_05_transparent_prefix_before_run() {
     let src = b"![[a](u)";
-    let st = run_pending_with_chained!(src, true, false);
+    let st = run_sym_with_chained!(src, true, false);
     assert_eq!(st.links.len(), 1);
     assert!(!st.links[0].is_image);
     assert_eq!(all(src, &st.texts), vec!["!["]);
@@ -3580,7 +3699,7 @@ fn chained_run_06_balanced_text_component() {
 // `run_chained_held!` declares a chained rule with a transparent text
 // component and `(`/`)` among the triggers, so the match can complete; `$upi`
 // sets the url component's opacity. `~` is a stack rule (into `codes`), `*`
-// the pending slot (into `italics`) and `{`/`}` a transparent frame (into
+// another one (into `italics`) and `{`/`}` a transparent frame (into
 // `objects`). Text inside a match is held like text in an open frame: rolled
 // back when the match completes, kept when it fails.
 
@@ -3592,8 +3711,8 @@ macro_rules! run_chained_held {
         meon::parse_inline!(
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
             on_trigger(b'{', b'}', b'~', b'*', b'[', b']', b'(', b')') {
-                symmetric b'~' { parse_inside = true; balanced = true; 1 => codes }
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                symmetric b'~' { parse_inside = true; 1 => codes }
+                symmetric b'*' { parse_inside = true; 1 => italics }
                 asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
                 chained: Link {
                     | b'[', b']' | { parse_inside = true; balanced = false; } => text,
@@ -3727,9 +3846,9 @@ fn chained_held_09_transparent_url() {
     assert_eq!(all(src, &st.texts), vec!["x ", " e"]);
 }
 
-// 10. A pending pair inside one component of a match nests in it
+// 10. A pair inside one component of a match nests in it
 #[test]
-fn chained_held_10_pending_pair_inside_match() {
+fn chained_held_10_pair_inside_match() {
     let src = b"x [a *b ~c~ d* e] f";
     let st = run_chained_held!(src, false);
     assert_eq!(all(src, &st.italics), vec!["b ~c~ d"]);
@@ -3753,7 +3872,7 @@ fn chained_held_11_crossing_frame_lowers_snapshot() {
 // 12. A pair opened before a match and closed inside it: the match's text
 //     before its opener is the pair's
 #[test]
-fn chained_held_12_pending_pair_closed_inside_match() {
+fn chained_held_12_pair_closed_inside_match() {
     let src = b"x *a ~b~ c [d* e](u) f";
     let st = run_chained_held!(src, false);
     assert_eq!(st.links.len(), 1);
@@ -3766,7 +3885,7 @@ fn chained_held_12_pending_pair_closed_inside_match() {
 // 13. A pair opened inside a match that completes before the pair closes:
 //     the text before the pair's opener is the match's
 #[test]
-fn chained_held_13_pending_pair_opened_inside_match() {
+fn chained_held_13_pair_opened_inside_match() {
     let src = b"[x ~y~ *a](u) b ~c~ d* e";
     let st = run_chained_held!(src, false);
     assert_eq!(st.links.len(), 1);
@@ -3778,7 +3897,7 @@ fn chained_held_13_pending_pair_opened_inside_match() {
 
 // 14. A pair whose ends lie in the two components of one match
 #[test]
-fn chained_held_14_pending_pair_across_components() {
+fn chained_held_14_pair_across_components() {
     let src = b"[a *b](c* d) e";
     let st = run_chained_held!(src, true);
     assert_eq!(st.links.len(), 1);
@@ -3786,16 +3905,16 @@ fn chained_held_14_pending_pair_across_components() {
     assert_eq!(all(src, &st.texts), vec![" e"]);
 }
 
-// 15. A frame open at the pair's open, with text flushed before the pair,
-//     closes inside it: the pair rolls back to the frame's snapshot
+// 15. A pair opened inside a frame takes that frame's close byte as content:
+//     the pair closes, and the frame is discarded with its open byte as text
 #[test]
-fn chained_held_15_pending_pair_follows_crossing_frame() {
+fn chained_held_15_pair_inside_frame_takes_its_close() {
     let src = b"{x ~y~ a *b} ~c~ d* e";
     let st = run_chained_held!(src, false);
-    assert_eq!(all(src, &st.objects), vec!["x ~y~ a *b"]);
+    assert!(st.objects.is_empty());
     assert_eq!(all(src, &st.codes), vec!["y", "c"]);
     assert_eq!(all(src, &st.italics), vec!["b} ~c~ d"]);
-    assert_eq!(all(src, &st.texts), vec![" e"]);
+    assert_eq!(all(src, &st.texts), vec!["{x ", " a ", " e"]);
 }
 
 // ================================================================
@@ -4182,7 +4301,7 @@ fn line_end_06_single_space_merges_like_bare_eol() {
             st, src, 0, le, texts, true, b'\\', b' ', b'\t', b'\n', 1, true;
             hard_break(b'\\', b' ', 2) => hard_breaks;
             on_trigger(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                symmetric b'*' { parse_inside = true; 1 => italics }
             }
         );
         assert!(st.hard_breaks.is_empty());
@@ -4226,7 +4345,7 @@ fn line_end_09_marker_byte_differs_from_escape() {
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
             hard_break(b'^', b' ', 2) => hard_breaks;
             on_trigger(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics }
+                symmetric b'*' { parse_inside = true; 1 => italics }
             }
         );
         assert_eq!(
@@ -4264,7 +4383,7 @@ macro_rules! run_chained_kinds {
         meon::parse_inline!(
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
             on_trigger(b'~', b'[', b']', b'(', b')', b'{', b'}', b'<', b'>') {
-                symmetric b'~' { parse_inside = true; balanced = true; 1 => codes }
+                symmetric b'~' { parse_inside = true; 1 => codes }
                 chained: Link {
                     | b'[', b']' | { parse_inside = true; balanced = false; } => text,
                     | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,

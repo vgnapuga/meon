@@ -29,10 +29,14 @@
 //! - a **block line**: it opens or continues `cont` frames (and possibly a
 //!   `block` item after them), opens a top-level `block` item, or matches a
 //!   `lines` rule. Its inline content is the rest of the line after the
-//!   markers, scanned on its own;
+//!   markers, scanned on its own — unless it holds `cont` frames alone: such
+//!   lines of the same depth, one after another, are one inline run read
+//!   past their markers, which ends at a line of another kind or depth, a
+//!   line whose content is `sep` and `tab` bytes alone, or the end of input;
 //! - a **paragraph line**: no rule claims it. Consecutive paragraph lines are
 //!   one inline run, which ends at an empty line (two consecutive `eol`
-//!   bytes), at a line that is not a paragraph line, or at the end of input.
+//!   bytes, or a line of `sep` and `tab` bytes alone), at a line that is not
+//!   a paragraph line, or at the end of input.
 //!
 //! A hit with a byte no marker consists of before it on its line is content,
 //! known without finding the line: only a hit preceded by marker bytes alone,
@@ -48,20 +52,20 @@
 //!    covers the run through its close line: a later line whose content after
 //!    the markers of the `cont` frames holding the fence is a run of at least
 //!    the opening count, followed by `sep`/`tab` only. A fence inside `cont`
-//!    frames also ends at the start of the first non-empty line that lacks
-//!    one of their markers; an empty line never ends a fence. An unclosed
+//!    frames also ends at the start of the first non-blank line that lacks
+//!    one of their markers; a blank line never ends a fence. An unclosed
 //!    fence covers to the end of input.
 //! 2. Any other hit is an **opaque inline rule** trigger, matched inside the
 //!    inline run that holds it, escape-aware throughout, exactly-count on
 //!    both sides for symmetric rules. A `chained` rule whose components are
 //!    both opaque opens at the last byte of a run of its open byte; the text
-//!    close, the url open right after it and the url close must all lie in
-//!    the run, and the match covers the open byte through the url close. An
-//!    `asymmetric` rule with `balanced = true` opens a frame at every byte
-//!    of its open run and nests them as the full parse does; its match
-//!    covers the open run through the close of the outermost frame, or to
-//!    the end of the run when that frame never closes, since nothing else
-//!    matches inside it. A hit among a line's markers is not a trigger. A
+//!    close, the second open right after it and the second close must all lie in
+//!    the run, and the match covers the open byte through the second close. An
+//!    `asymmetric` rule with `balanced = true` opens a ring at the first
+//!    byte of its open run, which every other byte of its own nests in, as
+//!    the full parse does; its match covers that byte through the close of
+//!    the ring, and when the ring never closes the next byte tries. A hit
+//!    among a line's markers is not a trigger. A
 //!    matched construct covers its full extent, delimiters included, and the
 //!    scan resumes after it — so overlapping opaque candidates resolve
 //!    leftmost-first, like the full parser's trigger loop. A `chained` match
@@ -77,8 +81,8 @@
 //! finders keep an item only when [`ContextCursor::admits`] its line, and the
 //! `cont` finder a frame whose marker no region covers. Note the
 //! semantics: the context suppresses **trigger positions**, not enclosing
-//! spans — a bold span may still legally *contain* a code span, exactly as in
-//! the full parse.
+//! spans — a transparent element's span may still legally *contain* an opaque
+//! region, exactly as in the full parse.
 //!
 //! # Remaining divergence from the full parse (by design)
 //!
@@ -104,16 +108,17 @@
 //!   that frame's close, or is such a value — and all the frames fit in
 //!   `max_nest`.
 
+use super::asymmetric::Rings;
 use super::chained::{ChainMemo, chain_match};
 use super::common::{
-    Span, count_escape, find_line_end, next_in_paragraph, scan_paragraph, scan_paragraph_by,
+    LineBreaks, Span, count_escape, find_line_end, next_in_paragraph, scan_paragraph,
 };
 
 /// One opaque symmetric rule: `(delimiter byte, exact run count)`.
 pub type SymSpec = (u8, u32);
 /// One opaque asymmetric rule: `(open byte, close byte, exact open count,
-/// balanced)`. A `balanced` rule is kept on the full parse's stack: every
-/// byte of its open run opens a frame, and its count is `1`.
+/// balanced)`. Every byte of the open run of a `balanced` rule is an open of
+/// its own, and its count is `1`.
 pub type AsymSpec = (u8, u8, u32, bool);
 
 /// The two components of a `chained` rule: their open and close bytes and
@@ -121,16 +126,16 @@ pub type AsymSpec = (u8, u8, u32, bool);
 /// both `parse_inside = false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainSpec {
-    /// The text component's open and close bytes.
-    pub text: (u8, u8),
-    /// The text component's `balanced` flag: each unescaped open byte nests
+    /// The first component's open and close bytes.
+    pub first: (u8, u8),
+    /// The first component's `balanced` flag: each unescaped open byte nests
     /// one level.
-    pub text_balanced: bool,
-    /// The url component's open and close bytes; the open byte must follow
-    /// the text close.
-    pub url: (u8, u8),
-    /// The url component's `balanced` flag.
-    pub url_balanced: bool,
+    pub first_balanced: bool,
+    /// The second component's open and close bytes; the open byte must
+    /// follow the first component's close.
+    pub second: (u8, u8),
+    /// The second component's `balanced` flag.
+    pub second_balanced: bool,
 }
 
 /// Most distinct needle bytes one search instruction takes; a wider set is
@@ -213,6 +218,9 @@ pub struct LineModel {
     pub sep: u8,
     /// Tab byte.
     pub tab: u8,
+    /// Is a `\r` right before `eol` part of the line end (the grammar's
+    /// `crlf`)?
+    pub crlf: bool,
     /// The grammar's `max_nest`: the most frames — `cont` frames and a fence
     /// — one line may hold.
     pub max_nest: usize,
@@ -230,6 +238,7 @@ impl Default for LineModel {
             eol: b'\n',
             sep: b' ',
             tab: b'\t',
+            crlf: false,
             max_nest: 1,
             block_simple: &[],
             block: &[],
@@ -259,9 +268,9 @@ pub(crate) enum LineKind {
         count: u32,
         depth: usize,
     },
-    /// `cont` markers open or continue frames; inline content starts at
-    /// `cs`.
-    Cont { cs: usize },
+    /// `cont` markers open or continue `depth` frames; inline content
+    /// starts at `cs`, past a `block` item's marker when `item`.
+    Cont { cs: usize, depth: usize, item: bool },
     /// The `rule`-th `block` rule opens a top-level item; inline content
     /// starts at `cs`.
     Block { cs: usize, rule: usize },
@@ -287,7 +296,9 @@ impl LineSlot {
     pub(crate) fn content_start(&self) -> usize {
         match self.kind {
             LineKind::Fence { .. } => self.le,
-            LineKind::Cont { cs } | LineKind::Block { cs, .. } | LineKind::Line { cs, .. } => cs,
+            LineKind::Cont { cs, .. } | LineKind::Block { cs, .. } | LineKind::Line { cs, .. } => {
+                cs
+            }
             LineKind::Para => self.ls,
         }
     }
@@ -478,16 +489,20 @@ impl<'m> LineReader<'m> {
         let kind = if ls < le && !self.classes.starts.contains(src[ls]) {
             LineKind::Para
         } else {
-            self.lines.classify(src, ls, le)
+            self.lines
+                .classify(src, ls, self.lines.content_end(src, ls, le))
         };
         let line = LineSlot { ls, le, kind };
         self.slot = Some(line);
         line
     }
 
-    /// May the close search for an opener at `p` go on into the line
-    /// starting at `ls`? Only from a paragraph line into a paragraph line.
-    /// `para` keeps the opener line's reading across the calls of one
+    /// Where the close search for an opener at `p` goes on in the line
+    /// starting at `ls`, if it goes on there: past the line start of a
+    /// paragraph line from a paragraph line, past the markers of a line of
+    /// the same `cont` frames alone from such a line, whose content is not
+    /// `sep` and `tab` bytes alone. The caller has told the line is not
+    /// blank. `run` keeps the opener line's reading across the calls of one
     /// search.
     #[inline(never)]
     pub(crate) fn crosses(
@@ -495,39 +510,137 @@ impl<'m> LineReader<'m> {
         src: &[u8],
         p: usize,
         ls: usize,
-        para: &mut Option<bool>,
-    ) -> bool {
-        *para.get_or_insert_with(|| self.para_at(src, p)) && self.is_para(src, ls)
+        run: &mut Option<Run>,
+    ) -> Option<usize> {
+        match *run.get_or_insert_with(|| self.run_at(src, p)) {
+            Run::Para => self.is_para(src, ls).then_some(ls),
+            Run::Cont {
+                depth: d,
+                ls: ols,
+                le: ole,
+            } => {
+                if ls >= src.len() || !self.classes.simple.contains(src[ls]) {
+                    return None;
+                }
+                let le = find_line_end(src, ls, self.lines.eol);
+                let le = self.lines.content_end(src, ls, le);
+                match self.lines.classify(src, ls, le) {
+                    LineKind::Cont {
+                        cs,
+                        depth,
+                        item: false,
+                    } if depth == d
+                        && self.lines.same_markers(src, (ols, ole), (ls, le), d)
+                        && !self.lines.blank(src, cs, le) =>
+                    {
+                        Some(cs)
+                    }
+                    _ => None,
+                }
+            }
+            Run::Line => None,
+        }
+    }
+
+    /// The inline run the line holding `p` is in.
+    fn run_at(&mut self, src: &[u8], p: usize) -> Run {
+        if !self.rules {
+            return Run::Para;
+        }
+        let line = match self.slot {
+            Some(s) if s.ls <= p && p <= s.le => s,
+            _ => {
+                let ls = memchr::memrchr(self.lines.eol, &src[..p]).map_or(0, |i| i + 1);
+                self.read(src, ls, p)
+            }
+        };
+        match line.kind {
+            LineKind::Para => Run::Para,
+            LineKind::Cont {
+                depth, item: false, ..
+            } => Run::Cont {
+                depth,
+                ls: line.ls,
+                le: line.le,
+            },
+            _ => Run::Line,
+        }
     }
 
     /// Is the line holding `p` a paragraph line?
+    #[cfg(test)]
     fn para_at(&mut self, src: &[u8], p: usize) -> bool {
-        if !self.rules {
-            return true;
-        }
-        if let Some(s) = self.slot {
-            if s.ls <= p && p <= s.le {
-                return s.kind == LineKind::Para;
-            }
-        }
-        let ls = memchr::memrchr(self.lines.eol, &src[..p]).map_or(0, |i| i + 1);
-        self.read(src, ls, p).kind == LineKind::Para
+        self.run_at(src, p) == Run::Para
     }
 
     /// Is the line starting at `ls` a paragraph line? A line whose first
-    /// byte begins no rule is one without further reading.
+    /// byte begins no rule is one without further reading. The caller tells
+    /// a blank line first (see [`LineBreaks::ends_paragraph`]).
     fn is_para(&self, src: &[u8], ls: usize) -> bool {
+        if ls >= src.len() {
+            return true;
+        }
+        let b = src[ls];
+        let le = find_line_end(src, ls, self.lines.eol);
         !self.rules
-            || ls >= src.len()
-            || !self.classes.starts.contains(src[ls])
+            || !self.classes.starts.contains(b)
             || self
                 .lines
-                .classify(src, ls, find_line_end(src, ls, self.lines.eol))
+                .classify(src, ls, self.lines.content_end(src, ls, le))
                 == LineKind::Para
     }
 }
 
+/// The inline run of a line, as far as the lines after it go: a paragraph
+/// run, a run of the `depth` `cont` frames alone whose markers lead the line
+/// `[ls, le)`, or the line's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Run {
+    Para,
+    Cont { depth: usize, ls: usize, le: usize },
+    Line,
+}
+
 impl LineModel {
+    /// How the model's lines end, for the paragraph-bounded scans.
+    #[inline]
+    pub const fn breaks(&self) -> LineBreaks {
+        LineBreaks::new(self.eol, self.crlf, &[self.sep, self.tab])
+    }
+
+    /// Where the content of the line `[ls, le)`, `le` its `eol` or the end
+    /// of input, ends: before the `\r` right before `le` with `crlf`.
+    #[inline]
+    pub(crate) fn content_end(&self, src: &[u8], ls: usize, le: usize) -> usize {
+        if self.crlf && le > ls && src[le - 1] == b'\r' {
+            le - 1
+        } else {
+            le
+        }
+    }
+
+    /// Do the lines `a` and `b`, as `(start, end)`, each led by `depth`
+    /// `cont` markers, have the same marker bytes, outermost first?
+    fn same_markers(&self, src: &[u8], a: (usize, usize), b: (usize, usize), depth: usize) -> bool {
+        let (mut o, mut c) = (a.0, b.0);
+        for _ in 0..depth {
+            if o >= a.1 || c >= b.1 || src[o] != src[c] {
+                return false;
+            }
+            o = self.past_marker(src, o, a.1);
+            c = self.past_marker(src, c, b.1);
+        }
+        true
+    }
+
+    /// Is `src[from..to]` `sep` and `tab` bytes alone?
+    #[inline]
+    pub(crate) fn blank(&self, src: &[u8], from: usize, to: usize) -> bool {
+        src[from..to]
+            .iter()
+            .all(|&b| b == self.sep || b == self.tab)
+    }
+
     /// Position just past a marker at `p`: the marker byte plus one optional
     /// `sep`/`tab`.
     #[inline]
@@ -577,14 +690,22 @@ impl LineModel {
         if depth < self.max_nest {
             if let Some((cs, rule)) = self.block_item(src, cur, le) {
                 return if depth > 0 {
-                    LineKind::Cont { cs }
+                    LineKind::Cont {
+                        cs,
+                        depth,
+                        item: true,
+                    }
                 } else {
                     LineKind::Block { cs, rule }
                 };
             }
         }
         if depth > 0 {
-            return LineKind::Cont { cs: cur };
+            return LineKind::Cont {
+                cs: cur,
+                depth,
+                item: false,
+            };
         }
         match self.line_rule(src, ls, le) {
             Some((cs, rule)) => LineKind::Line { cs, rule },
@@ -835,8 +956,9 @@ impl LineModel {
         let len = src.len();
         let mut ls = if open_le < len { open_le + 1 } else { len };
         while ls < len {
-            let le = find_line_end(src, ls, self.eol);
-            if ls < le {
+            let eol = find_line_end(src, ls, self.eol);
+            let le = self.content_end(src, ls, eol);
+            if !self.blank(src, ls, le) {
                 let (mut o, mut c) = (open_ls, ls);
                 for _ in 0..depth {
                     if c < le && src[c] == src[o] {
@@ -847,10 +969,10 @@ impl LineModel {
                     }
                 }
                 if fence_closes(src, c, le, byte, count, self.sep, self.tab) {
-                    return (le, if le < len { le + 1 } else { len });
+                    return (eol, if eol < len { eol + 1 } else { len });
                 }
             }
-            ls = if le < len { le + 1 } else { len };
+            ls = if eol < len { eol + 1 } else { len };
         }
         (len, len)
     }
@@ -927,6 +1049,7 @@ impl ParseContext {
     ) -> Self {
         let len = source.len();
         let eol = lines.eol;
+        let breaks = lines.breaks();
         let mut spans: Vec<Span> = Vec::with_capacity(cap_hint);
 
         // One deduplicated needle set — fence bytes and opaque triggers
@@ -955,6 +1078,8 @@ impl ParseContext {
         // search ends: no unescaped close byte lies between that search's
         // start, before every later opener, and here.
         let mut asym_dead: Vec<usize> = vec![0; asym.len()];
+        // Per `asym` rule with `balanced = true`, its failed ring searches.
+        let mut rings: Vec<Rings> = vec![Rings::default(); asym.len()];
         let mut pos: usize = 0;
         while pos < len {
             let Some(r) = find(&source[pos..]) else {
@@ -972,9 +1097,9 @@ impl ParseContext {
             let fence_byte = classes.fences.contains(b);
             if fence_byte && (p == 0 || source[p - 1] == eol) {
                 let le = find_line_end(source, p, eol);
-                if let Some((byte, count)) = lines.fence_at(source, p, le) {
-                    let end =
-                        fence_close_scan(source, le, len, byte, count, eol, lines.sep, lines.tab);
+                let ce = lines.content_end(source, p, le);
+                if let Some((byte, count)) = lines.fence_at(source, p, ce) {
+                    let end = fence_close_scan(source, le, len, byte, count, &lines);
                     spans.push(Span::new(p as u32, end as u32));
                     pos = if end < len { end + 1 } else { len };
                     continue;
@@ -991,9 +1116,8 @@ impl ParseContext {
                     {
                         if p == at {
                             let (end, resume) = if depth == 0 {
-                                let end = fence_close_scan(
-                                    source, line.le, len, byte, count, eol, lines.sep, lines.tab,
-                                );
+                                let end =
+                                    fence_close_scan(source, line.le, len, byte, count, &lines);
                                 (end, if end < len { end + 1 } else { len })
                             } else {
                                 lines.nested_fence_end(source, line.ls, line.le, byte, count, depth)
@@ -1057,14 +1181,15 @@ impl ParseContext {
             }
 
             // The close search stays inside the opener's inline run: the rest
-            // of a block line, or the paragraph run of a paragraph line. The
-            // opener's line is read when the search first meets its end.
-            let mut para: Option<bool> = None;
-            let enter_line = |ls: usize| reader.crosses(source, p, ls, &mut para).then_some(ls);
+            // of a block line, or the run of a paragraph line or of a line of
+            // `cont` frames alone. The opener's line is read when the search
+            // first meets its end.
+            let mut run: Option<Run> = None;
+            let enter_line = |ls: usize| reader.crosses(source, p, ls, &mut run);
 
             match rule {
                 Opaque::Sym(_) => {
-                    match sym_close(source, run_end, b, count, escape, eol, enter_line) {
+                    match sym_close(source, run_end, b, count, escape, breaks, enter_line) {
                         Some(close_end) => {
                             spans.push(Span::new(p as u32, close_end as u32));
                             pos = close_end;
@@ -1073,14 +1198,17 @@ impl ParseContext {
                     }
                 }
                 Opaque::Asym(ri) if asym[ri].3 => {
-                    let (open, close) = (asym[ri].0, asym[ri].1);
-                    let frames = (p, run_end, lines.max_nest);
-                    match frames_end(source, frames, open, close, escape, eol, enter_line) {
-                        Some(end) => {
-                            spans.push(Span::new(p as u32, end as u32));
-                            pos = end;
+                    // Each byte of the run opens a ring in turn, until one
+                    // closes.
+                    let bytes = (asym[ri].0, asym[ri].1, escape, breaks);
+                    let mut enter_line = enter_line;
+                    pos = run_end;
+                    for o in p..run_end {
+                        if let Some(q) = rings[ri].close(source, o, bytes, &mut enter_line) {
+                            spans.push(Span::new(o as u32, (q + 1) as u32));
+                            pos = q + 1;
+                            break;
                         }
-                        None => pos = run_end,
                     }
                 }
                 Opaque::Asym(ri) => {
@@ -1088,7 +1216,7 @@ impl ParseContext {
                         pos = run_end;
                         continue;
                     }
-                    match asym_close(source, run_end, asym[ri].1, escape, eol, enter_line) {
+                    match asym_close(source, run_end, asym[ri].1, escape, breaks, enter_line) {
                         Ok(cp) => {
                             spans.push(Span::new(p as u32, (cp + 1) as u32));
                             pos = cp + 1;
@@ -1101,8 +1229,16 @@ impl ParseContext {
                 }
                 Opaque::Chain(ri) => {
                     let memo = &mut chain_memo[ri];
-                    match chain_match(source, run_end, &chained[ri], escape, eol, enter_line, memo)
-                        .map(|(_, cu)| cu + 1)
+                    match chain_match(
+                        source,
+                        run_end,
+                        &chained[ri],
+                        escape,
+                        breaks,
+                        enter_line,
+                        memo,
+                    )
+                    .map(|(_, cu)| cu + 1)
                     {
                         Some(end) => {
                             spans.push(Span::new((run_end - 1) as u32, end as u32));
@@ -1159,7 +1295,7 @@ fn build_needles(
         push(o, &mut n);
     }
     for spec in chained {
-        push(spec.text.0, &mut n);
+        push(spec.first.0, &mut n);
     }
     (n <= MAX_NEEDLES).then_some(n)
 }
@@ -1207,7 +1343,7 @@ enum Opaque {
 /// matters for a grammar that breaks that.
 #[inline]
 fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec], chained: &[ChainSpec]) -> Option<Opaque> {
-    if let Some(ri) = chained.iter().position(|spec| spec.text.0 == b) {
+    if let Some(ri) = chained.iter().position(|spec| spec.first.0 == b) {
         return Some(Opaque::Chain(ri));
     }
     if let Some(ri) = sym.iter().position(|&(sb, _)| sb == b) {
@@ -1262,17 +1398,15 @@ fn fence_closes(
 /// the fence byte, line-start check, then `parse_block!`'s close condition.
 /// Returns the close line's end, or `len` for an unclosed fence. Content
 /// lines inside the block are never walked.
-#[allow(clippy::too_many_arguments)]
 fn fence_close_scan(
     src: &[u8],
     open_line_end: usize,
     len: usize,
     byte: u8,
     open_count: u32,
-    eol: u8,
-    sep: u8,
-    tab: u8,
+    lines: &LineModel,
 ) -> usize {
+    let eol = lines.eol;
     let mut search = if open_line_end < len {
         open_line_end + 1
     } else {
@@ -1288,7 +1422,8 @@ fn fence_close_scan(
             continue;
         }
         let cle = find_line_end(src, q, eol);
-        if fence_closes(src, q, cle, byte, open_count, sep, tab) {
+        let ce = lines.content_end(src, q, cle);
+        if fence_closes(src, q, ce, byte, open_count, lines.sep, lines.tab) {
             return cle;
         }
         search = if cle < len { cle + 1 } else { len };
@@ -1305,13 +1440,13 @@ fn sym_close(
     byte: u8,
     count: u32,
     escape: u8,
-    eol: u8,
+    breaks: LineBreaks,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Option<usize> {
     let len = src.len();
     let mut j = from;
     loop {
-        let q = next_in_paragraph(src, j, byte, eol, &mut enter_line)?;
+        let q = next_in_paragraph(src, j, byte, breaks, &mut enter_line)?;
         if count_escape(src, q, escape) % 2 == 1 {
             j = q + 1;
             continue;
@@ -1337,83 +1472,17 @@ fn asym_close(
     from: usize,
     close: u8,
     escape: u8,
-    eol: u8,
+    breaks: LineBreaks,
     mut enter_line: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, usize> {
     let mut j = from;
     loop {
-        let q = scan_paragraph(src, j, close, eol, &mut enter_line)?;
+        let q = scan_paragraph(src, j, close, breaks, &mut enter_line)?;
         if count_escape(src, q, escape) % 2 == 1 {
             j = q + 1;
             continue;
         }
         return Ok(q);
-    }
-}
-
-/// The end of the region of a `balanced = true` opaque asymmetric rule
-/// whose open run is `frames.0..frames.1`, in a grammar of `max_nest`
-/// `frames.2`, or `None` when the run opens no frame.
-///
-/// As in the full parse, every byte of an open run opens a frame while
-/// fewer than `max_nest` are open, and past that pairs with the next close,
-/// both dropped; every byte of a close run closes the innermost frame, and
-/// nothing else is read inside them. The region ends after the close of the
-/// outermost frame, or where the inline run `enter_line` bounds ends when
-/// it never closes: no other rule matches inside an open opaque frame.
-#[inline]
-fn frames_end(
-    src: &[u8],
-    frames: (usize, usize, usize),
-    open: u8,
-    close: u8,
-    escape: u8,
-    eol: u8,
-    enter_line: impl FnMut(usize) -> Option<usize>,
-) -> Option<usize> {
-    let (p, run_end, max_nest) = frames;
-    if max_nest == 0 {
-        return None;
-    }
-    let (mut depth, mut overflow) = (0usize, 0u32);
-    let mut take = |b: u8| -> bool {
-        if b == open {
-            if depth < max_nest {
-                depth += 1;
-                overflow = 0;
-            } else {
-                overflow += 1;
-            }
-        } else if overflow > 0 {
-            overflow -= 1;
-        } else {
-            depth -= 1;
-        }
-        depth == 0
-    };
-    for _ in p..run_end {
-        take(open);
-    }
-    let find = |h: &[u8]| memchr::memchr3(open, close, eol, h);
-    let mut enter_line = enter_line;
-    let mut j = run_end;
-    loop {
-        let q = match scan_paragraph_by(src, j, eol, find, &mut enter_line) {
-            Ok(q) => q,
-            Err(stop) => return Some(stop),
-        };
-        if count_escape(src, q, escape) % 2 == 1 {
-            j = q + 1;
-            continue;
-        }
-        let b = src[q];
-        j = q;
-        while j < src.len() && src[j] == b {
-            j += 1;
-            if take(b) {
-                return Some(j);
-            }
-        }
     }
 }
 
@@ -1490,11 +1559,13 @@ impl ContextCursor<'_> {
 mod tests {
     use super::*;
 
-    /// meon-md's line rules.
-    const MD_LINES: LineModel = LineModel {
+    /// An example grammar's line rules: ``` fences, `>` blocks, `-`/`*`/`+`
+    /// and numbered items, `#` lines and `-`/`*`/`_` uniform lines.
+    const EXAMPLE_LINES: LineModel = LineModel {
         eol: b'\n',
         sep: b' ',
         tab: b'\t',
+        crlf: false,
         max_nest: 4,
         block_simple: &[
             BlockSimpleRule::Fence {
@@ -1527,6 +1598,7 @@ mod tests {
             eol: b'\n',
             sep: b' ',
             tab: b'\t',
+            crlf: false,
             max_nest: 1,
             block_simple,
             block: &[],
@@ -1534,24 +1606,24 @@ mod tests {
         }
     }
 
-    /// meon-md's `[text](url)` links.
-    const MD_LINKS: ChainSpec = ChainSpec {
-        text: (b'[', b']'),
-        text_balanced: false,
-        url: (b'(', b')'),
-        url_balanced: false,
+    /// The example grammar's `chained` rule: `[`…`]` then `(`…`)`.
+    const EXAMPLE_LINKS: ChainSpec = ChainSpec {
+        first: (b'[', b']'),
+        first_balanced: false,
+        second: (b'(', b')'),
+        second_balanced: false,
     };
 
-    fn md_context(src: &[u8]) -> ParseContext {
-        // meon-md's opaque rule set: ``` fences, `code` spans, <autolinks>,
-        // [links](url).
+    fn example_context(src: &[u8]) -> ParseContext {
+        // The example grammar's opaque rules: ``` fences, `` ` `` pairs, `<`…`>`
+        // and the `chained` rule.
         ParseContext::build(
             src,
             b'\\',
-            MD_LINES,
+            EXAMPLE_LINES,
             &[(b'`', 1)],
             &[(b'<', b'>', 1, false)],
-            &[MD_LINKS],
+            &[EXAMPLE_LINKS],
             0,
         )
     }
@@ -1572,21 +1644,21 @@ mod tests {
     fn test_01_empty() {
         let m = ParseContext::build(b"abc", b'\\', LineModel::default(), &[], &[], &[], 0);
         assert!(m.spans().is_empty());
-        let m = md_context(b"");
+        let m = example_context(b"");
         assert!(m.spans().is_empty());
     }
 
     // 02. A code span covers its full extent, delimiters included
     #[test]
     fn test_02_code_span() {
-        let m = md_context(b"a `code` b");
+        let m = example_context(b"a `code` b");
         assert_eq!(m.spans(), &[Span::new(2, 8)]);
     }
 
     // 03. An autolink covers open through close byte
     #[test]
     fn test_03_autolink() {
-        let m = md_context(b"x <http://a> y");
+        let m = example_context(b"x <http://a> y");
         assert_eq!(m.spans(), &[Span::new(2, 12)]);
     }
 
@@ -1594,7 +1666,7 @@ mod tests {
     #[test]
     fn test_04_fence() {
         let src = b"before\n```\n**not bold**\n```\nafter";
-        let m = md_context(src);
+        let m = example_context(src);
         assert_eq!(m.spans(), &[Span::new(7, 27)]);
     }
 
@@ -1602,7 +1674,7 @@ mod tests {
     #[test]
     fn test_05_unclosed_fence() {
         let src = b"a\n```\nrest never closes";
-        let m = md_context(src);
+        let m = example_context(src);
         assert_eq!(m.spans(), &[Span::new(2, src.len() as u32)]);
     }
 
@@ -1610,7 +1682,7 @@ mod tests {
     //     of its own; scanning resumes after the code span
     #[test]
     fn test_06_leftmost_wins() {
-        let m = md_context(b"`a <b` c> d <e>");
+        let m = example_context(b"`a <b` c> d <e>");
         // code span [0,6); the `<b` inside it is invisible; `c>` alone is no
         // autolink (no `<`), the next real autolink is `<e>` at 12..15.
         assert_eq!(m.spans(), &[Span::new(0, 6), Span::new(12, 15)]);
@@ -1620,7 +1692,7 @@ mod tests {
     //     unescaped delimiter becomes the opener (full-parse semantics)
     #[test]
     fn test_07_escaped_open() {
-        let m = md_context(b"a \\`not code` b `real`");
+        let m = example_context(b"a \\`not code` b `real`");
         // `\`` at 3 is literal; the backtick at 12 opens, closing at 16.
         assert_eq!(m.spans(), &[Span::new(12, 17)]);
     }
@@ -1628,14 +1700,14 @@ mod tests {
     // 08. Escaped closing delimiter is skipped by the close search
     #[test]
     fn test_08_escaped_close() {
-        let m = md_context(b"`a\\`b` rest");
+        let m = example_context(b"`a\\`b` rest");
         assert_eq!(m.spans(), &[Span::new(0, 6)]);
     }
 
     // 09. Unclosed inline construct covers nothing
     #[test]
     fn test_09_unclosed_inline() {
-        let m = md_context(b"a `never closes");
+        let m = example_context(b"a `never closes");
         assert!(m.spans().is_empty());
     }
 
@@ -1645,7 +1717,7 @@ mod tests {
     //     paragraph lines are one inline run
     #[test]
     fn test_10_pair_spans_single_newline() {
-        let m = md_context(b"a `x\ny` b");
+        let m = example_context(b"a `x\ny` b");
         assert_eq!(m.spans(), &[Span::new(2, 7)]);
     }
 
@@ -1653,7 +1725,7 @@ mod tests {
     //     opaque constructs in different paragraphs never pair.
     #[test]
     fn test_11_empty_line_aborts_open() {
-        let m = md_context(b"a `x\n\ny` b");
+        let m = example_context(b"a `x\n\ny` b");
         assert!(m.spans().is_empty());
     }
 
@@ -1662,14 +1734,14 @@ mod tests {
     //     region.
     #[test]
     fn test_12_fence_aborts_pending_open() {
-        let m = md_context(b"a `x\n```\ncode\n```\n");
+        let m = example_context(b"a `x\n```\ncode\n```\n");
         assert_eq!(m.spans(), &[Span::new(5, 17)]);
     }
 
     // 13. A fence info line with a trailing fence byte does not open
     #[test]
     fn test_13_fence_info_line_reject() {
-        let m = md_context(b"``` info ` tick\ncontent\n```\n");
+        let m = example_context(b"``` info ` tick\ncontent\n```\n");
         // The open line is rejected (` on the info line), so the *inline*
         // code-span rule sees the ``` run (count 3 != 1, no match); third
         // line's ``` opens an (unclosed) fence to EOF.
@@ -1680,14 +1752,14 @@ mod tests {
     #[test]
     fn test_14_fence_close_count() {
         let src = b"````\nx\n```\n````\ny";
-        let m = md_context(src);
+        let m = example_context(src);
         assert_eq!(m.spans(), &[Span::new(0, 15)]);
     }
 
     // 15. Cursor: monotone queries, covering_end jumps
     #[test]
     fn test_15_cursor() {
-        let m = md_context(b"a `b` c `d` e");
+        let m = example_context(b"a `b` c `d` e");
         let mut cur = m.cursor();
         assert!(!cur.is_covered(0));
         assert_eq!(cur.covering_end(2), Some(5));
@@ -1700,7 +1772,7 @@ mod tests {
     // 16. Cursor copies fork independently
     #[test]
     fn test_16_cursor_copy() {
-        let m = md_context(b"a `b` c `d` e");
+        let m = example_context(b"a `b` c `d` e");
         let mut cur = m.cursor();
         assert!(!cur.is_covered(1));
         let mut fork = cur;
@@ -1786,7 +1858,7 @@ mod tests {
     #[test]
     fn test_22_fence_close_scan_edges() {
         let src = b"```\ncode ` tick\n``` x\n```\nafter";
-        let m = md_context(src);
+        let m = example_context(src);
         assert_eq!(m.spans(), &[Span::new(0, 25)]);
     }
 
@@ -1794,11 +1866,11 @@ mod tests {
     //     yield nothing; escaped close candidates are skipped
     #[test]
     fn test_23_asym_branches() {
-        let m = md_context(b"<<double> x");
+        let m = example_context(b"<<double> x");
         assert!(m.spans().is_empty());
-        let m = md_context(b"a <never closes");
+        let m = example_context(b"a <never closes");
         assert!(m.spans().is_empty());
-        let m = md_context(b"<a\\>b> c");
+        let m = example_context(b"<a\\>b> c");
         assert_eq!(m.spans(), &[Span::new(0, 6)]);
     }
 
@@ -1806,31 +1878,31 @@ mod tests {
     //     aborts on an empty line and on a fence-opening line
     #[test]
     fn test_24_asym_paragraph_bounds() {
-        let m = md_context(b"<a\nb> c");
+        let m = example_context(b"<a\nb> c");
         assert_eq!(m.spans(), &[Span::new(0, 5)]);
-        let m = md_context(b"<a\n\nb> c");
+        let m = example_context(b"<a\n\nb> c");
         assert!(m.spans().is_empty());
-        let m = md_context(b"<a\n```\nx\n```\nb> c");
+        let m = example_context(b"<a\n```\nx\n```\nb> c");
         assert_eq!(m.spans(), &[Span::new(3, 12)]);
     }
 
     // 25. Symmetric close search skips a wrong-count closing run
     #[test]
     fn test_25_sym_close_run_mismatch() {
-        let m = md_context(b"`a``b` x");
+        let m = example_context(b"`a``b` x");
         assert_eq!(m.spans(), &[Span::new(0, 6)]);
     }
 
     // ---- Line classification ----------------------------------------- //
 
-    // 26. Each line kind of meon-md: fence, nested fence, cont, cont with an
+    // 26. Each line kind of the example grammar: fence, nested fence, cont, cont with an
     //     item, item, numbered item, heading, thematic break, empty heading,
     //     paragraph
     #[test]
     fn test_26_classify_kinds() {
         let src = b"```\n> ```\n> > a\n> - b\n - c\n12. d\n## e\n* * *\n---\n#\nplain\n";
         assert_eq!(
-            kinds(src, MD_LINES),
+            kinds(src, EXAMPLE_LINES),
             vec![
                 LineKind::Fence {
                     at: 0,
@@ -1844,8 +1916,16 @@ mod tests {
                     count: 3,
                     depth: 1,
                 },
-                LineKind::Cont { cs: 14 },
-                LineKind::Cont { cs: 20 },
+                LineKind::Cont {
+                    cs: 14,
+                    depth: 2,
+                    item: false,
+                },
+                LineKind::Cont {
+                    cs: 20,
+                    depth: 1,
+                    item: true,
+                },
                 LineKind::Block { cs: 25, rule: 0 },
                 LineKind::Block { cs: 31, rule: 1 },
                 LineKind::Line { cs: 36, rule: 0 },
@@ -1861,14 +1941,26 @@ mod tests {
     //     markers, a fence and a block item are inline content
     #[test]
     fn test_27_classify_max_nest() {
-        let mut model = MD_LINES;
+        let mut model = EXAMPLE_LINES;
         model.max_nest = 1;
         assert_eq!(
             kinds(b"> ```\n> > a\n> - b\n", model),
             vec![
-                LineKind::Cont { cs: 2 },
-                LineKind::Cont { cs: 8 },
-                LineKind::Cont { cs: 14 },
+                LineKind::Cont {
+                    cs: 2,
+                    depth: 1,
+                    item: false,
+                },
+                LineKind::Cont {
+                    cs: 8,
+                    depth: 1,
+                    item: false,
+                },
+                LineKind::Cont {
+                    cs: 14,
+                    depth: 1,
+                    item: false,
+                },
             ]
         );
         model.max_nest = 0;
@@ -1889,7 +1981,11 @@ mod tests {
     #[test]
     fn test_28_classify_near_misses() {
         let src = b"-a\n####### x\n_ _\t_\n--- x\n1234567890. y\n ```\n";
-        assert!(kinds(src, MD_LINES).iter().all(|k| *k == LineKind::Para));
+        assert!(
+            kinds(src, EXAMPLE_LINES)
+                .iter()
+                .all(|k| *k == LineKind::Para)
+        );
     }
 
     // 29. Rules match in declaration order within a section, and the
@@ -1950,21 +2046,35 @@ mod tests {
     //     bullet, a heading, a blockquote line
     #[test]
     fn test_30_paragraph_run_ends_at_block_line() {
-        assert!(md_context(b"`x\n- y` z\n").spans().is_empty());
+        assert!(example_context(b"`x\n- y` z\n").spans().is_empty());
         assert_eq!(
-            md_context(b"The `bar\n## H `code`\n").spans(),
+            example_context(b"The `bar\n## H `code`\n").spans(),
             &[Span::new(14, 20)]
         );
-        assert!(md_context(b"`x\n> y`\n> > z\n").spans().is_empty());
+        assert!(example_context(b"`x\n> y`\n> > z\n").spans().is_empty());
     }
 
-    // 31. On a block line the inline run is the line: a pair does not reach
-    //     the next line, paragraph line or not
+    // 31. On a block item line the inline run is the line: a pair does not
+    //     reach the next line, paragraph line or not. Lines of the same
+    //     `cont` frames alone are one run, read past their markers; another
+    //     depth, an item, or blank content ends it
     #[test]
     fn test_31_block_line_run_is_one_line() {
-        assert!(md_context(b"- `a\nb`\n").spans().is_empty());
-        assert!(md_context(b"> `x\n> y`\n").spans().is_empty());
-        assert_eq!(md_context(b"- `a` `b\n- c`\n").spans(), &[Span::new(2, 5)]);
+        assert!(example_context(b"- `a\nb`\n").spans().is_empty());
+        assert_eq!(
+            example_context(b"- `a` `b\n- c`\n").spans(),
+            &[Span::new(2, 5)]
+        );
+        assert_eq!(example_context(b"> `x\n> y`\n").spans(), &[Span::new(2, 9)]);
+        assert_eq!(
+            example_context(b"> > `x\n> > y`\n").spans(),
+            &[Span::new(4, 13)]
+        );
+        assert!(example_context(b"> `x\n> > y`\n").spans().is_empty());
+        assert!(example_context(b"> - `x\n> y`\n").spans().is_empty());
+        assert!(example_context(b"> `x\n> - y`\n").spans().is_empty());
+        assert!(example_context(b"> `x\n>  \n> y`\n").spans().is_empty());
+        assert!(example_context(b"`x\n   \ny`\n").spans().is_empty());
     }
 
     // 32. Marker bytes are not triggers, even when a trigger byte doubles as
@@ -2013,7 +2123,7 @@ mod tests {
         };
         let m = ParseContext::build(b"+ a +\n", b'\\', PLUS, &[(b'+', 1)], &[], &[], 0);
         assert!(m.spans().is_empty());
-        let mut flat = MD_LINES;
+        let mut flat = EXAMPLE_LINES;
         flat.max_nest = 0;
         let m = ParseContext::build(b"```\n`x`\n```\n", b'\\', flat, &[(b'`', 1)], &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(4, 7)]);
@@ -2024,7 +2134,7 @@ mod tests {
     // 34. A fence after `cont` markers covers its run through the close line
     #[test]
     fn test_34_nested_fence() {
-        let m = md_context(b"> ```\n> *x* `y`\n> ```\nafter `z`\n");
+        let m = example_context(b"> ```\n> *x* `y`\n> ```\nafter `z`\n");
         assert_eq!(m.spans(), &[Span::new(2, 21), Span::new(28, 31)]);
     }
 
@@ -2032,7 +2142,7 @@ mod tests {
     //     start and is read again; an empty line does not
     #[test]
     fn test_35_nested_fence_ends_with_its_frame() {
-        let m = md_context(b"> ```\n\n> a\nb `c`\n");
+        let m = example_context(b"> ```\n\n> a\nb `c`\n");
         assert_eq!(m.spans(), &[Span::new(2, 11), Span::new(13, 16)]);
     }
 
@@ -2040,7 +2150,7 @@ mod tests {
     //     line closes the frame, not the fence, and opens a fence of its own
     #[test]
     fn test_36_nested_fence_close_needs_markers() {
-        let m = md_context(b"> ```\n> a\n```\nb\n");
+        let m = example_context(b"> ```\n> a\n```\nb\n");
         assert_eq!(m.spans(), &[Span::new(2, 10), Span::new(10, 16)]);
     }
 
@@ -2048,9 +2158,9 @@ mod tests {
     //     content line are content
     #[test]
     fn test_37_nested_fence_depth() {
-        let m = md_context(b"> > ```\n> > > a\n> > ```\n");
+        let m = example_context(b"> > ```\n> > > a\n> > ```\n");
         assert_eq!(m.spans(), &[Span::new(4, 23)]);
-        let m = md_context(b"> > ```\n> a\n");
+        let m = example_context(b"> > ```\n> a\n");
         assert_eq!(m.spans(), &[Span::new(4, 8)]);
     }
 
@@ -2058,7 +2168,7 @@ mod tests {
     //     not open
     #[test]
     fn test_38_nested_fence_needs_room() {
-        let mut lines = MD_LINES;
+        let mut lines = EXAMPLE_LINES;
         lines.max_nest = 1;
         let m = ParseContext::build(
             b"> ```\n> `x`\n> ```\n",
@@ -2077,7 +2187,7 @@ mod tests {
     // 39. A cursor answers queries in any order, stepping back as needed
     #[test]
     fn test_39_is_covered_any_order() {
-        let m = md_context(b"a `b` c `d` e");
+        let m = example_context(b"a `b` c `d` e");
         let mut cur = m.cursor();
         for (pos, covered) in [
             (9, true),
@@ -2097,7 +2207,7 @@ mod tests {
     #[test]
     fn test_40_admits() {
         let src = b"```\n# a\n```\n* * *\n## `b`\n- `c`\n> d\n";
-        let m = md_context(src);
+        let m = example_context(src);
         // The span a line-family iterator yields for `line`: from `skip`
         // bytes in to the line end.
         let item = |line: &[u8], skip: usize| {
@@ -2123,7 +2233,7 @@ mod tests {
                 .admits(b"* * *", Span::new(0, 5), RuleIndex::Line(1))
         );
         // With `max_nest = 0` no block item opens.
-        let mut flat = MD_LINES;
+        let mut flat = EXAMPLE_LINES;
         flat.max_nest = 0;
         let m = ParseContext::build(b"- x\n", b'\\', flat, &[], &[], &[], 0);
         assert!(
@@ -2138,7 +2248,7 @@ mod tests {
     #[test]
     fn test_41_reader_lead() {
         let src = b"a *b*\n* * *x\n> > *c\n";
-        let m = md_context(src);
+        let m = example_context(src);
         let mut r = m.reader();
         assert!(r.lead(src, 2).is_none());
         assert!(r.lead(src, 4).is_none());
@@ -2146,14 +2256,21 @@ mod tests {
         assert_eq!(line.kind, LineKind::Block { cs: 8, rule: 0 });
         assert_eq!(r.lead(src, 10).map(|l| l.ls), Some(6));
         let line = r.lead(src, 17).expect("after the quote markers");
-        assert_eq!(line.kind, LineKind::Cont { cs: 17 });
+        assert_eq!(
+            line.kind,
+            LineKind::Cont {
+                cs: 17,
+                depth: 2,
+                item: false
+            }
+        );
         assert!(r.para_at(src, 2));
         assert!(!r.para_at(src, 17));
         assert!(!r.is_para(src, 6));
         assert!(r.is_para(src, 0));
-        assert!(!r.crosses(src, 17, 6, &mut None));
-        assert!(!r.crosses(src, 2, 6, &mut None));
-        assert!(!r.crosses(src, 2, 13, &mut Some(true)));
+        assert!(r.crosses(src, 17, 6, &mut None).is_none());
+        assert!(r.crosses(src, 2, 6, &mut None).is_none());
+        assert!(r.crosses(src, 2, 13, &mut Some(Run::Para)).is_none());
     }
 
     // 42. Hits along a long run of marker bytes see what lies before the
@@ -2166,7 +2283,7 @@ mod tests {
         let tail = src.len();
         src.extend_from_slice(&b"- ".repeat(5000));
         src.extend_from_slice(b"*y*\n");
-        let m = md_context(&src);
+        let m = example_context(&src);
         let mut r = m.reader();
         for p in (2..tail - 1).step_by(2) {
             assert!(r.lead(&src, p).is_none(), "pos {p}");
@@ -2180,7 +2297,7 @@ mod tests {
     // ---- Opaque `chained` rules ----------------------------------------- //
 
     fn regions(src: &[u8]) -> Vec<(u32, u32)> {
-        md_context(src)
+        example_context(src)
             .spans()
             .iter()
             .map(|s| (s.start, s.end))
@@ -2188,14 +2305,14 @@ mod tests {
     }
 
     fn chain_regions(src: &[u8], spec: ChainSpec) -> Vec<(u32, u32)> {
-        ParseContext::build(src, b'\\', MD_LINES, &[(b'`', 1)], &[], &[spec], 0)
+        ParseContext::build(src, b'\\', EXAMPLE_LINES, &[(b'`', 1)], &[], &[spec], 0)
             .spans()
             .iter()
             .map(|s| (s.start, s.end))
             .collect()
     }
 
-    // 43. A link covers its open byte through the url close
+    // 43. A link covers its open byte through the second close
     #[test]
     fn test_43_link_region() {
         assert_eq!(regions(b"a [b *c*](d) e"), vec![(2, 12)]);
@@ -2214,11 +2331,11 @@ mod tests {
     // 45. A link that fails resumes the scan right after its open run
     #[test]
     fn test_45_failed_link_resumes_after_open() {
-        // No url open right after the text close.
+        // No second open right after the first close.
         assert_eq!(regions(b"[a `b`] (c)"), vec![(3, 6)]);
-        // No text close.
+        // No first close.
         assert_eq!(regions(b"[a `b`"), vec![(3, 6)]);
-        // No url close: the code span inside the url is found.
+        // No second close: the code span inside the url is found.
         assert_eq!(regions(b"[a](`x`"), vec![(4, 7)]);
     }
 
@@ -2230,9 +2347,9 @@ mod tests {
         assert!(regions(b"\\[a](b)").is_empty());
         assert_eq!(regions(b"\\[[a](b)"), vec![(2, 8)]);
         assert_eq!(regions(b"![a](b)"), vec![(1, 7)]);
-        // An escaped text close is skipped.
+        // An escaped first close is skipped.
         assert_eq!(regions(b"[a\\](b)](c)"), vec![(0, 11)]);
-        // An escaped url close is skipped.
+        // An escaped second close is skipped.
         assert_eq!(regions(b"[a](b\\)c)"), vec![(0, 9)]);
     }
 
@@ -2248,7 +2365,7 @@ mod tests {
         // A bullet line's run is the line.
         assert!(regions(b"- [a\nb](c)").is_empty());
         assert_eq!(regions(b"- [a](b)\n"), vec![(2, 8)]);
-        // The url open must follow the text close on the same line.
+        // The second open must follow the first close on the same line.
         assert!(regions(b"[a]\n(b)").is_empty());
     }
 
@@ -2256,18 +2373,18 @@ mod tests {
     #[test]
     fn test_48_link_balanced() {
         let bal = ChainSpec {
-            text_balanced: true,
-            url_balanced: true,
-            ..MD_LINKS
+            first_balanced: true,
+            second_balanced: true,
+            ..EXAMPLE_LINKS
         };
         assert_eq!(chain_regions(b"[a [b] c](d (e) f)", bal), vec![(0, 18)]);
-        assert!(chain_regions(b"[a [b] c](d (e) f)", MD_LINKS).is_empty());
+        assert!(chain_regions(b"[a [b] c](d (e) f)", EXAMPLE_LINKS).is_empty());
         assert_eq!(chain_regions(b"[a \\[b](c)", bal), vec![(0, 10)]);
         // A close byte met without reaching depth zero is no proof of
         // absence: a later opener inside still balances.
         assert_eq!(chain_regions(b"[a [b](c)", bal), vec![(3, 9)]);
         assert_eq!(chain_regions(b"[a](b (c) [d](e)", bal), vec![(10, 16)]);
-        // A balanced text close serves no other opener: one nested inside
+        // A balanced first close serves no other opener: one nested inside
         // closes earlier.
         assert_eq!(chain_regions(b"[a [b](x) c] d", bal), vec![(3, 9)]);
     }
@@ -2277,18 +2394,18 @@ mod tests {
     //     found for a match that failed after it
     #[test]
     fn test_49_link_memo_windows() {
-        // Absent text close up to the empty line, then a new run.
+        // Absent first close up to the empty line, then a new run.
         assert_eq!(regions(b"[a [b\n\n[c](d)"), vec![(7, 13)]);
         // The first opener's match fails after `]`; the second opener lies
         // past that close and searches anew.
         assert_eq!(regions(b"[a] [b](c)"), vec![(4, 10)]);
-        // The first opener's text close serves the second one too, and the
-        // url open follows neither.
+        // The first opener's first close serves the second one too, and the
+        // second open follows neither.
         assert!(regions(b"[a [b] c").is_empty());
-        // An unbalanced text component ends at its first close: the link
+        // An unbalanced first component ends at its first close: the link
         // takes the inner opener in.
         assert_eq!(regions(b"[a [b](c)"), vec![(0, 9)]);
-        // Absent url close up to the empty line, then a new run.
+        // Absent second close up to the empty line, then a new run.
         assert_eq!(regions(b"[a](b\n\n[c](d)"), vec![(7, 13)]);
         assert!(regions(b"[a](b [c](d").is_empty());
     }
@@ -2309,9 +2426,9 @@ mod tests {
     #[test]
     fn test_51_link_same_open_and_close_byte() {
         let quoted = ChainSpec {
-            text: (b'"', b'"'),
-            text_balanced: true,
-            ..MD_LINKS
+            first: (b'"', b'"'),
+            first_balanced: true,
+            ..EXAMPLE_LINKS
         };
         let src = b"\"a <b\"";
         let m = ParseContext::build(
@@ -2343,7 +2460,7 @@ mod tests {
     fn frame_regions(src: &[u8], max_nest: usize) -> Vec<(u32, u32)> {
         let lines = LineModel {
             max_nest,
-            ..MD_LINES
+            ..EXAMPLE_LINES
         };
         ParseContext::build(
             src,
@@ -2360,10 +2477,10 @@ mod tests {
         .collect()
     }
 
-    // 53. The frames nest, and the match covers the open run through the
-    //     close of the outermost one; nothing else matches inside
+    // 53. The ring covers its first open byte through its close, whatever
+    //     nests in it; nothing else matches inside
     #[test]
-    fn test_53_balanced_frames_nest() {
+    fn test_53_balanced_ring_nests() {
         assert_eq!(frame_regions(b"{a {b} c} `d`", 4), vec![(0, 9), (10, 13)]);
         assert_eq!(frame_regions(b"{{a}} `b`", 4), vec![(0, 5), (6, 9)]);
         assert_eq!(frame_regions(b"{a `}` b} c", 4), vec![(0, 5)]);
@@ -2371,27 +2488,31 @@ mod tests {
         assert_eq!(frame_regions(b"\\{a} `b`", 4), vec![(5, 8)]);
     }
 
-    // 54. A frame that never closes covers to the end of its inline run
+    // 54. A ring that never closes covers nothing, and the next open byte
+    //     tries; the other rules match inside it
     #[test]
-    fn test_54_unclosed_frame_covers_run() {
-        assert_eq!(frame_regions(b"{a {b} `c`", 4), vec![(0, 10)]);
+    fn test_54_unclosed_ring_covers_nothing() {
+        assert_eq!(frame_regions(b"{a {b} `c`", 4), vec![(3, 6), (7, 10)]);
+        assert_eq!(frame_regions(b"{{a} `b`", 4), vec![(1, 4), (5, 8)]);
         assert_eq!(
             frame_regions(b"{a\nb `c`\n\n`d`", 4),
-            vec![(0, 8), (10, 13)]
+            vec![(5, 8), (10, 13)]
         );
-        assert_eq!(frame_regions(b"{a\n# `b`", 4), vec![(0, 2), (5, 8)]);
-        assert_eq!(frame_regions(b"- {a\n`b`", 4), vec![(2, 4), (5, 8)]);
+        assert_eq!(frame_regions(b"{a\n# `b`", 4), vec![(5, 8)]);
+        assert_eq!(frame_regions(b"- {a\n`b`", 4), vec![(5, 8)]);
         let src = b"{a ".repeat(20_000);
-        assert_eq!(frame_regions(&src, 4), vec![(0, 60_000)]);
+        assert_eq!(frame_regions(&src, 4), vec![]);
+        let mut src = vec![b'{'; 100_000];
+        src.extend(std::iter::repeat_n(b'}', 50_000));
+        assert_eq!(frame_regions(&src, 4), vec![(50_000, 150_000)]);
     }
 
-    // 55. Past `max_nest` an open pairs with the next close, both dropped;
-    //     with no room at all the rule opens nothing
+    // 55. `max_nest` plays no part in a ring
     #[test]
-    fn test_55_balanced_frames_cap() {
+    fn test_55_balanced_ring_ignores_max_nest() {
         assert_eq!(frame_regions(b"{a{b}c} `d`", 1), vec![(0, 7), (8, 11)]);
         assert_eq!(frame_regions(b"{{{a}}} `b`", 2), vec![(0, 7), (8, 11)]);
-        assert_eq!(frame_regions(b"{a} `b`", 0), vec![(4, 7)]);
+        assert_eq!(frame_regions(b"{a} `b`", 0), vec![(0, 3), (4, 7)]);
     }
 
     // 56. A `num` rule's digit pattern decides where a paragraph run ends:
@@ -2403,6 +2524,7 @@ mod tests {
             eol: b'\n',
             sep: b' ',
             tab: b'\t',
+            crlf: false,
             max_nest: 1,
             block_simple: &[],
             block: &[BlockRule::Num {
@@ -2425,6 +2547,7 @@ mod tests {
             eol: b'\n',
             sep: b' ',
             tab: b'\t',
+            crlf: false,
             max_nest: 1,
             block_simple: &[],
             block: &[BlockRule::Num {

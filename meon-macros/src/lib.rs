@@ -35,13 +35,13 @@ mod normalize;
 mod strip;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Ident, Literal, TokenStream as TS2, TokenTree as TT};
+use proc_macro2::{Delimiter, Ident, Literal, Span as PS, TokenStream as TS2, TokenTree as TT};
 use quote::quote;
 
 use crate::codegen::{build_define_content, build_standalone_dsl};
 use crate::collect::{collect_blocks, collect_inline, collect_lines};
 use crate::cursor::Cursor;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::methods::build_content_methods;
 use crate::model::{CF, crate_path};
 use crate::normalize::canonicalize_inline;
@@ -82,12 +82,19 @@ use crate::strip::{flatten_invisible, strip};
 /// | `eol`       | Line terminator (typically `\n`)                               |
 /// | `tab`       | Tab character                                                  |
 /// | `escape`    | Escape prefix that suppresses the next byte                    |
-/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline      |
-/// |             | stack (`symmetric` with `balanced = true`, `asymmetric`        |
-/// |             | with `balanced = true` or `parse_inside = true`,               |
-/// |             | `key_value`) and the block stack (`cont` / `fence`). At `1`    |
-/// |             | nothing self-nests. Declared alongside the other context       |
-/// |             | bytes: `sep = ..., escape = ..., max_nest = 4;`                |
+/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline        |
+/// |             | stack (`symmetric` and `asymmetric` with `parse_inside =       |
+/// |             | true`, `key_value`) and the block stack (`cont` / `fence`).    |
+/// |             | At `1` nothing self-nests. Declared alongside the other        |
+/// |             | context bytes: `sep = ..., escape = ..., max_nest = 4;`        |
+/// | `crlf`      | Optional, default `false`. With `true`, a `\r` right before    |
+/// |             | `eol` is part of the line end: no line content, text or        |
+/// |             | element takes it, and a line of it alone, or of it after       |
+/// |             | `sep`/`tab` bytes, is blank. A `\r` anywhere else is a byte    |
+/// |             | like any other. May come before or after `max_nest`.           |
+///
+/// A line of `sep` and `tab` bytes alone is as blank as an empty line: it
+/// ends a paragraph and closes the open blocks, outside a fence.
 ///
 /// ## `inline { ... }` section
 ///
@@ -106,16 +113,17 @@ use crate::strip::{flatten_invisible, strip};
 ///
 ///     on_trigger(b1, b2, ...) {
 ///         symmetric byte {
-///             parse_inside = true | false;
-///             balanced     = true | false;
+///             parse_inside = true | false; // true: frames on the stack;
+///                                          // false: opaque forward search
 ///             N => field [div],   // exact count N of `byte` → Span
 ///         }
 ///         asymmetric open, close {
-///             balanced     = true | false;
-///             parse_inside = true | false;
+///             balanced     = true | false; // counts nested `open`/`close`
+///             parse_inside = true | false; // true: frames on the stack;
+///                                          // false: opaque forward search
 ///             N => field [div],   // exact count N of `open`; with either
-///                                 // flag true the rule is kept on the
-///                                 // stack, and `1 =>` is its only arm
+///                                 // flag true each open byte is an open
+///                                 // of its own, and `1 =>` is the only arm
 ///         }
 ///         chained: Type {
 ///             | open1, close1 | { parse_inside = ...; balanced = ...; } => text_field,
@@ -242,14 +250,30 @@ fn expand(input: TS2) -> Result<TS2> {
     bc.skip(',');
     let esc = bc.named_lit("escape")?;
 
-    // `max_nest` is an optional fifth context setting: `, max_nest = N` after
-    // `escape`, before the header's closing `;`. Absent ⇒ `1`.
-    let max_nest: Literal = if matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ',') {
+    // Two optional context settings may follow `escape`, before the header's
+    // closing `;`, in either order: `max_nest = N` (absent ⇒ `1`) and
+    // `crlf = true | false` (absent ⇒ `false`).
+    let mut max_nest: Option<Literal> = None;
+    let mut crlf: Option<Ident> = None;
+    while matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ',') {
         bc.advance();
-        bc.named_lit("max_nest")?
-    } else {
-        Literal::usize_unsuffixed(1)
-    };
+        let span = bc.span();
+        match bc.peek_str().as_deref() {
+            Some("max_nest") if max_nest.is_none() => max_nest = Some(bc.named_lit("max_nest")?),
+            Some("crlf") if crlf.is_none() => crlf = Some(bc.named_flag("crlf")?),
+            Some(name @ ("max_nest" | "crlf")) => {
+                return Err(Error::new(span, format!("`{name}` is set twice")));
+            }
+            _ => {
+                return Err(Error::new(
+                    span,
+                    format!("expected `max_nest` or `crlf`, got {:?}", bc.peek()),
+                ));
+            }
+        }
+    }
+    let max_nest = max_nest.unwrap_or_else(|| Literal::usize_unsuffixed(1));
+    let crlf = crlf.unwrap_or_else(|| Ident::new("false", PS::call_site()));
     bc.skip(';');
 
     let mut inline_ts = TS2::new();
@@ -289,7 +313,7 @@ fn expand(input: TS2) -> Result<TS2> {
 
     let dc = build_define_content(&content_name, &cf, &mc);
     let cm = build_content_methods(&content_name, &cf, &sep, &eol, &tab, &esc);
-    let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &cf.standalone);
+    let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &crlf, &cf.standalone);
 
     Ok(quote! {
         #dc
@@ -303,7 +327,7 @@ fn expand(input: TS2) -> Result<TS2> {
                 #mc::parse_text!(
                     source;
                     sep = #sep, eol = #eol, tab = #tab, escape = #esc,
-                    max_nest = #max_nest;
+                    max_nest = #max_nest, crlf = #crlf;
                     inline { #(#pt_inline)* }
                     lines  { #(#pt_lines)* }
                     blocks { #(#pt_blocks)* }
@@ -332,12 +356,10 @@ mod tests {
                     on_trigger(b'*', b'`') {
                         symmetric b'`' {
                             parse_inside = false;
-                            balanced = false;
                             1 => codes [80],
                         }
                         symmetric b'*' {
                             parse_inside = true;
-                            balanced = false;
                             1 => italics [40], 2 => bolds [40],
                         }
                     }
@@ -524,7 +546,7 @@ mod tests {
                 inline {
                     on_trigger(b'*', b'<') {
                         asymmetric b'<', b'>' { parse_inside = false; balanced = false; 1 => autolinks [100], }
-                        symmetric b'*' { balanced = false; parse_inside = true; 1 => italics [40], }
+                        symmetric b'*' { parse_inside = true; 1 => italics [40], }
                     }
                     fallback => texts [10];
                 }
@@ -538,12 +560,9 @@ mod tests {
             "symmetric must precede asymmetric in the expansion"
         );
         // Flag order follows the runtime pattern per kind.
+        assert!(s.contains("symmetric b'*' { parse_inside = true ; "), "{s}");
         assert!(
-            s.contains("symmetric b'*' { parse_inside = true ; balanced = false ;"),
-            "{s}"
-        );
-        assert!(
-            s.contains("asymmetric b'<' , b'>' { balanced = false ; parse_inside = false ;"),
+            s.contains("asymmetric b'<' , b'>' { balanced = false ; parse_inside = false ; "),
             "{s}"
         );
     }
@@ -554,22 +573,22 @@ mod tests {
         let e = expand_err(quote! {
             Demo {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
-                inline { memchr(b'*') { symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], } } }
+                inline { memchr(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } }
             }
         });
         assert!(e.contains("unknown keyword `memchr`"), "{e}");
     }
 
-    // 20. A symmetric body without `balanced` is a located front-end error
+    // 20. A symmetric body with `balanced` is a located front-end error
     #[test]
-    fn test_20_symmetric_missing_flag_err() {
+    fn test_20_symmetric_balanced_err() {
         let e = expand_err(quote! {
             Demo {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
-                inline { on_trigger(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } }
+                inline { on_trigger(b'*') { symmetric b'*' { parse_inside = true; balanced = true; 1 => italics [40], } } }
             }
         });
-        assert!(e.contains("missing `balanced = true|false;`"), "{e}");
+        assert!(e.contains("`symmetric` takes no `balanced`"), "{e}");
     }
 
     // 17. max_nest, when absent, still appears in the expansion with the
@@ -625,6 +644,43 @@ mod tests {
         assert!(
             mixed.contains("chained(b'[',b']',false,b'(',b')',true,true,b'!',"),
             "{mixed}"
+        );
+    }
+
+    // 22. `crlf`, set or not, reaches `parse_text!` and the finders; it may
+    //     come before `max_nest`
+    #[test]
+    fn test_22_crlf_forwarded() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = true, max_nest = 2;
+                inline { fallback => texts [10]; }
+            }
+        };
+        let s = expand_str(g);
+        assert_eq!(s.matches("max_nest = 2 , crlf = true ;").count(), 2, "{s}");
+        let s = expand_str(valid());
+        assert!(s.contains("crlf = false ;"), "{s}");
+    }
+
+    // 23. A context setting set twice, an unknown one, or a `crlf` that is
+    //     no flag, is a located error
+    #[test]
+    fn test_23_context_setting_errs() {
+        let e = expand_err(quote! {
+            Demo { sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = true, crlf = false; }
+        });
+        assert!(e.contains("`crlf` is set twice"), "{e}");
+        let e = expand_err(quote! {
+            Demo { sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', depth = 2; }
+        });
+        assert!(e.contains("expected `max_nest` or `crlf`"), "{e}");
+        let e = expand_err(quote! {
+            Demo { sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = 1; }
+        });
+        assert!(
+            e.contains("expected `true` or `false` after `crlf =`"),
+            "{e}"
         );
     }
 }

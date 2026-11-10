@@ -1,8 +1,9 @@
-//! Asymmetric standalone iterators: [`AsymmetricExactIter`] for a rule the
-//! full parse matches by a forward search, [`AsymmetricStackIter`] for one it
-//! keeps on its stack.
+//! Asymmetric standalone iterators: [`AsymmetricExactIter`] and
+//! [`AsymmetricBalancedIter`] for a rule the full parse matches by a forward
+//! search, [`AsymmetricStackIter`] for one it keeps on its stack.
 
 use super::common::*;
+use super::context::ByteSet;
 /// Iterator over the spans of an asymmetric rule the full parse matches by a
 /// forward search: one with `balanced = false` and `parse_inside = false`.
 ///
@@ -12,9 +13,9 @@ use super::common::*;
 /// opening run and the closing byte.
 ///
 /// Matching is **paragraph-bounded**: the closing byte may sit past a single
-/// `eol` (the pair spans lines of one paragraph, as in the full parse), but an
-/// empty line — two consecutive `eol` bytes — or the end of input aborts the
-/// pending opener.
+/// `eol` (the pair spans lines of one paragraph, as in the full parse), but a
+/// blank line (see [`LineBreaks`]) or the end of input aborts the pending
+/// opener.
 ///
 /// Escape sequences are respected on the opening run and on the closing
 /// byte, as in the full parse: a byte preceded by an odd number of `escape`
@@ -30,7 +31,7 @@ pub struct AsymmetricExactIter<'a> {
     open: u8,
     close: u8,
     count: u32,
-    eol: u8,
+    breaks: LineBreaks,
     escape: u8,
     pos: usize,
     /// Where the paragraph of the last failed close search ends: no
@@ -48,17 +49,24 @@ impl<'a> AsymmetricExactIter<'a> {
     /// - `open` — opening delimiter byte (e.g. `b'<'`).
     /// - `close` — closing delimiter byte (e.g. `b'>'`).
     /// - `count` — exact number of consecutive `open` bytes required.
-    /// - `eol` — line terminator byte; a pair may span single line breaks, but
-    ///   never an empty line (two consecutive `eol` bytes).
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`]; a pair
+    ///   may span single line breaks, but never a blank line.
     /// - `escape` — escape prefix byte; an odd number of preceding escape bytes
     ///   suppresses the opening run.
-    pub fn new(src: &'a [u8], open: u8, close: u8, count: u32, eol: u8, escape: u8) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        open: u8,
+        close: u8,
+        count: u32,
+        breaks: impl Into<LineBreaks>,
+        escape: u8,
+    ) -> Self {
         Self {
             src,
             open,
             close,
             count,
-            eol,
+            breaks: breaks.into(),
             escape,
             pos: 0,
             dead: 0,
@@ -94,8 +102,8 @@ impl Iterator for AsymmetricExactIter<'_> {
             }
 
             // Close scan, bounded by the end of the paragraph: a single `eol`
-            // is ordinary content, two in a row (an empty line) — or the end
-            // of input — abort the pending opener.
+            // is ordinary content, a blank line — or the end of input —
+            // aborts the pending opener.
             let cs = end;
             if cs < self.dead {
                 self.pos = end;
@@ -103,7 +111,7 @@ impl Iterator for AsymmetricExactIter<'_> {
             }
             let mut j = cs;
             let close = loop {
-                match scan_paragraph(src, j, self.close, self.eol, Some) {
+                match scan_paragraph(src, j, self.close, self.breaks, Some) {
                     Ok(q) if count_escape(src, q, self.escape) % 2 == 1 => j = q + 1,
                     found => break found,
                 }
@@ -118,6 +126,172 @@ impl Iterator for AsymmetricExactIter<'_> {
                     self.pos = end;
                 }
             }
+        }
+    }
+}
+
+/// The failed searches of one `balanced = true` opaque asymmetric rule, in
+/// the order its open bytes are tried.
+///
+/// A search that fails decides every open byte before where it stopped: the
+/// ones it left unbalanced fail too, and every other one closes. Keeping
+/// them, no open byte there is searched for in vain, and a scan over many
+/// unbalanced open bytes stays linear.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Rings {
+    /// Where the last failed search stopped.
+    end: usize,
+    /// Did it meet a close byte? Without one every open byte it decides
+    /// fails.
+    met: bool,
+    /// The open bytes it left unbalanced, ascending.
+    open: Vec<usize>,
+    /// The first of `open` not behind the last open byte asked about.
+    cur: usize,
+}
+
+impl Rings {
+    /// The close of the ring the open byte at `p` opens, as the full parse
+    /// reads it: every other unescaped `open` byte nests, every unescaped
+    /// `close` byte leaves one level, and the one that leaves the last level
+    /// closes the ring. `bytes` is `(open, close, escape, breaks)`. The search
+    /// stays in the inline run `enter_line` bounds (see
+    /// [`scan_paragraph_by`]). `p` must not move back between calls.
+    #[inline]
+    pub(crate) fn close(
+        &mut self,
+        src: &[u8],
+        p: usize,
+        bytes: (u8, u8, u8, LineBreaks),
+        mut enter_line: impl FnMut(usize) -> Option<usize>,
+    ) -> Option<usize> {
+        let (open, close, escape, breaks) = bytes;
+        let eol = breaks.eol;
+        let known = p < self.end;
+        if known {
+            while self.cur < self.open.len() && self.open[self.cur] < p {
+                self.cur += 1;
+            }
+            if !self.met || self.open.get(self.cur) == Some(&p) {
+                return None;
+            }
+        } else {
+            self.open.clear();
+            self.cur = 0;
+        }
+        let find = |h: &[u8]| memchr::memchr3(open, close, eol, h);
+        let (mut depth, mut met) = (1usize, false);
+        let mut j = p + 1;
+        loop {
+            let q = match scan_paragraph_by(src, j, breaks, find, &mut enter_line) {
+                Ok(q) => q,
+                Err(stop) => {
+                    if !known {
+                        (self.end, self.met) = (stop, met);
+                    }
+                    return None;
+                }
+            };
+            j = q + 1;
+            if count_escape(src, q, escape) % 2 == 1 {
+                continue;
+            }
+            // A close byte that is also the open byte nests, yet the byte is
+            // present.
+            met |= src[q] == close;
+            if src[q] == open {
+                depth += 1;
+                if !known {
+                    self.open.push(q);
+                }
+            } else {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(q);
+                }
+                if !known {
+                    self.open.pop();
+                }
+            }
+        }
+    }
+}
+
+/// Iterator over the spans of an asymmetric rule the full parse matches by a
+/// forward search that counts the rule's own bytes: one with `balanced =
+/// true` and `parse_inside = false`.
+///
+/// Each open byte is an open of its own. The first one opens the outer ring
+/// and every other open byte nests in it; the close byte that leaves the
+/// last level closes the ring. The returned [`Span`] is the ring's content,
+/// one span per ring, whatever nests in it. A ring that never closes yields
+/// nothing, and the next open byte tries, the rest of its own run included.
+///
+/// Matching is **paragraph-bounded**, as for [`AsymmetricExactIter`], and
+/// escapes are respected on every byte of the rule. The scan stays linear
+/// however many open bytes go unbalanced.
+///
+/// Obtained via the generated `Parser::find_*` methods; rarely constructed
+/// directly.
+pub struct AsymmetricBalancedIter<'a> {
+    src: &'a [u8],
+    open: u8,
+    close: u8,
+    breaks: LineBreaks,
+    escape: u8,
+    pos: usize,
+    rings: Rings,
+}
+
+impl<'a> AsymmetricBalancedIter<'a> {
+    /// Create an iterator over the rings of an opaque balanced asymmetric
+    /// rule.
+    ///
+    /// # Parameters
+    ///
+    /// - `src` — source byte slice to scan.
+    /// - `open` — opening delimiter byte (e.g. `b'{'`).
+    /// - `close` — closing delimiter byte (e.g. `b'}'`).
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`]; a ring
+    ///   may span single line breaks, but never a blank line.
+    /// - `escape` — escape prefix byte.
+    pub fn new(
+        src: &'a [u8],
+        open: u8,
+        close: u8,
+        breaks: impl Into<LineBreaks>,
+        escape: u8,
+    ) -> Self {
+        Self {
+            src,
+            open,
+            close,
+            breaks: breaks.into(),
+            escape,
+            pos: 0,
+            rings: Rings::default(),
+        }
+    }
+}
+
+impl Iterator for AsymmetricBalancedIter<'_> {
+    type Item = Span;
+
+    fn next(&mut self) -> Option<Span> {
+        let src = self.src;
+        let bytes = (self.open, self.close, self.escape, self.breaks);
+        loop {
+            let p = memchr::memchr(self.open, &src[self.pos..])? + self.pos;
+            if count_escape(src, p, self.escape) % 2 == 1 {
+                self.pos = p + 1;
+                continue;
+            }
+            // A ring that never closes leaves the next open byte to try.
+            if let Some(q) = self.rings.close(src, p, bytes, Some) {
+                self.pos = q + 1;
+                return Some(Span::new(p as u32 + 1, q as u32));
+            }
+            self.pos = p + 1;
         }
     }
 }
@@ -243,13 +417,14 @@ impl FrameStack {
     }
 }
 
-/// Where a forward scan meets empty lines: their first `eol`, the end of
-/// a paragraph. Found ahead of the scan by one substring search, so a scan
-/// that only cares where paragraphs end need not stop at every `eol`.
+/// Where a forward scan meets blank lines: the `eol` before them, the end
+/// of a paragraph. Found ahead of the scan — by one substring search when
+/// only an empty line is blank — so a scan that only cares where paragraphs
+/// end need not stop at every `eol`.
 pub(crate) struct EmptyLines {
-    eol: u8,
+    breaks: LineBreaks,
     finder: memchr::memmem::Finder<'static>,
-    /// The first `eol` of the first empty line at or after where the last
+    /// The `eol` before the first blank line at or after where the last
     /// search started, `usize::MAX` when there is none.
     next: usize,
     /// Has a search been made?
@@ -257,16 +432,17 @@ pub(crate) struct EmptyLines {
 }
 
 impl EmptyLines {
-    pub(crate) fn new(eol: u8) -> Self {
+    pub(crate) fn new(breaks: LineBreaks) -> Self {
+        let eol = breaks.eol;
         Self {
-            eol,
+            breaks,
             finder: memchr::memmem::Finder::new(&[eol, eol]).into_owned(),
             next: usize::MAX,
             searched: false,
         }
     }
 
-    /// Does an empty line begin in `[from, to)`? `from` must not move
+    /// Does a blank line begin in `[from, to)`? `from` must not move
     /// back between calls, nor follow an `eol`.
     #[inline(always)]
     pub(crate) fn between(&mut self, src: &[u8], from: usize, to: usize) -> bool {
@@ -277,14 +453,27 @@ impl EmptyLines {
         self.next < to
     }
 
-    /// The first empty line at or after `from`. A source with no `eol`
+    /// The first blank line at or after `from`. A source with no `eol`
     /// there, as minified data often is, takes the plain byte search alone.
     fn search(&self, src: &[u8], from: usize) -> usize {
-        let Some(r) = memchr::memchr(self.eol, &src[from..]) else {
+        let eol = self.breaks.eol;
+        let Some(r) = memchr::memchr(eol, &src[from..]) else {
             return usize::MAX;
         };
-        let q = from + r;
-        if src.get(q + 1) == Some(&self.eol) {
+        let mut q = from + r;
+        if self.breaks.crlf || self.breaks.blank != ByteSet::EMPTY {
+            // Every line is read for blank bytes.
+            loop {
+                if q + 1 < src.len() && self.breaks.blank_at(src, q + 1) {
+                    return q;
+                }
+                match memchr::memchr(eol, &src[q + 1..]) {
+                    Some(r) => q = q + 1 + r,
+                    None => return usize::MAX,
+                }
+            }
+        }
+        if src.get(q + 1) == Some(&eol) {
             return q;
         }
         self.finder
@@ -294,7 +483,7 @@ impl EmptyLines {
 }
 
 /// Iterator over the spans of an asymmetric rule the full parse keeps on
-/// its stack: one with `balanced = true` or `parse_inside = true`.
+/// its stack: one with `parse_inside = true`.
 ///
 /// Each byte of an open run is an open of its own and each byte of a close
 /// run a close of its own, as in the full parse: a close completes the
@@ -305,9 +494,8 @@ impl EmptyLines {
 /// are dropped. A delimiter byte preceded by an odd number of `escape`
 /// bytes is no delimiter; the rest of its run is read as a run of its own.
 ///
-/// Frames stay open across a single `eol` and end at an empty line — two
-/// consecutive `eol` bytes — or at the end of input, which drops the ones
-/// still open. Spans come in the order their frames opened. The rule's own
+/// Frames stay open across a single `eol` and end at a blank line (see
+/// [`LineBreaks`]) or at the end of input, which drops the ones still open. Spans come in the order their frames opened. The rule's own
 /// frames are the only ones this iterator sees: other rules' frames, which
 /// in the full parse share the stack and its `max_nest` and may stand
 /// between an open and its close, are not modelled.
@@ -335,8 +523,8 @@ impl<'a> AsymmetricStackIter<'a> {
     /// - `balanced` — the rule's `balanced` flag: nest up to `max_nest`
     ///   frames, or take one while `max_nest` allows any.
     /// - `max_nest` — the grammar's `max_nest`.
-    /// - `eol` — line terminator byte; frames stay open across single line
-    ///   breaks, but never across an empty line.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`]; frames
+    ///   stay open across single line breaks, but never across a blank line.
     /// - `escape` — escape prefix byte.
     pub fn new(
         src: &'a [u8],
@@ -344,7 +532,7 @@ impl<'a> AsymmetricStackIter<'a> {
         close: u8,
         balanced: bool,
         max_nest: usize,
-        eol: u8,
+        breaks: impl Into<LineBreaks>,
         escape: u8,
     ) -> Self {
         Self {
@@ -354,7 +542,7 @@ impl<'a> AsymmetricStackIter<'a> {
             escape,
             pos: 0,
             stack: FrameStack::new(balanced, max_nest),
-            empty: EmptyLines::new(eol),
+            empty: EmptyLines::new(breaks.into()),
         }
     }
 }
@@ -366,7 +554,7 @@ impl Iterator for AsymmetricStackIter<'_> {
         let src = self.src;
         loop {
             // With no frame open only an open byte matters; with frames
-            // open a close byte too, and an empty line before it ends them.
+            // open a close byte too, and a blank line before it ends them.
             let p = if self.stack.is_empty() {
                 if let Some(s) = self.stack.pop_closed() {
                     return Some(s);
@@ -752,7 +940,7 @@ mod tests {
             pub img: bool,
         }
 
-        // An opaque stack rule next to a transparent one, an italic, a
+        // An opaque balanced rule next to a transparent one, an italic, a
         // transparent `chained` rule and a hard break.
         mod opq {
             use super::Link;
@@ -761,7 +949,7 @@ mod tests {
                 inline {
                     hard_break(b'\\', b' ', 2) => hbs [40];
                     on_trigger(b'{', b'}', b'[', b']', b'*', b'(', b')', b'<', b'>') {
-                        symmetric b'*' { parse_inside = true; balanced = true; 1 => ems [40], }
+                        symmetric b'*' { parse_inside = true; 1 => ems [40], }
                         asymmetric b'{', b'}' { balanced = true; parse_inside = false; 1 => objs [40], }
                         asymmetric b'[', b']' { balanced = true; parse_inside = true; 1 => arrs [40], }
                         chained: Link {
@@ -777,15 +965,16 @@ mod tests {
         }
         use opq::OpqParser;
 
-        // 28. Inside an opaque frame only its own rule acts: another stack
-        //     rule neither opens nor blocks the frame's close, and the
-        //     context finder of that rule agrees
+        // 28. Inside an opaque ring only its own rule's bytes count: another
+        //     stack rule neither opens nor blocks the ring's close, a ring
+        //     nested in it is no element, and the context finder of that
+        //     rule agrees
         #[test]
-        fn test_28_generated_opaque_frame_isolates() {
+        fn test_28_generated_opaque_ring_isolates() {
             for (src, objs) in [
                 (&b"{[a]}"[..], vec![(1, 4)]),
                 (b"{[a}]", vec![(1, 3)]),
-                (b"{a{b}c}", vec![(1, 6), (3, 4)]),
+                (b"{a{b}c}", vec![(1, 6)]),
             ] {
                 let full = OpqParser::parse(src);
                 assert_eq!(
@@ -803,12 +992,23 @@ mod tests {
                 );
             }
             assert!(OpqParser::parse(b"{*a*}").ems.is_empty());
+            // A ring that never closes is text, and the other rules act there.
+            let src = b"{a [b] *c*";
+            let full = OpqParser::parse(src);
+            assert!(full.objs.is_empty());
+            assert_eq!(spans(&full.arrs), vec![(4, 5)]);
+            assert_eq!(spans(&full.ems), vec![(8, 9)]);
+            let ctx = OpqParser::context(src);
+            assert_eq!(
+                spans(&OpqParser::find_context_arrs(src, &ctx).collect::<Vec<_>>()),
+                spans(&full.arrs)
+            );
         }
 
-        // 29. A transparent `chained` match goes on past an opaque frame
-        //     inside it: the frame's bytes do not close the component
+        // 29. A transparent `chained` match goes on past an opaque ring
+        //     inside it: the ring's bytes do not close the component
         #[test]
-        fn test_29_generated_chained_over_opaque_frame() {
+        fn test_29_generated_chained_over_opaque_ring() {
             let full = OpqParser::parse(b"(a {b) c})<u>");
             assert_eq!(spans(&full.objs), vec![(4, 8)]);
             let links: Vec<_> = full
@@ -819,11 +1019,11 @@ mod tests {
             assert_eq!(links, vec![(vec![(1, 9)], vec![(11, 12)])]);
         }
 
-        // 30. Hard breaks inside an opaque frame that closes are taken back,
-        //     as an opaque forward search never sees them; an unclosed
-        //     frame's bytes are plain text and keep theirs
+        // 30. The forward search of an opaque ring that closes never sees
+        //     the hard breaks inside it; a ring that never closes is plain
+        //     text and keeps them
         #[test]
-        fn test_30_generated_hard_break_in_opaque_frame() {
+        fn test_30_generated_hard_break_in_opaque_ring() {
             assert!(OpqParser::parse(b"{a\\\nb}").hbs.is_empty());
             assert!(OpqParser::parse(b"{a  \nb}").hbs.is_empty());
             assert_eq!(spans(&OpqParser::parse(b"{a\\\nb").hbs), vec![(2, 2)]);
@@ -835,7 +1035,7 @@ mod tests {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
                 inline {
                     on_trigger(b'{', b'}', b'*') {
-                        symmetric b'*' { parse_inside = true; balanced = true; 1 => ems [40], }
+                        symmetric b'*' { parse_inside = true; 1 => ems [40], }
                         asymmetric b'{', b'}' { balanced = false; parse_inside = true; 1 => objs [40], }
                     }
                     fallback => texts [10];
@@ -870,5 +1070,78 @@ mod tests {
             }
             assert_eq!(spans(&OneParser::parse(b"*a {b} c*").ems), vec![(1, 8)]);
         }
+    }
+
+    // ---- Opaque rings (`balanced = true, parse_inside = false`) ------------ //
+
+    fn rings(src: &[u8]) -> Vec<(u32, u32)> {
+        AsymmetricBalancedIter::new(src, b'{', b'}', b'\n', b'\\')
+            .map(|s| (s.start, s.end))
+            .collect()
+    }
+
+    // 32. One span per outer ring, whatever nests in it; every byte of an
+    //     open run is an open of its own
+    #[test]
+    fn test_32_ring_per_outer_ring() {
+        assert_eq!(rings(b"{a {b} c} {d}"), vec![(1, 8), (11, 12)]);
+        assert_eq!(rings(b"{{a}}"), vec![(1, 4)]);
+        assert_eq!(rings(b"{}"), vec![(1, 1)]);
+        assert_eq!(rings(b"a} {b}"), vec![(4, 5)]);
+    }
+
+    // 33. A ring that never closes yields nothing, and the next open byte
+    //     tries, the rest of its own run included
+    #[test]
+    fn test_33_ring_unclosed_next_open_tries() {
+        assert_eq!(rings(b"{a {b} c"), vec![(4, 5)]);
+        assert_eq!(rings(b"{{a}"), vec![(2, 3)]);
+        assert_eq!(rings(b"{a {b {c} d"), vec![(7, 8)]);
+        assert!(rings(b"{{a").is_empty());
+    }
+
+    // 34. Rings stay in their paragraph, and escaped bytes count for nothing
+    #[test]
+    fn test_34_ring_paragraph_and_escapes() {
+        assert_eq!(rings(b"{a\nb}"), vec![(1, 4)]);
+        assert!(rings(b"{a\n\nb}").is_empty());
+        assert_eq!(rings(b"{a\n\n{b}"), vec![(5, 6)]);
+        assert_eq!(rings(b"{a\\}b}"), vec![(1, 5)]);
+        assert_eq!(rings(b"{a\\{b}"), vec![(1, 5)]);
+        assert!(rings(b"\\{a}").is_empty());
+        assert_eq!(rings(b"\\{{a}"), vec![(3, 4)]);
+    }
+
+    // 35. Open bytes no close balances are searched for once: the scan
+    //     stays linear
+    #[test]
+    fn test_35_ring_linear() {
+        let mut src = vec![b'{'; 100_000];
+        src.extend(std::iter::repeat_n(b'}', 50_000));
+        assert_eq!(rings(&src), vec![(50_001, 149_999)]);
+        let mut src = b"{".to_vec();
+        for _ in 0..50_000 {
+            src.extend_from_slice(b"{{x}");
+        }
+        assert_eq!(rings(&src).len(), 50_000);
+        let src = b"{a ".repeat(20_000);
+        assert!(rings(&src).is_empty());
+    }
+
+    // 36. With blank bytes or `crlf`, a line of them alone ends the open
+    //     frames as an empty line does
+    #[test]
+    fn test_36_stack_blank_lines() {
+        let blank = LineBreaks::new(b'\n', true, b" \t");
+        let stack = |src: &[u8]| -> Vec<(u32, u32)> {
+            AsymmetricStackIter::new(src, b'{', b'}', true, 4, blank, b'\\')
+                .map(|s| (s.start, s.end))
+                .collect()
+        };
+        assert!(stack(b"{a\n \t\nb}").is_empty());
+        assert!(stack(b"{a\r\n\r\nb}").is_empty());
+        assert!(stack(b"{a\r\n \r\nb}").is_empty());
+        assert_eq!(stack(b"{a\r\nb}"), vec![(1, 5)]);
+        assert_eq!(stack(b"{a\n \t\n{b}"), vec![(7, 8)]);
     }
 }

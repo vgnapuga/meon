@@ -15,8 +15,8 @@ use super::common::*;
 ///   `eq` are trimmed from the key, and those after it skipped before the
 ///   value.
 /// - The value ends at the first unescaped `end_byte` after its start, or
-///   where its paragraph ends: an empty line — two consecutive `eol` bytes —
-///   or the end of input, a trailing `eol` excluded. A single `eol` is value
+///   where its paragraph ends: a blank line (see [`LineBreaks`]) or the end
+///   of input, a trailing line end excluded. A single `eol` is value
 ///   content, unless `end_byte` is `eol`. The rest of the `end` run is text,
 ///   and the next key segment starts after it.
 ///
@@ -37,7 +37,7 @@ where
     eq: u8,
     end_byte: u8,
     allow_sep: bool,
-    eol: u8,
+    breaks: LineBreaks,
     sep: u8,
     tab: u8,
     escape: u8,
@@ -63,7 +63,7 @@ where
     ///   if not found the value extends to the end of its paragraph.
     /// - `allow_sep` — when `true`, the `sep` bytes around `eq` are trimmed
     ///   from both key and value.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — word separator byte used for key boundary detection.
     /// - `tab` — tab byte, treated equivalently to `sep` for key boundaries.
     /// - `escape` — escape prefix byte; an `eq` or `end_byte` preceded by an
@@ -77,7 +77,7 @@ where
         eq: u8,
         end_byte: u8,
         allow_sep: bool,
-        eol: u8,
+        breaks: impl Into<LineBreaks>,
         sep: u8,
         tab: u8,
         escape: u8,
@@ -89,7 +89,7 @@ where
             eq,
             end_byte,
             allow_sep,
-            eol,
+            breaks: breaks.into(),
             sep,
             tab,
             escape,
@@ -103,30 +103,32 @@ where
 
     /// Where the value starting at `from` ends, and where the next key
     /// segment starts: at the first unescaped `end_byte` and past its run,
-    /// or at the end of the paragraph.
+    /// or at the end of the paragraph. A value that ends with its line ends
+    /// before a `\r` that is part of the line end.
     #[inline]
     fn value_end(&self, from: usize) -> (usize, usize) {
-        let (src, end, eol) = (self.src, self.end_byte, self.eol);
+        let (src, end, breaks) = (self.src, self.end_byte, self.breaks);
+        let line_end = |q: usize| breaks.content_end(src, from, q);
         let mut j = from;
-        if end == eol {
-            // A single unescaped `eol` ends the value; an empty line or the
+        if end == breaks.eol {
+            // A single unescaped `eol` ends the value; a blank line or the
             // end of input ends its paragraph.
             loop {
-                let Some(r) = memchr::memchr(eol, &src[j..]) else {
-                    return (src.len(), src.len());
+                let Some(r) = memchr::memchr(end, &src[j..]) else {
+                    return (line_end(src.len()), src.len());
                 };
                 let q = j + r;
-                if q + 1 >= src.len() || src[q + 1] == eol {
-                    return (q, q);
+                if breaks.ends_paragraph(src, q) {
+                    return (line_end(q), q);
                 }
                 if count_escape(src, q, self.escape) % 2 == 0 {
-                    return (q, q + 1);
+                    return (line_end(q), q + 1);
                 }
                 j = q + 1;
             }
         }
         loop {
-            match scan_paragraph(src, j, end, eol, Some) {
+            match scan_paragraph(src, j, end, breaks, Some) {
                 Ok(q) if count_escape(src, q, self.escape) % 2 == 1 => j = q + 1,
                 Ok(q) => {
                     let mut e = q;
@@ -135,7 +137,7 @@ where
                     }
                     return (q, e);
                 }
-                Err(stop) => return (stop, stop),
+                Err(stop) => return (line_end(stop), stop),
             }
         }
     }
@@ -168,7 +170,7 @@ where
             while ks > floor
                 && src[ks - 1] != self.sep
                 && src[ks - 1] != self.tab
-                && src[ks - 1] != self.eol
+                && src[ks - 1] != self.breaks.eol
             {
                 ks -= 1;
             }
@@ -554,7 +556,7 @@ mod tests {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
                 inline {
                     on_trigger(b'[', b'=', b'"', b'{', b'}') {
-                        symmetric b'"' { parse_inside = false; balanced = false; 1 => strs [40], }
+                        symmetric b'"' { parse_inside = false; 1 => strs [40], }
                         asymmetric b'{', b'}' { balanced = true; parse_inside = false; 1 => objs [40], }
                         chained: Link {
                             | b'[', b']' | { parse_inside = false; balanced = false; } => text,
@@ -589,5 +591,27 @@ mod tests {
             assert_eq!(keys(b"x [a](u)c=1"), vec![(8, 9)]);
             assert_eq!(keys(b"{a}b=1"), vec![(3, 4)]);
         }
+    }
+
+    // 26. With `crlf`, a value that ends with its line ends before the
+    //     `\r`, and a line of blank bytes ends the paragraph
+    #[test]
+    fn test_26_end_is_eol_crlf() {
+        let crlf = LineBreaks::new(b'\n', true, b" \t");
+        let pairs = |src: &[u8], end: u8| -> Vec<((u32, u32), (u32, u32))> {
+            KvIter::new(src, b'=', end, true, crlf, b' ', b'\t', b'\\', 4, |k, v| {
+                (k, v)
+            })
+            .map(|(k, v)| ((k.start, k.end), (v.start, v.end)))
+            .collect()
+        };
+        assert_eq!(
+            pairs(b"a=1\r\nb=2\r\n", b'\n'),
+            vec![((0, 1), (2, 3)), ((5, 6), (7, 8))]
+        );
+        assert_eq!(
+            pairs(b"a=1\r\n \r\nb=2", b';'),
+            vec![((0, 1), (2, 3)), ((8, 9), (10, 11))]
+        );
     }
 }

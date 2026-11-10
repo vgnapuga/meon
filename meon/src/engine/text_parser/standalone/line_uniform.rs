@@ -23,6 +23,7 @@ where
 {
     src: &'a [u8],
     min: u32,
+    breaks: LineBreaks,
     eol: u8,
     sep: u8,
     matches: M,
@@ -46,14 +47,22 @@ where
     /// - `src` — source byte slice to scan.
     /// - `min` — minimum number of delimiter byte occurrences required on a
     ///   matching line.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte; allowed between delimiter occurrences on a
     ///   matching line.
     /// - `matches` — predicate that returns `true` for valid delimiter bytes;
     ///   all delimiter occurrences on a line must be the same byte.
     /// - `make` — closure that receives the delimiter byte and constructs the
     ///   metadata value `T`.
-    pub fn new(src: &'a [u8], min: u32, eol: u8, sep: u8, matches: M, make: F) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        min: u32,
+        breaks: impl Into<LineBreaks>,
+        sep: u8,
+        matches: M,
+        make: F,
+    ) -> Self {
+        let breaks: LineBreaks = breaks.into();
         let mut needles = [0u8; 3];
         let (nn, streaming) = match probe_matcher(&matches, &mut needles) {
             Some(n) => (n, true),
@@ -62,7 +71,8 @@ where
         Self {
             src,
             min,
-            eol,
+            breaks,
+            eol: breaks.eol,
             sep,
             matches,
             make,
@@ -105,7 +115,9 @@ where
             let mut valid = true;
             while i < len {
                 let b = src[i];
-                if b == self.eol {
+                if b == self.eol
+                    || (self.breaks.crlf && b == b'\r' && (i + 1 >= len || src[i + 1] == self.eol))
+                {
                     break;
                 }
                 if b == delim {
@@ -120,7 +132,8 @@ where
             if valid && count >= self.min {
                 let meta = (self.make)(delim);
                 let span = Span::new(p as u32, i as u32);
-                self.pos = if i < len { i + 1 } else { len };
+                let le = find_line_end(src, i, self.eol);
+                self.pos = if le < len { le + 1 } else { len };
                 return Some((meta, span));
             }
 
@@ -149,13 +162,14 @@ where
                 return None;
             }
             let le = find_line_end(src, self.pos, self.eol);
+            let ce = self.breaks.content_end(src, self.pos, le);
 
-            if self.pos < le {
+            if self.pos < ce {
                 let delim = src[self.pos];
                 if (self.matches)(delim) {
                     let mut count = 0u32;
                     let mut valid = true;
-                    for &b in &src[self.pos..le] {
+                    for &b in &src[self.pos..ce] {
                         if b == delim {
                             count += 1;
                         } else if b != self.sep {
@@ -165,7 +179,7 @@ where
                     }
                     if valid && count >= self.min {
                         let meta = (self.make)(delim);
-                        let span = Span::new(self.pos as u32, le as u32);
+                        let span = Span::new(self.pos as u32, ce as u32);
                         self.pos = if le < len { le + 1 } else { len };
                         return Some((meta, span));
                     }

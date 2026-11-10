@@ -211,6 +211,29 @@ impl Cursor {
         }
     }
 
+    /// Consume `name = true | false` and return the flag.
+    pub(crate) fn named_flag(&mut self, name: &str) -> Result<Ident> {
+        let span = self.span();
+        match self.next_tt() {
+            Some(TT::Ident(i)) if i == name => {}
+            other => {
+                return Err(Error::new(
+                    span,
+                    format!("expected `{name}`, got {other:?}"),
+                ));
+            }
+        }
+        self.skip_eq_alone();
+        let span = self.span();
+        match self.next_tt() {
+            Some(TT::Ident(i)) if i == "true" || i == "false" => Ok(i),
+            other => Err(Error::new(
+                span,
+                format!("expected `true` or `false` after `{name} =`, got {other:?}"),
+            )),
+        }
+    }
+
     /// True if the next two tokens form a joint `=>`.
     pub(crate) fn is_fat_arrow(&self) -> bool {
         match (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)) {

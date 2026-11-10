@@ -10,9 +10,9 @@ use super::common::*;
 /// the delimiters, excluding the delimiter bytes themselves.
 ///
 /// Matching is **paragraph-bounded**: the closing run may sit past a single
-/// `eol` (the pair spans lines of one paragraph, as in the full parse), but an
-/// empty line — two consecutive `eol` bytes — or the end of input aborts the
-/// pending opener.
+/// `eol` (the pair spans lines of one paragraph, as in the full parse), but a
+/// blank line (see [`LineBreaks`]) or the end of input aborts the pending
+/// opener.
 ///
 /// Escape sequences are respected on both delimiters, as in the full parse: a
 /// byte preceded by an odd number of `escape` bytes is no delimiter, and the
@@ -25,7 +25,7 @@ pub struct SymmetricExactIter<'a> {
     src: &'a [u8],
     byte: u8,
     count: u32,
-    eol: u8,
+    breaks: LineBreaks,
     escape: u8,
     pos: usize,
 }
@@ -39,16 +39,22 @@ impl<'a> SymmetricExactIter<'a> {
     /// - `byte` — the delimiter byte (e.g. `b'*'`).
     /// - `count` — exact number of consecutive delimiter bytes required for
     ///   both the opening and closing run.
-    /// - `eol` — line terminator byte; a pair may span single line breaks, but
-    ///   never an empty line (two consecutive `eol` bytes).
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`]; a pair
+    ///   may span single line breaks, but never a blank line.
     /// - `escape` — escape prefix byte; an odd number of preceding escape bytes
     ///   suppresses the opening delimiter.
-    pub fn new(src: &'a [u8], byte: u8, count: u32, eol: u8, escape: u8) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        byte: u8,
+        count: u32,
+        breaks: impl Into<LineBreaks>,
+        escape: u8,
+    ) -> Self {
         Self {
             src,
             byte,
             count,
-            eol,
+            breaks: breaks.into(),
             escape,
             pos: 0,
         }
@@ -83,12 +89,12 @@ impl Iterator for SymmetricExactIter<'_> {
             }
 
             // Close scan, bounded by the end of the paragraph: a single `eol`
-            // is ordinary content, two in a row (an empty line) — or the end
-            // of input — abort the pending opener.
+            // is ordinary content, a blank line — or the end of input —
+            // aborts the pending opener.
             let cs = end;
             let mut j = cs;
             let close = loop {
-                let Some(q) = next_in_paragraph(src, j, self.byte, self.eol, Some) else {
+                let Some(q) = next_in_paragraph(src, j, self.byte, self.breaks, Some) else {
                     break None;
                 };
                 if count_escape(src, q, self.escape) % 2 == 1 {
@@ -338,7 +344,7 @@ mod tests {
                         inline {
                             hard_break($hb_esc, $sp, 2) => hbs [40];
                             on_trigger(b'~') {
-                                symmetric b'~' { parse_inside = true; balanced = true; 2 => s2 [40], }
+                                symmetric b'~' { parse_inside = true; 2 => s2 [40], }
                             }
                             fallback => texts [10];
                         }

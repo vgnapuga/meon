@@ -9,19 +9,23 @@
 //!
 //! - a candidate delimiter whose position lies inside an opaque region is
 //!   skipped, and the scan resumes after that region;
-//! - a candidate among a line's markers (a bullet, a heading's `#` run, a
-//!   blockquote's `>`) is no delimiter: the full parse scans only the content
-//!   after them;
+//! - a candidate among a line's markers (a `block` item's marker, a `line`
+//!   rule's run, a `cont` marker) is no delimiter: the full parse scans only
+//!   the content after them;
 //! - the close search stays inside the opener's inline run, with lines read
 //!   through the context's [`LineModel`](super::context::LineModel): from a
 //!   paragraph line the run goes on through the following paragraph lines,
-//!   up to an empty line (two consecutive `eol` bytes), a line some rule
-//!   claims — a fence, a blockquote line, a list item, a heading — or the end
-//!   of input; from any other line it is the rest of that line.
+//!   up to a blank line (an empty one, or one of `sep` and `tab` bytes
+//!   alone), a line some rule claims — a fence, a `cont`
+//!   line, a `block` item, a `lines` rule's line — or the end of input; from
+//!   a line of `cont` frames alone it goes on, past their markers, through
+//!   the following lines of the same frames alone; from any other line it
+//!   is the rest of that line.
 //!
 //! The context suppresses **candidate positions**, not enclosing spans: a
-//! returned span may legally *contain* an opaque region (`**a `code` b**`
-//! still yields one bold span), exactly as in the full parse.
+//! returned span may legally *contain* an opaque region (with a transparent
+//! `*` rule and an opaque `` ` `` one, `**a `code` b**` still yields one
+//! span of the `**` arm), exactly as in the full parse.
 //!
 //! Line-family rules (`line`, `line_simple`, `cont`, `block`, `num`) do not
 //! need dedicated context-aware iterators: their matches are
@@ -32,8 +36,8 @@
 //! `cont`, whose marker no region covers.
 
 use super::asymmetric::{EmptyLines, FrameStack};
-use super::common::{Span, count_escape, next_in_paragraph};
-use super::context::{ContextCursor, LineReader, ParseContext};
+use super::common::{LineBreaks, Span, count_escape, next_in_paragraph};
+use super::context::{ContextCursor, LineReader, ParseContext, Run};
 
 /// Context-aware variant of [`super::symmetric::SymmetricExactIter`].
 ///
@@ -43,7 +47,7 @@ pub struct ContextSymmetricExactIter<'a> {
     src: &'a [u8],
     byte: u8,
     count: u32,
-    eol: u8,
+    breaks: LineBreaks,
     escape: u8,
     pos: usize,
     cur: ContextCursor<'a>,
@@ -71,7 +75,10 @@ impl<'a> ContextSymmetricExactIter<'a> {
             src,
             byte,
             count,
-            eol,
+            breaks: LineBreaks {
+                eol,
+                ..ctx.lines().breaks()
+            },
             escape,
             pos: 0,
             cur: ctx.cursor(),
@@ -132,21 +139,21 @@ impl Iterator for ContextSymmetricExactIter<'_> {
             // the cursor for the lookahead: close candidates are `>= p`, for
             // which the parent cursor's index is already valid. The opener's
             // line is read when the scan first meets its end.
-            let mut para: Option<bool> = None;
+            let mut run: Option<Run> = None;
             let lines = &mut self.lines;
             let cs = end;
             let mut j = cs;
             let mut ccur = self.cur;
-            let eol = self.eol;
+            let breaks = self.breaks;
             let close = loop {
-                // Only a paragraph line goes on with a paragraph run; an
-                // opaque region leading it is skipped wholesale.
+                // The run goes on past the line's markers; an opaque region
+                // leading its content is skipped wholesale.
                 let enter_line = |ls: usize| {
                     lines
-                        .crosses(src, p, ls, &mut para)
-                        .then(|| ccur.covering_end(ls).unwrap_or(ls))
+                        .crosses(src, p, ls, &mut run)
+                        .map(|cs| ccur.covering_end(cs).unwrap_or(cs))
                 };
-                let Some(q) = next_in_paragraph(src, j, self.byte, eol, enter_line) else {
+                let Some(q) = next_in_paragraph(src, j, self.byte, breaks, enter_line) else {
                     break None;
                 };
                 if let Some(ce) = ccur.covering_end(q) {
@@ -196,22 +203,22 @@ pub struct ContextAsymmetricStackIter<'a> {
     src: &'a [u8],
     open: u8,
     close: u8,
-    eol: u8,
+    breaks: LineBreaks,
     escape: u8,
     pos: usize,
     cur: ContextCursor<'a>,
     lines: LineReader<'a>,
     /// Does the grammar have line rules? Without them a run ends only at
-    /// an empty line, which `empty` finds ahead of the scan.
+    /// a blank line, which `empty` finds ahead of the scan.
     ruled: bool,
     empty: EmptyLines,
     /// May the open byte fall among a line's markers?
     marked: bool,
     stack: FrameStack,
-    /// Where the outermost open frame opened, and whether its line is a
-    /// paragraph line, once read: its run is the run of every open frame.
+    /// Where the outermost open frame opened, and the inline run of its
+    /// line, once read: its run is the run of every open frame.
     base: usize,
-    para: Option<bool>,
+    run: Option<Run>,
 }
 
 impl<'a> ContextAsymmetricStackIter<'a> {
@@ -233,17 +240,23 @@ impl<'a> ContextAsymmetricStackIter<'a> {
             src,
             open,
             close,
-            eol,
+            breaks: LineBreaks {
+                eol,
+                ..ctx.lines().breaks()
+            },
             escape,
             pos: 0,
             cur: ctx.cursor(),
             lines: ctx.reader(),
             ruled: ctx.lines().has_rules(),
-            empty: EmptyLines::new(eol),
+            empty: EmptyLines::new(LineBreaks {
+                eol,
+                ..ctx.lines().breaks()
+            }),
             marked: ctx.reader().marks(open),
             stack: FrameStack::new(balanced, max_nest),
             base: 0,
-            para: None,
+            run: None,
         }
     }
 }
@@ -267,7 +280,7 @@ impl Iterator for ContextAsymmetricStackIter<'_> {
             } else {
                 let hay = &src[self.pos..];
                 let hit = if self.ruled {
-                    memchr::memchr3(self.open, self.close, self.eol, hay)
+                    memchr::memchr3(self.open, self.close, self.breaks.eol, hay)
                 } else {
                     memchr::memchr2(self.open, self.close, hay)
                 };
@@ -277,7 +290,7 @@ impl Iterator for ContextAsymmetricStackIter<'_> {
                     continue;
                 };
                 let p = self.pos + r;
-                // No region holds an empty line.
+                // No region holds a blank line.
                 if !self.ruled && self.empty.between(src, self.pos, p) {
                     self.stack.end_run();
                 }
@@ -290,15 +303,19 @@ impl Iterator for ContextAsymmetricStackIter<'_> {
                 self.pos = ce;
                 continue;
             }
-            if src[p] == self.eol {
+            if src[p] == self.breaks.eol {
                 let ls = p + 1;
-                if ls >= len
-                    || src[ls] == self.eol
-                    || !self.lines.crosses(src, self.base, ls, &mut self.para)
+                // The run goes on past the next line's markers, or ends.
+                self.pos = match (!self.breaks.ends_paragraph(src, p))
+                    .then(|| self.lines.crosses(src, self.base, ls, &mut self.run))
+                    .flatten()
                 {
-                    self.stack.end_run();
-                }
-                self.pos = ls;
+                    Some(cs) => cs,
+                    None => {
+                        self.stack.end_run();
+                        ls
+                    }
+                };
                 continue;
             }
             if count_escape(src, p, self.escape) % 2 == 1 {
@@ -315,7 +332,7 @@ impl Iterator for ContextAsymmetricStackIter<'_> {
             let (end, outermost) = self.stack.read_run(src, p, self.open);
             if outermost {
                 self.base = p;
-                self.para = None;
+                self.run = None;
             }
             self.pos = end;
         }
@@ -330,11 +347,12 @@ mod tests {
         BlockRule, BlockSimpleRule, ByteSet, ChainSpec, LineModel, LineRule,
     };
 
-    /// meon-md's line rules.
-    const MD_LINES: LineModel = LineModel {
+    /// An example grammar's line rules (see the context tests).
+    const EXAMPLE_LINES: LineModel = LineModel {
         eol: b'\n',
         sep: b' ',
         tab: b'\t',
+        crlf: false,
         max_nest: 4,
         block_simple: &[
             BlockSimpleRule::Fence {
@@ -361,17 +379,17 @@ mod tests {
         ],
     };
 
-    fn md_context(src: &[u8]) -> ParseContext {
+    fn example_context(src: &[u8]) -> ParseContext {
         const LINKS: ChainSpec = ChainSpec {
-            text: (b'[', b']'),
-            text_balanced: false,
-            url: (b'(', b')'),
-            url_balanced: false,
+            first: (b'[', b']'),
+            first_balanced: false,
+            second: (b'(', b')'),
+            second_balanced: false,
         };
         ParseContext::build(
             src,
             b'\\',
-            MD_LINES,
+            EXAMPLE_LINES,
             &[(b'`', 1)],
             &[(b'<', b'>', 1, false)],
             &[LINKS],
@@ -380,7 +398,7 @@ mod tests {
     }
 
     fn sym(src: &[u8], count: u32) -> Vec<Span> {
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         ContextSymmetricExactIter::new(src, b'*', count, b'\n', b'\\', &ctx).collect()
     }
 
@@ -399,7 +417,7 @@ mod tests {
     #[test]
     fn test_02_open_inside_code_span_skipped() {
         let src = b"`**` not bold, **real**";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(17, 21)]);
@@ -410,7 +428,7 @@ mod tests {
     #[test]
     fn test_03_close_inside_opaque_region_skipped() {
         let src = b"**a `**` b**";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
         // The `**` inside backticks is covered; the pair closes at the end,
@@ -422,7 +440,7 @@ mod tests {
     #[test]
     fn test_04_fence_suppression() {
         let src = b"**out**\n```\n**in**\n```\n**out2**";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(2, 5), Span::new(25, 29)]);
@@ -432,7 +450,7 @@ mod tests {
     #[test]
     fn test_05_unclosed_fence() {
         let src = b"**a**\n```\n**never**";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(2, 3)]);
@@ -443,7 +461,7 @@ mod tests {
     #[test]
     fn test_06_asymmetric_open_covered() {
         let src = b"`<x>` and {y}";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(11, 12)]);
@@ -459,7 +477,7 @@ mod tests {
     #[test]
     fn test_07_asymmetric_close_covered() {
         let src = b"{a `}` b} c";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(1, 8)]);
@@ -469,7 +487,7 @@ mod tests {
     #[test]
     fn test_08_multiline_jump_resync() {
         let src = b"x\n```\na\nb\nc\n```\n**z**";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 2, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(18, 19)]);
@@ -482,7 +500,7 @@ mod tests {
     #[test]
     fn test_09_pair_spans_newline_with_covered_candidate() {
         let src = b"*a `*` b\nc*";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(1, 10)]);
@@ -493,7 +511,7 @@ mod tests {
     #[test]
     fn test_10_fence_aborts_pending_opener() {
         let src = b"*a\n```\nx\n```\nb*";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
         assert!(spans.is_empty());
@@ -504,7 +522,7 @@ mod tests {
     #[test]
     fn test_11_empty_line_aborts_pending_opener() {
         let src = b"*a\n\nb*";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
         assert!(spans.is_empty());
@@ -515,7 +533,7 @@ mod tests {
     #[test]
     fn test_12_asymmetric_pair_spans_newline() {
         let src = b"{a `}` b\nc} d";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(1, 10)]);
@@ -525,7 +543,7 @@ mod tests {
     #[test]
     fn test_13_asymmetric_fence_aborts_pending_opener() {
         let src = b"{a\n```\nx\n```\nb} c";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect();
         assert!(spans.is_empty());
@@ -569,7 +587,7 @@ mod tests {
         assert_eq!(spans, vec![Span::new(2, 5)]);
 
         let src = b"*a\n`x` b*";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextSymmetricExactIter::new(src, b'*', 1, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(1, 8)]);
@@ -580,13 +598,13 @@ mod tests {
     #[test]
     fn test_17_asym_close_edges() {
         let src = b"{a\n\nb} {c}";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(8, 9)]);
 
         let src = b"{a\n`x` b} c";
-        let ctx = md_context(src);
+        let ctx = example_context(src);
         let spans: Vec<_> =
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect();
         assert_eq!(spans, vec![Span::new(1, 8)]);
@@ -612,12 +630,16 @@ mod tests {
         assert_eq!(sym(b"**a\nb**", 2), vec![Span::new(2, 5)]);
     }
 
-    // 20. From a block line the run is the rest of that line
+    // 20. From a block item line the run is the rest of that line; from a
+    //     line of `cont` frames alone it goes on through the lines of the
+    //     same frames alone, past their markers
     #[test]
     fn test_20_block_line_run_is_one_line() {
         assert!(sym(b"- **a\nb**", 2).is_empty());
-        assert!(sym(b"> **a\n> b**", 2).is_empty());
         assert_eq!(sym(b"- **a** **b\n- c**", 2), vec![Span::new(4, 5)]);
+        assert_eq!(sym(b"> **a\n> b**", 2), vec![Span::new(4, 9)]);
+        assert!(sym(b"> **a\n> > b**", 2).is_empty());
+        assert!(sym(b"> **a\n>\n> b**", 2).is_empty());
     }
 
     // 21. An opaque region over several paragraph lines, leading a line the
@@ -640,7 +662,7 @@ mod tests {
     #[test]
     fn test_23_asymmetric_line_structure() {
         let asym = |src: &[u8]| -> Vec<Span> {
-            let ctx = md_context(src);
+            let ctx = example_context(src);
             ContextAsymmetricStackIter::new(src, b'{', b'}', true, 4, b'\n', b'\\', &ctx).collect()
         };
         assert!(asym(b"{a\n# b} c").is_empty());
@@ -657,6 +679,7 @@ mod tests {
             eol: b'\n',
             sep: b' ',
             tab: b'\t',
+            crlf: false,
             max_nest: 1,
             block_simple: &[BlockSimpleRule::Cont { byte: b'|' }],
             block: &[],
@@ -693,8 +716,8 @@ mod tests {
     fn test_26_failed_search_kept_to_run_end() {
         let plain = LineModel::default();
         assert_eq!(asym(b"{a {b\n\n{c}", plain), vec![(8, 9)]);
-        assert_eq!(asym(b"{a\n# {b}", MD_LINES), vec![(6, 7)]);
-        assert_eq!(asym(b"- {a {b\n{c}", MD_LINES), vec![(9, 10)]);
+        assert_eq!(asym(b"{a\n# {b}", EXAMPLE_LINES), vec![(6, 7)]);
+        assert_eq!(asym(b"- {a {b\n{c}", EXAMPLE_LINES), vec![(9, 10)]);
         // A close inside a region is no close.
         assert_eq!(asym(b"{a `}` {b\n\n{c}", plain), vec![(12, 13)]);
     }
@@ -731,15 +754,15 @@ mod tests {
     //     that closed is kept
     #[test]
     fn test_30_frames_end_with_run() {
-        assert_eq!(asym(b"{a {b}\n# c}", MD_LINES), vec![(4, 5)]);
-        assert_eq!(asym(b"- {a\n{b}", MD_LINES), vec![(6, 7)]);
-        assert_eq!(asym(b"{a {b\nc} d}", MD_LINES), vec![(1, 10), (4, 7)]);
-        assert_eq!(asym(b"{a\n```\n}\n```\n{b}", MD_LINES), vec![(14, 15)]);
+        assert_eq!(asym(b"{a {b}\n# c}", EXAMPLE_LINES), vec![(4, 5)]);
+        assert_eq!(asym(b"- {a\n{b}", EXAMPLE_LINES), vec![(6, 7)]);
+        assert_eq!(asym(b"{a {b\nc} d}", EXAMPLE_LINES), vec![(1, 10), (4, 7)]);
+        assert_eq!(asym(b"{a\n```\n}\n```\n{b}", EXAMPLE_LINES), vec![(14, 15)]);
         // A region over a line break ends no run.
-        assert_eq!(asym(b"{a `x\ny` b}", MD_LINES), vec![(1, 10)]);
+        assert_eq!(asym(b"{a `x\ny` b}", EXAMPLE_LINES), vec![(1, 10)]);
         // The run is the outermost frame's, read anew for every one.
-        assert!(asym(b"a\n- {b\nc}", MD_LINES).is_empty());
-        assert_eq!(asym(b"{a\nb}\n- {c\nd}", MD_LINES), vec![(1, 4)]);
+        assert!(asym(b"a\n- {b\nc}", EXAMPLE_LINES).is_empty());
+        assert_eq!(asym(b"{a\nb}\n- {c\nd}", EXAMPLE_LINES), vec![(1, 4)]);
     }
 
     // 31. Past `max_nest`, an open of a balanced rule pairs with the next
@@ -765,6 +788,7 @@ mod tests {
             eol: b'\n',
             sep: b' ',
             tab: b'\t',
+            crlf: false,
             max_nest: 1,
             block_simple: &[BlockSimpleRule::Cont { byte: b'|' }],
             block: &[],
