@@ -1,4 +1,5 @@
 use super::common::*;
+use meon::span::Span;
 
 // ================================================================
 // texts
@@ -4204,8 +4205,8 @@ fn dead_close_05_balanced_search_without_close() {
     assert_eq!(all(src, &st.texts), vec!["[a [b [c"]);
 }
 
-// 06. One that meets close bytes without balancing records nothing: a later
-//     opener inside it still balances
+// 06. Meeting close bytes without balancing does not disqualify a later
+//     opener inside the failed match: that opener may still balance
 #[test]
 fn dead_close_06_balanced_text_search_meets_close() {
     let src = b"[a [b](c) d";
@@ -4225,6 +4226,80 @@ fn dead_close_07_balanced_url_search_meets_close() {
     assert_eq!(txt(src, st.links[0].text), "c");
     assert_eq!(txt(src, st.links[0].url), "d");
     assert_eq!(all(src, &st.texts), vec!["[a](b "]);
+}
+
+// 08. Repeated balanced text openers may meet a close without any complete
+//     pair. Every byte remains text, including the final close.
+#[test]
+fn dead_close_08_repeated_balanced_text_with_close() {
+    const N: usize = 1_024;
+    let mut src = [b' '; N * 3 + 1];
+    for chunk in src[..N * 3].chunks_exact_mut(3) {
+        chunk.copy_from_slice(b"[x ");
+    }
+    src[N * 3] = b']';
+
+    let st = run_chained_balanced!(&src, true, false);
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, src.len() as u32)]);
+}
+
+// 09. Repeated balanced url openers do not hide the last pair, whose url
+//     is empty and closes on the only closing byte.
+#[test]
+fn dead_close_09_repeated_balanced_url_with_close() {
+    const N: usize = 1_024;
+    let mut src = [b' '; N * 4 + 1];
+    for chunk in src[..N * 4].chunks_exact_mut(4) {
+        chunk.copy_from_slice(b"[x](");
+    }
+    src[N * 4] = b')';
+
+    let st = run_chained_balanced!(&src, false, true);
+    let end = src.len() as u32;
+    assert_eq!(
+        st.links.as_slice(),
+        &[Link {
+            is_image: false,
+            text: Span::new(end - 4, end - 3),
+            url: Span::new(end - 1, end - 1),
+        }]
+    );
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, end - 5)]);
+}
+
+// 10. A failed balanced text search still permits an inner pair whose
+//     text contains an escaped close.
+#[test]
+fn dead_close_10_balanced_text_recovers_escaped_inner() {
+    let src = br"[a [b\]](c)";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(
+        st.links.as_slice(),
+        &[Link {
+            is_image: false,
+            text: Span::new(4, 7),
+            url: Span::new(9, 10),
+        }]
+    );
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, 3)]);
+}
+
+// 11. The same recovery applies when the failed search is for a balanced
+//     url and the inner url contains an escaped close.
+#[test]
+fn dead_close_11_balanced_url_recovers_escaped_inner() {
+    let src = br"[a](b [c](d\))";
+    let st = run_chained_balanced!(src, false, true);
+    assert_eq!(
+        st.links.as_slice(),
+        &[Link {
+            is_image: false,
+            text: Span::new(7, 8),
+            url: Span::new(10, 13),
+        }]
+    );
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, 6)]);
 }
 
 // ================================================================

@@ -118,9 +118,14 @@
 //! meets close bytes without returning to depth zero remembers the opens
 //! inside it that no close balances: a later open byte of the rule in its
 //! range fails at once when it is one of them and closes otherwise, so the
-//! scan stays linear. A `chained` component's search keeps no such record:
-//! a later opener inside it can still balance, and openers like that, `k` of
-//! them before the end of an `n`-byte run, cost `O(k·n)`.
+//! scan stays linear. An opaque `chained` rule allocates a close index only
+//! after a failed chain involving a balanced component. It indexes the rest
+//! of the inline run once, preserving each inner component's own close, so
+//! later balanced searches take constant time even when the second starts
+//! move backwards. Successful chains before that failure consume disjoint
+//! ranges. Search work stays linear per rule, using one reusable buffer of
+//! four bytes per indexed byte per balanced component, with no separate
+//! working stack. Unbalanced components retain scalar close memos.
 //!
 //! # `asymmetric`
 //!
@@ -626,54 +631,11 @@ macro_rules! parse_inline {
         let mut _bal_open: [::std::vec::Vec<u32>; _NBAL] =
             ::core::array::from_fn(|_| ::std::vec::Vec::new());
         let mut _bal_next: usize = 0;
-        // Close bytes found: `(byte, from, at)` says that the first unescaped
-        // byte at or after any position in `from..=at` is at `at`. An opaque
-        // `chained` match that fails after its first close fills it: a later
-        // opener of the same rule before that close searches for it again.
-        // Four close bytes are kept; `from == usize::MAX` marks a free slot.
-        let mut _found_close: [(u8, usize, usize); 4] = [(0u8, usize::MAX, 0usize); 4];
-        let mut _found_next: usize = 0;
-        // The close a search for `$b` from `$s` finds, when already known.
-        #[allow(unused_macros)]
-        macro_rules! found_close {
-            ($b:expr, $s:expr) => {{
-                let _s: usize = $s;
-                let mut _r: Option<usize> = None;
-                for _e in _found_close.iter() {
-                    if _e.0 == $b && _e.1 <= _s && _s <= _e.2 {
-                        _r = Some(_e.2);
-                        break;
-                    }
-                }
-                _r
-            }};
-        }
-        // Record that a search for `$b` from `$s` found it at `$p`. A byte
-        // keeps its slot; a new byte takes a free slot, or the oldest one.
-        #[allow(unused_macros)]
-        macro_rules! found_close_set {
-            ($b:expr, $s:expr, $p:expr) => {{
-                let (_s, _p): (usize, usize) = ($s, $p);
-                let mut _k = usize::MAX;
-                for (_i, _e) in _found_close.iter().enumerate() {
-                    if _e.0 == $b && _e.1 != usize::MAX {
-                        _k = _i;
-                        break;
-                    }
-                }
-                if _k == usize::MAX {
-                    _k = _found_next;
-                    _found_next = (_found_next + 1) & 3;
-                    _found_close[_k] = ($b, _s, _p);
-                } else if _found_close[_k].2 == _p {
-                    if _s < _found_close[_k].1 {
-                        _found_close[_k].1 = _s;
-                    }
-                } else {
-                    _found_close[_k] = ($b, _s, _p);
-                }
-            }};
-        }
+        // One lazy balanced-close index and scalar close memos per opaque
+        // chained rule; successful chains allocate no search buffer.
+        const _NCHAIN: usize = 0 $( + ((!$tpi && !$upi) as usize) )*;
+        let mut _chain_memo: [$crate::engine::text_parser::standalone::chained::ChainMemo; _NCHAIN] =
+            ::core::array::from_fn(|_| ::core::default::Default::default());
 
         loop {
             // ---- Single unified trigger search -------------------------- //
@@ -1101,144 +1063,64 @@ macro_rules! parse_inline {
             // --- chained, both components opaque: self-contained forward search ---
             // A rule with a transparent component has its open bytes read by
             // the phases above: inside its own match they open nothing.
+            let mut _chain_index = 0usize;
             $(
-                if !$tpi && !$upi && delim == $co {
-                    // As above: the last byte of the run opens the match.
-                    let _open = pos - 1;
-                    let is_prefix = _open > $start
-                        && src[_open - 1] == $cp
-                        && !in_hole!(_open - 1)
-                        && {
-                            let mut _bs: u32 = 0;
-                            let mut _i = _open - 1;
-                            while _i > $start && src[_i - 1] == $esc { _bs += 1; _i -= 1; }
-                            _bs % 2 == 0
-                        };
-                    let mut _i = pos;
-                    let close_first: Option<usize> = if $tbal {
-                        // Past the point where the close byte is known absent
-                        // the depth cannot return to zero. A search that meets
-                        // no close byte records it.
-                        let _lim = dead_limit!($cc, pos);
-                        let mut _depth: i32 = 1;
-                        let mut _met = false;
-                        let mut _found: Option<usize> = None;
-                        while let Some(_h) = $crate::memchr::memchr2($co, $cc, &src[_i.._lim]) {
-                            let _q = _i + _h;
-                            _i = _q + 1;
-                            if $crate::parse_inline!(@is_escaped src, _q, $start, $esc)
-                                || in_hole!(_q)
-                            {
-                                continue;
-                            }
-                            // A close byte that is also the open byte nests,
-                            // yet the byte is present.
-                            if src[_q] == $cc { _met = true; }
-                            if src[_q] == $co { _depth += 1; }
-                            else {
-                                _depth -= 1;
-                                if _depth == 0 { _found = Some(_q); break; }
-                            }
-                        }
-                        if !_met {
-                            dead_close_set!($cc, pos);
-                        }
-                        _found
-                    } else if let Some(_at) = found_close!($cc, pos) {
-                        Some(_at)
-                    } else {
-                        let _lim = dead_limit!($cc, pos);
-                        let mut _found: Option<usize> = None;
-                        while let Some(_h) = $crate::memchr::memchr($cc, &src[_i.._lim]) {
-                            let _q = _i + _h;
-                            _i = _q + 1;
-                            if !$crate::parse_inline!(@is_escaped src, _q, $start, $esc)
-                                && !in_hole!(_q)
-                            {
-                                _found = Some(_q);
-                                break;
-                            }
-                        }
-                        if _found.is_none() {
-                            dead_close_set!($cc, pos);
-                        }
-                        _found
-                    };
-                    if let Some(ct_end) = close_first {
-                        let next = ct_end + 1;
-                        if next < parse_end && src[next] == $uo {
-                            let mut _j = next + 1;
-                            let close_second: Option<usize> = if $ubal {
-                                // As for the first component.
-                                let _lim = dead_limit!($uc, next + 1);
-                                let mut _depth: i32 = 1;
-                                let mut _met = false;
-                                let mut _found: Option<usize> = None;
-                                while let Some(_h) =
-                                    $crate::memchr::memchr2($uo, $uc, &src[_j.._lim])
-                                {
-                                    let _q = _j + _h;
-                                    _j = _q + 1;
-                                    if $crate::parse_inline!(@is_escaped src, _q, $start, $esc)
-                                        || in_hole!(_q)
-                                    {
-                                        continue;
-                                    }
-                                    if src[_q] == $uc { _met = true; }
-                                    if src[_q] == $uo { _depth += 1; }
-                                    else {
-                                        _depth -= 1;
-                                        if _depth == 0 { _found = Some(_q); break; }
-                                    }
-                                }
-                                if !_met {
-                                    dead_close_set!($uc, next + 1);
-                                }
-                                _found
-                            } else {
-                                let _lim = dead_limit!($uc, next + 1);
-                                let mut _found: Option<usize> = None;
-                                while let Some(_h) = $crate::memchr::memchr($uc, &src[_j.._lim]) {
-                                    let _q = _j + _h;
-                                    _j = _q + 1;
-                                    if !$crate::parse_inline!(@is_escaped src, _q, $start, $esc)
-                                        && !in_hole!(_q)
-                                    {
-                                        _found = Some(_q);
-                                        break;
-                                    }
-                                }
-                                if _found.is_none() {
-                                    dead_close_set!($uc, next + 1);
-                                }
-                                _found
+                if !$tpi && !$upi {
+                    let _memo = &mut _chain_memo[_chain_index];
+                    _chain_index += 1;
+                    if delim == $co {
+                        // As above: the last byte of the run opens the match.
+                        let _open = pos - 1;
+                        let is_prefix = _open > $start
+                            && src[_open - 1] == $cp
+                            && !in_hole!(_open - 1)
+                            && {
+                                let mut _bs: u32 = 0;
+                                let mut _i = _open - 1;
+                                while _i > $start && src[_i - 1] == $esc { _bs += 1; _i -= 1; }
+                                _bs % 2 == 0
                             };
-                            if let Some(cu_end) = close_second {
-                                let real_start = if is_prefix { _open - 1 } else { _open };
-                                if text_start < real_start {
-                                    push_il!($tx, $crate::span::Span::new(
+                        let _spec = $crate::engine::text_parser::standalone::context::ChainSpec {
+                            first: ($co, $cc), first_balanced: $tbal,
+                            second: ($uo, $uc), second_balanced: $ubal,
+                        };
+                        let _matched = $crate::engine::text_parser::standalone::chained::chain_match_by(
+                            &src[..parse_end], pos, &_spec, ($esc, $start), _memo,
+                            |mut _j, _lim, _o, _c, _bal| {
+                                loop {
+                                    let _hit = if _bal {
+                                        $crate::memchr::memchr2(_o, _c, &src[_j.._lim])
+                                    } else {
+                                        $crate::memchr::memchr(_c, &src[_j.._lim])
+                                    };
+                                    let Some(_h) = _hit else { break Err(_lim); };
+                                    let _q = _j + _h;
+                                    _j = _q + 1;
+                                    if !in_hole!(_q) {
+                                        break Ok(_q);
+                                    }
+                                }
+                            },
+                        );
+                        if let Some((ct_end, cu_end)) = _matched {
+                            let real_start = if is_prefix { _open - 1 } else { _open };
+                            if text_start < real_start {
+                                push_il!($tx, $crate::span::Span::new(
                                     text_start as u32, real_start as u32));
-                                }
-                                $crate::paste::paste! {
-                                    $state.[<push_ $cf>]($ch_ty {
-                                        $cpi: is_prefix,
-                                        $ct:  $crate::span::Span::new(pos as u32, ct_end as u32),
-                                        $cu:  $crate::span::Span::new((next + 1) as u32, cu_end as u32),
-                                    });
-                                }
-                                pos = cu_end + 1;
-                                text_start = pos;
-                                _kv_opaque = Some((real_start, pos));
-                                continue;
                             }
+                            $crate::paste::paste! {
+                                $state.[<push_ $cf>]($ch_ty {
+                                    $cpi: is_prefix,
+                                    $ct: $crate::span::Span::new(pos as u32, ct_end as u32),
+                                    $cu: $crate::span::Span::new((ct_end + 2) as u32, cu_end as u32),
+                                });
+                            }
+                            pos = cu_end + 1;
+                            text_start = pos;
+                            _kv_opaque = Some((real_start, pos));
                         }
-                        // The match failed after its first close: an opener of
-                        // this rule before that close finds the same one.
-                        if !$tbal {
-                            found_close_set!($cc, pos, ct_end);
-                        }
+                        continue;
                     }
-                    continue;
                 }
             )*
 

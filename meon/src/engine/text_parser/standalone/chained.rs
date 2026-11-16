@@ -1,31 +1,296 @@
 //! [`ChainedIter`] — two-part chained delimiter standalone iterator — and
-//! the forward search of an opaque `chained` rule, shared with the context
-//! builder.
+//! the forward search of an opaque `chained` rule, shared with the full parse
+//! and the context builder.
 
 use super::common::*;
 use super::context::ChainSpec;
 
-/// What the searches of one `chained` rule learned, for the openers after
-/// them: the full parse keeps the same, so a run of unclosed openers costs
-/// one search, not one per opener.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct ChainMemo {
-    /// `(start, stop)`: no unescaped first close byte lies in `[start, stop)`,
-    /// and `stop` ends the inline run.
+/// Search state of one opaque `chained` rule. Used by generated parser code.
+#[doc(hidden)]
+#[derive(Debug, Clone, Default)]
+pub struct ChainMemo {
+    /// No first close in `[start, stop)`, for an unbalanced component.
     first_dead: Option<(usize, usize)>,
-    /// `(start, close)`: the first unescaped first close byte from `start` on
-    /// is at `close`, and the match after it failed. Kept for a text
-    /// component with `balanced = false` only.
+    /// The first close in `[start, close]`, after which the chain failed.
     first_found: Option<(usize, usize)>,
-    /// As `first_dead`, for the second close byte.
+    /// No second close in `[start, stop)`, for an unbalanced component.
     second_dead: Option<(usize, usize)>,
+    /// A repeated second start, including one on the first run's boundary
+    /// when the second open byte is the line terminator itself.
+    second_last: Option<(usize, Result<usize, usize>)>,
+    /// An escape run and its following byte, for constant-time parity checks
+    /// even when the escape byte is itself a component delimiter.
+    escape_run: (usize, usize),
+    /// Indexed inline run, starting at the first failed chain's open byte.
+    base: usize,
+    end: usize,
+    /// One interleaved plane per balanced component. Allocated only after
+    /// a failed chain: ordinary successful searches need no index.
+    closes: Vec<u32>,
 }
 
-/// The text and second close bytes of the opaque `chained` match whose text
-/// component starts at `from`, right after the open byte, or `None` when it
-/// fails: the first close, the second open on the byte right after it, and the
-/// second close, all in the opener's inline run (`enter_line` as for
-/// [`next_in_paragraph`]).
+impl ChainMemo {
+    fn indexed(&self, p: usize) -> bool {
+        self.base <= p && p < self.end
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn close(
+        &self,
+        src: &[u8],
+        from: usize,
+        bytes: (u8, u8),
+        plane: Option<usize>,
+        planes: usize,
+        scan: &mut impl FnMut(usize, usize, u8, u8, bool) -> Result<usize, usize>,
+    ) -> Result<usize, usize> {
+        if let Some(plane) = plane {
+            if self.indexed(from - 1) {
+                let at = self.closes[(from - 1 - self.base) * planes + plane];
+                return if at == 0 {
+                    Err(self.end)
+                } else {
+                    Ok(self.base + at as usize)
+                };
+            }
+        }
+        let (open, close) = bytes;
+        let mut depth = 1usize;
+        let mut j = from;
+        loop {
+            let q = scan(j, src.len(), open, close, plane.is_some())?;
+            if plane.is_some() && src[q] == open {
+                depth += 1;
+            } else {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(q);
+                }
+            }
+            j = q + 1;
+        }
+    }
+
+    /// Index the rest of this inline run once. In a forward pass, mark its
+    /// unescaped delimiters; then pair them backwards. The cells of pending
+    /// close bytes hold their parent links, so the index is also its own
+    /// working stack. Other cells receive the close of a virtual opener
+    /// immediately before their following byte. This also handles a second
+    /// opener accepted immediately after the first close even when escaped.
+    fn remember(
+        &mut self,
+        src: &[u8],
+        p: usize,
+        spec: &ChainSpec,
+        scan: &mut impl FnMut(usize, usize, u8, u8, bool) -> Result<usize, usize>,
+    ) {
+        if self.indexed(p) {
+            return;
+        }
+        let planes = spec.first_balanced as usize + spec.second_balanced as usize;
+        if planes == 0 {
+            return;
+        }
+        // Find the run's end before reserving: event-by-event growth could
+        // double the dense table's allocation. Retain one exact-sized
+        // allocation for reuse by later runs.
+        let (open, close) = if spec.first_balanced {
+            spec.first
+        } else {
+            spec.second
+        };
+        let mut j = p + 1;
+        let stop = loop {
+            match scan(j, src.len(), open, close, true) {
+                Ok(q) => j = q + 1,
+                Err(stop) => break stop,
+            }
+        };
+        self.closes.clear();
+        let len = (stop - p) * planes;
+        self.closes.reserve_exact(len);
+        self.closes.resize(len, 0);
+        self.base = p;
+        self.end = stop;
+        let mut plane = 0;
+        for (bytes, balanced) in [
+            (spec.first, spec.first_balanced),
+            (spec.second, spec.second_balanced),
+        ] {
+            if !balanced {
+                continue;
+            }
+            let (open, close) = bytes;
+            let mut j = p + 1;
+            loop {
+                match scan(j, stop, open, close, true) {
+                    Ok(q) => {
+                        self.closes[(q - p) * planes + plane] = if src[q] == open {
+                            u32::MAX
+                        } else {
+                            u32::MAX - 1
+                        };
+                        j = q + 1;
+                    }
+                    Err(end) => {
+                        debug_assert_eq!(end, stop);
+                        break;
+                    }
+                }
+            }
+            let mut top = 0u32;
+            for q in (p..stop).rev() {
+                let i = (q - p) * planes + plane;
+                let kind = self.closes[i];
+                self.closes[i] = top;
+                if kind == u32::MAX - 1 {
+                    top = (q - p) as u32;
+                } else if kind == u32::MAX && top != 0 {
+                    top = self.closes[top as usize * planes + plane];
+                }
+            }
+            plane += 1;
+        }
+    }
+}
+
+/// The two closes of an opaque chain, using the caller's inline-run scan.
+/// `scan(from, limit, open, close, balanced)` yields the next close (or open
+/// with `balanced`) before `limit`, or the inline run's end, skipping line
+/// markers. `escape` supplies the escape byte and the start of the inline
+/// run, below which escape parity is not counted. Used by generated parser
+/// code, standalone iterators and the context builder.
+#[doc(hidden)]
+#[inline]
+pub fn chain_match_by(
+    src: &[u8],
+    from: usize,
+    spec: &ChainSpec,
+    escape: (u8, usize),
+    memo: &mut ChainMemo,
+    mut scan: impl FnMut(usize, usize, u8, u8, bool) -> Result<usize, usize>,
+) -> Option<(usize, usize)> {
+    let (byte, floor) = escape;
+    let mut run = memo.escape_run;
+    let result = chain_match_cached(
+        src,
+        from,
+        spec,
+        memo,
+        |mut j, limit, open, close, balanced| {
+            loop {
+                let q = scan(j, limit, open, close, balanced)?;
+                if q < run.0 || q >= run.1 {
+                    let mut start = q;
+                    while start > floor && src[start - 1] == byte {
+                        start -= 1;
+                    }
+                    let mut end = q;
+                    while end < src.len() && src[end] == byte {
+                        end += 1;
+                    }
+                    run = (start, (end + usize::from(end < src.len())).max(q + 1));
+                }
+                if (q - run.0) % 2 == 0 {
+                    return Ok(q);
+                }
+                j = q + 1;
+            }
+        },
+    );
+    memo.escape_run = run;
+    result
+}
+
+#[inline]
+fn chain_match_cached(
+    src: &[u8],
+    from: usize,
+    spec: &ChainSpec,
+    memo: &mut ChainMemo,
+    mut scan: impl FnMut(usize, usize, u8, u8, bool) -> Result<usize, usize>,
+) -> Option<(usize, usize)> {
+    let planes = spec.first_balanced as usize + spec.second_balanced as usize;
+    let first_plane = spec.first_balanced.then_some(0);
+    let second_plane = spec.second_balanced.then_some(spec.first_balanced as usize);
+    let ct = if !spec.first_balanced {
+        if memo.first_dead.is_some_and(|(s, e)| s <= from && from < e) {
+            return None;
+        }
+        memo.first_found
+            .filter(|&(s, c)| s <= from && from <= c)
+            .map(|(_, c)| c)
+    } else {
+        None
+    };
+    let ct = match ct
+        .map(Ok)
+        .unwrap_or_else(|| memo.close(src, from, spec.first, first_plane, planes, &mut scan))
+    {
+        Ok(c) => c,
+        Err(stop) => {
+            if spec.first_balanced {
+                memo.remember(src, from - 1, spec, &mut scan);
+            } else {
+                memo.first_dead = Some((from, stop));
+            }
+            return None;
+        }
+    };
+    let (uo, uc) = spec.second;
+    let next = ct + 1;
+    if next < src.len() && src[next] == uo {
+        let second_from = next + 1;
+        let result = if let Some((_, result)) = memo.second_last.filter(|&(s, _)| s == second_from)
+        {
+            result
+        } else if spec.second_balanced {
+            memo.close(
+                src,
+                second_from,
+                spec.second,
+                second_plane,
+                planes,
+                &mut scan,
+            )
+        } else {
+            // Nested first components can move the second start backwards.
+            // Search only the new prefix before a known absent suffix.
+            let dead = memo.second_dead;
+            if let Some((_, e)) = dead.filter(|&(s, e)| s <= second_from && second_from <= e) {
+                Err(e)
+            } else {
+                let limit = dead
+                    .filter(|&(s, _)| second_from < s)
+                    .map_or(src.len(), |(s, _)| s);
+                match scan(second_from, limit, uo, uc, false) {
+                    Ok(q) => Ok(q),
+                    Err(stop) => {
+                        let stop = if stop == limit {
+                            dead.map_or(stop, |(_, e)| e)
+                        } else {
+                            stop
+                        };
+                        memo.second_dead = Some((second_from, stop));
+                        Err(stop)
+                    }
+                }
+            }
+        };
+        memo.second_last = Some((second_from, result));
+        if let Ok(cu) = result {
+            return Some((ct, cu));
+        }
+    }
+    if !spec.first_balanced {
+        memo.first_found = Some((from, ct));
+    }
+    memo.remember(src, from - 1, spec, &mut scan);
+    None
+}
+
+/// The two closes of an opaque chain, bounded by paragraphs and the line
+/// reader's continuation policy.
 #[inline]
 pub(crate) fn chain_match(
     src: &[u8],
@@ -36,123 +301,34 @@ pub(crate) fn chain_match(
     mut enter_line: impl FnMut(usize) -> Option<usize>,
     memo: &mut ChainMemo,
 ) -> Option<(usize, usize)> {
-    let (open, close) = spec.first;
-    let found = memo.first_found.filter(|&(s, c)| s <= from && from <= c);
-    let dead = memo.first_dead.filter(|&(s, e)| s <= from && from < e);
-    let ct = match (found, dead) {
-        (Some((_, c)), _) => c,
-        (None, Some(_)) => return None,
-        (None, None) => {
-            let bal = spec.first_balanced;
-            match component_close(src, from, open, close, bal, escape, breaks, &mut enter_line) {
-                Ok(c) => c,
-                Err((stop, met)) => {
-                    if !met {
-                        memo.first_dead = Some((from, stop));
-                    }
-                    return None;
-                }
-            }
-        }
-    };
-    let (uo, uc) = spec.second;
-    let next = ct + 1;
-    if next < src.len() && src[next] == uo {
-        let second_from = next + 1;
-        if !memo
-            .second_dead
-            .is_some_and(|(s, e)| s <= second_from && second_from < e)
-        {
-            let bal = spec.second_balanced;
-            match component_close(
-                src,
-                second_from,
-                uo,
-                uc,
-                bal,
-                escape,
-                breaks,
-                &mut enter_line,
-            ) {
-                Ok(cu) => return Some((ct, cu)),
-                Err((stop, met)) => {
-                    if !met {
-                        memo.second_dead = Some((second_from, stop));
-                    }
-                }
-            }
-        }
-    }
-    // The match failed after its first close: an opener before that close
-    // finds the same one.
-    if !spec.first_balanced {
-        memo.first_found = Some((from, ct));
-    }
-    None
-}
-
-/// The close byte of a `chained` component whose content starts at `from`,
-/// in the inline run `enter_line` bounds: the first unescaped `close`, or,
-/// with `balanced`, the one that brings the depth back to zero, each
-/// unescaped `open` nesting one level. On failure, where the run ends and
-/// whether an unescaped `close` was met on the way.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn component_close(
-    src: &[u8],
-    from: usize,
-    open: u8,
-    close: u8,
-    balanced: bool,
-    escape: u8,
-    breaks: LineBreaks,
-    mut enter_line: impl FnMut(usize) -> Option<usize>,
-) -> Result<usize, (usize, bool)> {
-    let eol = breaks.eol;
-    if !balanced {
-        // The first unescaped close; an `Err` met none.
-        let mut j = from;
-        return loop {
-            match scan_paragraph(src, j, close, breaks, &mut enter_line) {
-                Ok(q) if count_escape(src, q, escape) % 2 == 1 => j = q + 1,
-                Ok(q) => break Ok(q),
-                Err(stop) => break Err((stop, false)),
-            }
-        };
-    }
-    let len = src.len();
-    let mut depth = 1u32;
-    let mut met = false;
-    let mut j = from;
-    loop {
-        let Some(r) = memchr::memchr3(open, close, eol, &src[j..]) else {
-            return Err((len, met));
-        };
-        let q = j + r;
-        if src[q] == eol {
-            if breaks.ends_paragraph(src, q) {
-                return Err((q, met));
-            }
-            match enter_line(q + 1) {
-                Some(next) => j = next,
-                None => return Err((q, met)),
-            }
-            continue;
-        }
-        if count_escape(src, q, escape) % 2 == 0 {
-            // A close byte that is also the open byte nests, yet it is met.
-            met |= src[q] == close;
-            if src[q] == open {
-                depth += 1;
-            } else {
-                depth -= 1;
-                if depth == 0 {
+    chain_match_by(
+        src,
+        from,
+        spec,
+        (escape, 0),
+        memo,
+        |mut j, limit, open, close, balanced| {
+            loop {
+                let hay = &src[j..limit];
+                let hit = if balanced {
+                    memchr::memchr3(open, close, breaks.eol, hay)
+                } else {
+                    memchr::memchr2(close, breaks.eol, hay)
+                };
+                let q = j + hit.ok_or(limit)?;
+                if src[q] != breaks.eol {
                     return Ok(q);
                 }
+                if breaks.ends_paragraph(src, q) {
+                    return Err(q);
+                }
+                j = enter_line(q + 1).ok_or(q)?;
+                if j >= limit {
+                    return Err(limit);
+                }
             }
-        }
-        j = q + 1;
-    }
+        },
+    )
 }
 
 /// Where a transparent match stands: in no match, in its first component, or
@@ -205,13 +381,15 @@ enum Phase {
 /// construct opened before a transparent component's close byte hides it,
 /// and other rules' line structure ends paragraphs.
 ///
-/// What a failed search learns is kept for the openers after it: a close
-/// byte absent up to the end of the paragraph, and, for a first component
-/// with `balanced = false`, a first close whose match failed after it. A run
-/// of unclosed openers costs one search, not one per opener. A search of a
-/// `balanced` component that meets close bytes is not kept, as a later
-/// opener may balance where it did not: `k` such openers in an `n`-byte
-/// paragraph cost `O(k·n)`, as in the full parse.
+/// Failed searches retain scalar close memos for unbalanced components. A
+/// failure involving a balanced component lazily builds an index of its
+/// remaining inline run, keeping each inner component's own close. Later
+/// balanced searches take constant time, including when nested first
+/// components move the second start backwards. Successful chains before the
+/// failure consume disjoint ranges, so search work stays linear per rule.
+/// The index uses one reusable buffer of four bytes per indexed byte per
+/// balanced component; its cells also serve as the working stack. Ordinary
+/// successful chains and fully unbalanced rules allocate no search buffer.
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -860,6 +1038,477 @@ mod tests {
                 vec![(false, (1, 2), (4, 5)), (false, (7, 8), (10, 11))]
             );
         }
+    }
+
+    // 31. A close byte after many balanced first openers does not make a
+    //     complete pair, in either delimiter alphabet.
+    #[test]
+    fn test_31_balanced_first_openers_with_close() {
+        const N: usize = 1_024;
+        for (first, second) in [((b'[', b']'), (b'(', b')')), ((b'{', b'}'), (b'<', b'>'))] {
+            let spec = ChainSpec {
+                first,
+                first_balanced: true,
+                second,
+                second_balanced: false,
+            };
+            let mut src = [b' '; N * 3 + 1];
+            for chunk in src[..N * 3].chunks_exact_mut(3) {
+                chunk.copy_from_slice(&[first.0, b'x', b' ']);
+            }
+            src[N * 3] = first.1;
+
+            let mut iter = ChainedIter::new(&src, spec, b'!', false, b'\n', b'\\', stub_make);
+            assert_eq!(iter.next(), None);
+        }
+    }
+
+    // 32. A failed balanced second search leaves the last pair available,
+    //     even when many earlier searches have met its close byte.
+    #[test]
+    fn test_32_balanced_second_openers_with_close() {
+        const N: usize = 1_024;
+        for (first, second) in [((b'[', b']'), (b'(', b')')), ((b'{', b'}'), (b'<', b'>'))] {
+            let spec = ChainSpec {
+                first,
+                first_balanced: false,
+                second,
+                second_balanced: true,
+            };
+            let mut src = [b' '; N * 4 + 1];
+            for chunk in src[..N * 4].chunks_exact_mut(4) {
+                chunk.copy_from_slice(&[first.0, b'x', first.1, second.0]);
+            }
+            src[N * 4] = second.1;
+
+            let mut iter = ChainedIter::new(&src, spec, b'!', false, b'\n', b'\\', stub_make);
+            let end = src.len() as u32;
+            assert_eq!(
+                iter.next(),
+                Some((
+                    false,
+                    Span::new(end - 4, end - 3),
+                    Span::new(end - 1, end - 1),
+                ))
+            );
+            assert_eq!(iter.next(), None);
+        }
+    }
+
+    // 33. An outer first component that balances but has no second opener
+    //     does not lend its close to a nested first opener.
+    #[test]
+    fn test_33_balanced_first_close_after_failed_match() {
+        let spec = ChainSpec {
+            first_balanced: true,
+            ..LINK
+        };
+        let mut iter = ChainedIter::new(
+            b"[a [b](x) c] d",
+            spec,
+            b'!',
+            false,
+            b'\n',
+            b'\\',
+            stub_make,
+        );
+        assert_eq!(iter.next(), Some((false, Span::new(4, 5), Span::new(7, 8))));
+        assert_eq!(iter.next(), None);
+    }
+
+    fn counted_scan(
+        src: &[u8],
+        from: usize,
+        limit: usize,
+        open: u8,
+        close: u8,
+        balanced: bool,
+        work: &mut usize,
+    ) -> Result<usize, usize> {
+        assert!(from <= limit && limit <= src.len());
+        for (offset, &byte) in src[from..limit].iter().enumerate() {
+            *work += 1;
+            if byte == close || (balanced && byte == open) {
+                return Ok(from + offset);
+            }
+        }
+        Err(limit)
+    }
+
+    struct CountedChains {
+        count: usize,
+        last: Option<(usize, usize, usize)>,
+        work: usize,
+        memo: ChainMemo,
+    }
+
+    // Try monotonically advancing first openers with the iterator's run
+    // policy, and jump past each successful chain. Count every byte read
+    // by the delimiter scanner, including failed and index-building scans.
+    fn counted_chains(src: &[u8], spec: &ChainSpec) -> CountedChains {
+        let mut stats = CountedChains {
+            count: 0,
+            last: None,
+            work: 0,
+            memo: ChainMemo::default(),
+        };
+        let mut p = 0;
+        while p < src.len() {
+            if src[p] != spec.first.0 || count_escape(src, p, b'\\') % 2 != 0 {
+                p += 1;
+                continue;
+            }
+            while p < src.len() && src[p] == spec.first.0 {
+                p += 1;
+            }
+            let from = p;
+            if let Some((first, second)) = chain_match_by(
+                src,
+                from,
+                spec,
+                (b'\\', 0),
+                &mut stats.memo,
+                |j, limit, open, close, balanced| {
+                    counted_scan(src, j, limit, open, close, balanced, &mut stats.work)
+                },
+            ) {
+                stats.count += 1;
+                stats.last = Some((from - 1, first, second));
+                p = second + 1;
+            }
+        }
+        stats
+    }
+
+    fn assert_linear_work(stats: &CountedChains, src: &[u8], spec: &ChainSpec) {
+        assert!(
+            stats.work <= 8 * src.len(),
+            "{} scanner bytes for {} input bytes",
+            stats.work,
+            src.len()
+        );
+        let planes = spec.first_balanced as usize + spec.second_balanced as usize;
+        assert!(stats.memo.closes.len() <= planes * src.len());
+        assert!(stats.memo.closes.capacity() <= planes * src.len());
+    }
+
+    // 34. A present close does not make repeated balanced first failures
+    //     rescan the suffix, with one indexed component or two.
+    #[test]
+    fn test_34_balanced_first_failed_search_work_is_linear() {
+        const N: usize = 256;
+        for (first, second) in [((b'[', b']'), (b'(', b')')), ((b'{', b'}'), (b'<', b'>'))] {
+            let mut src = [b' '; N * 3 + 1];
+            for chunk in src[..N * 3].chunks_exact_mut(3) {
+                chunk.copy_from_slice(&[first.0, b'x', b' ']);
+            }
+            src[N * 3] = first.1;
+            for second_balanced in [false, true] {
+                let spec = ChainSpec {
+                    first,
+                    first_balanced: true,
+                    second,
+                    second_balanced,
+                };
+                let stats = counted_chains(&src, &spec);
+                assert_eq!(stats.count, 0);
+                assert_eq!(stats.last, None);
+                assert_linear_work(&stats, &src, &spec);
+            }
+        }
+    }
+
+    // 35. Repeated balanced second failures cost linear scanner work and
+    //     preserve the last pair, including its empty second component.
+    #[test]
+    fn test_35_balanced_second_failed_search_work_is_linear() {
+        const N: usize = 256;
+        for (first, second) in [((b'[', b']'), (b'(', b')')), ((b'{', b'}'), (b'<', b'>'))] {
+            let mut src = [b' '; N * 4 + 1];
+            for chunk in src[..N * 4].chunks_exact_mut(4) {
+                chunk.copy_from_slice(&[first.0, b'x', first.1, second.0]);
+            }
+            src[N * 4] = second.1;
+            for first_balanced in [false, true] {
+                let spec = ChainSpec {
+                    first,
+                    first_balanced,
+                    second,
+                    second_balanced: true,
+                };
+                let stats = counted_chains(&src, &spec);
+                let end = src.len();
+                assert_eq!(stats.count, 1);
+                assert_eq!(stats.last, Some((end - 5, end - 3, end - 1)));
+                assert_linear_work(&stats, &src, &spec);
+            }
+        }
+    }
+
+    // 36. Nested balanced first components move second starts backwards.
+    //     An unbalanced absent second close is searched only in new prefixes.
+    #[test]
+    fn test_36_nested_first_with_absent_second_close_work_is_linear() {
+        const N: usize = 256;
+        for (first, second) in [((b'[', b']'), (b'(', b')')), ((b'{', b'}'), (b'<', b'>'))] {
+            let spec = ChainSpec {
+                first,
+                first_balanced: true,
+                second,
+                second_balanced: false,
+            };
+            let mut src = [b' '; N * 5];
+            for chunk in src[..N * 3].chunks_exact_mut(3) {
+                chunk.copy_from_slice(&[first.0, b'x', b' ']);
+            }
+            for chunk in src[N * 3..].chunks_exact_mut(2) {
+                chunk.copy_from_slice(&[first.1, second.0]);
+            }
+            let stats = counted_chains(&src, &spec);
+            assert_eq!(stats.count, 0);
+            assert_eq!(stats.last, None);
+            assert_linear_work(&stats, &src, &spec);
+        }
+    }
+
+    // 37. Even when every nested first component balances, failed adjacency
+    //     checks do not repeat its search for a distinct close.
+    #[test]
+    fn test_37_nested_first_without_second_open_work_is_linear() {
+        const N: usize = 256;
+        for (first, second) in [((b'[', b']'), (b'(', b')')), ((b'{', b'}'), (b'<', b'>'))] {
+            let spec = ChainSpec {
+                first,
+                first_balanced: true,
+                second,
+                second_balanced: false,
+            };
+            let mut src = [first.1; N * 4];
+            for chunk in src[..N * 3].chunks_exact_mut(3) {
+                chunk.copy_from_slice(&[first.0, b'x', b' ']);
+            }
+            let stats = counted_chains(&src, &spec);
+            assert_eq!(stats.count, 0);
+            assert_eq!(stats.last, None);
+            assert_linear_work(&stats, &src, &spec);
+        }
+    }
+
+    // 38. Successful ordinary chains never need an index allocation.
+    #[test]
+    fn test_38_successful_chain_index_stays_unallocated() {
+        for first_balanced in [false, true] {
+            for second_balanced in [false, true] {
+                let spec = ChainSpec {
+                    first_balanced,
+                    second_balanced,
+                    ..LINK
+                };
+                let stats = counted_chains(b"[a](u) [b](v)", &spec);
+                assert_eq!(stats.count, 2);
+                assert_eq!(stats.last, Some((7, 9, 12)));
+                assert_eq!(stats.memo.closes.len(), 0);
+                assert_eq!(stats.memo.closes.capacity(), 0);
+            }
+        }
+        for src in [&b"[a [b"[..], &b"[a](u"[..]] {
+            let stats = counted_chains(src, &LINK);
+            assert_eq!(stats.count, 0);
+            assert_eq!(stats.memo.closes.len(), 0);
+            assert_eq!(stats.memo.closes.capacity(), 0);
+        }
+    }
+
+    fn forward_component(
+        src: &[u8],
+        from: usize,
+        (open, close): (u8, u8),
+        balanced: bool,
+    ) -> Option<usize> {
+        let mut depth = 1;
+        for q in from..src.len() {
+            if count_escape(src, q, b'\\') % 2 != 0 {
+                continue;
+            }
+            if balanced && src[q] == open {
+                depth += 1;
+            } else if src[q] == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(q);
+                }
+            }
+        }
+        None
+    }
+
+    fn forward_chain(src: &[u8], from: usize, spec: &ChainSpec) -> Option<(usize, usize)> {
+        let first = forward_component(src, from, spec.first, spec.first_balanced)?;
+        if src.get(first + 1) != Some(&spec.second.0) {
+            return None;
+        }
+        let second = forward_component(src, first + 2, spec.second, spec.second_balanced)?;
+        Some((first, second))
+    }
+
+    fn assert_cached_matches(src: &[u8], spec: &ChainSpec) {
+        let mut memo = ChainMemo::default();
+        let mut work = 0;
+        for p in 0..src.len() {
+            if src[p] != spec.first.0 {
+                continue;
+            }
+            let cached = chain_match_by(
+                src,
+                p + 1,
+                spec,
+                (b'\\', 0),
+                &mut memo,
+                |j, limit, open, close, balanced| {
+                    counted_scan(src, j, limit, open, close, balanced, &mut work)
+                },
+            );
+            assert_eq!(
+                cached,
+                forward_chain(src, p + 1, spec),
+                "{src:?}, root {p}, spec {spec:?}"
+            );
+        }
+    }
+
+    // 39. Cached searches agree with independent forward depth counting
+    //     at every first opener in short strings, including escaped bytes.
+    #[test]
+    fn test_39_cached_matches_agree_with_exhaustive_forward_oracle() {
+        const MAX: usize = 6;
+        for alphabet in [b"[]()\\", b"{}<>\\"] {
+            let mut src = [0u8; MAX];
+            for len in 1..=MAX {
+                for mut word in 0..5usize.pow(len as u32) {
+                    for byte in &mut src[..len] {
+                        *byte = alphabet[word % 5];
+                        word /= 5;
+                    }
+                    let src = &src[..len];
+                    for first_balanced in [false, true] {
+                        for second_balanced in [false, true] {
+                            let spec = ChainSpec {
+                                first: (alphabet[0], alphabet[1]),
+                                first_balanced,
+                                second: (alphabet[2], alphabet[3]),
+                                second_balanced,
+                            };
+                            assert_cached_matches(src, &spec);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 40. The escape byte may also be any component delimiter. In
+    //     particular, an adjacent second opener is accepted even when the
+    //     first close makes that opener globally escaped.
+    #[test]
+    fn test_40_cached_matches_with_escape_delimiters() {
+        for (src, first, second, from, want) in [
+            (&br"[a [b\(x)"[..], (b'[', b'\\'), (b'(', b')'), 4, (5, 8)),
+            (&br"\a \\b](x)"[..], (b'\\', b']'), (b'(', b')'), 5, (6, 9)),
+            (
+                &br"[a]\x [b]\\y)"[..],
+                (b'[', b']'),
+                (b'\\', b')'),
+                7,
+                (8, 12),
+            ),
+            (
+                &br"[a](x [b](y\"[..],
+                (b'[', b']'),
+                (b'(', b'\\'),
+                7,
+                (8, 11),
+            ),
+        ] {
+            let spec = ChainSpec {
+                first,
+                first_balanced: true,
+                second,
+                second_balanced: true,
+            };
+            assert_eq!(forward_chain(src, from, &spec), Some(want));
+            assert_cached_matches(src, &spec);
+        }
+
+        const MAX: usize = 5;
+        for alphabet in [b"[]()\\", b"{}<>\\"] {
+            let mut src = [0u8; MAX];
+            for len in 1..=MAX {
+                for mut word in 0..5usize.pow(len as u32) {
+                    for byte in &mut src[..len] {
+                        *byte = alphabet[word % 5];
+                        word /= 5;
+                    }
+                    let src = &src[..len];
+                    for (first, second) in [
+                        ((alphabet[0], b'\\'), (alphabet[2], alphabet[3])),
+                        ((b'\\', alphabet[1]), (alphabet[2], alphabet[3])),
+                        ((alphabet[0], alphabet[1]), (b'\\', alphabet[3])),
+                        ((alphabet[0], alphabet[1]), (alphabet[2], b'\\')),
+                    ] {
+                        for first_balanced in [false, true] {
+                            for second_balanced in [false, true] {
+                                let spec = ChainSpec {
+                                    first,
+                                    first_balanced,
+                                    second,
+                                    second_balanced,
+                                };
+                                assert_cached_matches(src, &spec);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 41. An adjacent second opener may be the first run's terminating
+    //     newline. Repeated first openers still reuse that second result.
+    #[test]
+    fn test_41_second_opener_on_paragraph_boundary() {
+        const N: usize = 256;
+        let spec = ChainSpec {
+            first_balanced: false,
+            second: (b'\n', b')'),
+            second_balanced: true,
+            ..LINK
+        };
+        let mut src = [b'x'; N * 3 + 7];
+        for chunk in src[..N * 3].chunks_exact_mut(3) {
+            chunk.copy_from_slice(b"[a ");
+        }
+        src[N * 3..].copy_from_slice(b"]\n\nxxxx");
+        let mut memo = ChainMemo::default();
+        for p in (0..N * 3).step_by(3) {
+            assert_eq!(
+                chain_match(&src, p + 1, &spec, b'\\', b'\n'.into(), Some, &mut memo),
+                None
+            );
+            assert_eq!(memo.second_last, Some((N * 3 + 2, Err(src.len()))));
+        }
+        // Starting after the first newline admits the following line even
+        // though a search from before it would end at the paragraph break.
+        src[N * 3 + 6] = b')';
+        let mut iter = ChainedIter::new(&src, spec, b'!', false, b'\n', b'\\', stub_make);
+        assert_eq!(
+            iter.next(),
+            Some((
+                false,
+                Span::new(1, (N * 3) as u32),
+                Span::new((N * 3 + 2) as u32, (N * 3 + 6) as u32)
+            ))
+        );
+        assert_eq!(iter.next(), None);
     }
 
     // ---- The generated methods ------------------------------------------ //

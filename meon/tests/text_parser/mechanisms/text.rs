@@ -652,3 +652,112 @@ fn chained_plain_02_across_run_lines() {
     assert_eq!(all(src, &[c.links[0].text]), vec!["a\n> b"]);
     assert_eq!(all(src, &[c.links[0].url]), vec!["c\n> d"]);
 }
+
+// ================================================================
+// balanced opaque `chained` searches across inline runs
+// ================================================================
+
+mod balanced_links {
+    use super::links::Link;
+
+    meon::define_parser!(Balanced {
+        sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 2;
+        inline {
+            on_trigger(b'[') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = false; balanced = true; } => text,
+                    | b'(', b')' | { parse_inside = false; balanced = true; } => url,
+                    prefix | b'!' | => is_image,
+                } => links [40]
+            }
+            fallback => texts [10];
+        }
+        blocks {
+            block_simple {
+                cont(b'[') => brackets [40];
+                cont(b'(') => parens [40];
+            }
+            fallback => paras [40];
+        }
+    });
+}
+use balanced_links::BalancedParser;
+
+// 01. A continuation marker equal to the text opener does not nest in
+//     the text component. The leading `x` ends block-marker dispatch.
+#[test]
+fn chained_balanced_01_text_marker_is_no_opener() {
+    let src = b"[ x[a\n[ b](u)\n";
+    let c = BalancedParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(c.links[0].text, Span::new(4, 9));
+    assert_eq!(c.links[0].url, Span::new(11, 12));
+    assert_eq!(BalancedParser::context(src).spans(), &[Span::new(3, 13)]);
+}
+
+// 02. A continuation marker equal to the url opener does not nest in
+//     the url component either.
+#[test]
+fn chained_balanced_02_url_marker_is_no_opener() {
+    let src = b"( x[a](u\n( v)\n";
+    let c = BalancedParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(c.links[0].text, Span::new(4, 5));
+    assert_eq!(c.links[0].url, Span::new(7, 12));
+    assert_eq!(BalancedParser::context(src).spans(), &[Span::new(3, 13)]);
+}
+
+// 03. A failed balanced text search with a close in its paragraph does
+//     not suppress a valid pair in the next paragraph.
+#[test]
+fn chained_balanced_03_text_failure_ends_at_paragraph() {
+    let src = b"x[a [b]\n\nx[c](d)";
+    let c = BalancedParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(c.links[0].text, Span::new(11, 12));
+    assert_eq!(c.links[0].url, Span::new(14, 15));
+    assert_eq!(BalancedParser::context(src).spans(), &[Span::new(10, 16)]);
+}
+
+// 04. A failed balanced url search leaves both the valid inner pair and
+//     the pair in the following paragraph available.
+#[test]
+fn chained_balanced_04_url_failure_ends_at_paragraph() {
+    let src = b"x[a](b [c](d)\n\nx[e](f)";
+    let c = BalancedParser::parse(src);
+    assert!(c.links.iter().map(|l| (l.is_image, l.text, l.url)).eq([
+        (false, Span::new(8, 9), Span::new(11, 12)),
+        (false, Span::new(17, 18), Span::new(20, 21)),
+    ]));
+    assert_eq!(
+        BalancedParser::context(src).spans(),
+        &[Span::new(7, 13), Span::new(16, 22)]
+    );
+}
+
+// 05. After an outer failure builds the close index, continuation markers
+//     remain absent from both components' nesting, just as in a direct scan.
+#[test]
+fn chained_balanced_05_index_skips_continuation_markers() {
+    for (src, text, url) in [
+        (
+            &b"[ x[z [a\n[ b](u)\n"[..],
+            Span::new(7, 12),
+            Span::new(14, 15),
+        ),
+        (
+            &b"( x[z [a](u\n( v)\n"[..],
+            Span::new(7, 8),
+            Span::new(10, 15),
+        ),
+    ] {
+        let c = BalancedParser::parse(src);
+        assert_eq!(c.links.len(), 1);
+        assert_eq!(c.links[0].text, text);
+        assert_eq!(c.links[0].url, url);
+        assert_eq!(BalancedParser::context(src).spans(), &[Span::new(6, 16)]);
+    }
+}

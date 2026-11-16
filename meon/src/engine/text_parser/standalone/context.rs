@@ -2561,4 +2561,47 @@ mod tests {
         let m = ParseContext::build(b"1`code`", b'\\', LINES, &[(b'`', 1)], &[], &[], 0);
         assert_eq!(m.spans(), &[Span::new(1, 7)]);
     }
+
+    // 58. Repeated balanced first openers with a close byte but no second
+    //     component cover no context region.
+    #[test]
+    fn test_58_link_balanced_first_openers_with_close() {
+        const N: usize = 1_024;
+        let spec = ChainSpec {
+            first: (b'{', b'}'),
+            first_balanced: true,
+            second: (b'<', b'>'),
+            second_balanced: false,
+        };
+        let mut src = [b' '; N * 3 + 1];
+        for chunk in src[..N * 3].chunks_exact_mut(3) {
+            chunk.copy_from_slice(b"{x ");
+        }
+        src[N * 3] = b'}';
+
+        let ctx = ParseContext::build(&src, b'\\', EXAMPLE_LINES, &[], &[], &[spec], 0);
+        assert!(ctx.spans().is_empty());
+    }
+
+    // 59. A close byte met by failed balanced second searches still closes
+    //     the last pair, which alone becomes a context region.
+    #[test]
+    fn test_59_link_balanced_second_openers_with_close() {
+        const N: usize = 1_024;
+        let spec = ChainSpec {
+            first: (b'{', b'}'),
+            first_balanced: false,
+            second: (b'<', b'>'),
+            second_balanced: true,
+        };
+        let mut src = [b' '; N * 4 + 1];
+        for chunk in src[..N * 4].chunks_exact_mut(4) {
+            chunk.copy_from_slice(b"{x}<");
+        }
+        src[N * 4] = b'>';
+
+        let ctx = ParseContext::build(&src, b'\\', EXAMPLE_LINES, &[], &[], &[spec], 0);
+        let end = src.len() as u32;
+        assert_eq!(ctx.spans(), &[Span::new(end - 5, end)]);
+    }
 }
