@@ -1135,13 +1135,6 @@ impl ParseContext {
                 }
             }
 
-            // Inline opaque rule owning this byte, if any (a pure fence byte
-            // that opens nothing is ordinary content).
-            let Some(rule) = rule_for(b, sym, asym, chained) else {
-                pos = p + 1;
-                continue;
-            };
-
             if count_escape(source, p, escape) % 2 == 1 {
                 pos = p + 1;
                 continue;
@@ -1153,29 +1146,18 @@ impl ParseContext {
                 c += 1;
                 run_end += 1;
             }
-            let count = match rule {
-                Opaque::Sym(ri) => sym[ri].1,
-                // Every byte of the open run of a balanced rule opens.
-                Opaque::Asym(ri) if asym[ri].3 => c,
-                Opaque::Asym(ri) => asym[ri].2,
-                // Of a run of the open byte the last byte opens the match.
-                Opaque::Chain(_) => c,
-            };
-
-            // A line's markers are no triggers. Only a run that opens is
-            // checked, and only for a byte markers may consist of (a fence
-            // byte was checked above): a run of another length opens nothing
-            // either way, unless the trigger byte is also a `cont` marker,
-            // when the run may begin among the markers and go on into
-            // content.
-            if c != count {
+            // Choose an arm only after measuring the complete opening run.
+            // An unsupported count is literal, except that a run beginning
+            // among continuation markers must be retried past those markers.
+            let Some(rule) = rule_for(b, c, sym, asym, chained) else {
                 pos = if lines.is_cont(b) && reader.in_markers(source, p) {
                     p + 1
                 } else {
                     run_end
                 };
                 continue;
-            }
+            };
+            let count = c;
             if !fence_byte && classes.marks.contains(b) && reader.in_markers(source, p) {
                 pos = p + 1;
                 continue;
@@ -1189,7 +1171,7 @@ impl ParseContext {
             let enter_line = |ls: usize| reader.crosses(source, p, ls, &mut run);
 
             match rule {
-                Opaque::Sym(_) => {
+                Opaque::Sym => {
                     match sym_close(source, run_end, b, count, escape, breaks, enter_line) {
                         Some(close_end) => {
                             spans.push(Span::new(p as u32, close_end as u32));
@@ -1330,27 +1312,41 @@ fn find_needle(needles: &[u8], hay: &[u8]) -> Option<usize> {
     }
 }
 
-/// An opaque inline rule, by its index in its rule set.
+/// An opaque inline rule, with the rule-set index needed by its search.
 #[derive(Debug, Clone, Copy)]
 enum Opaque {
-    Sym(usize),
+    Sym,
     Asym(usize),
     Chain(usize),
 }
 
-/// The opaque inline rule owning trigger byte `b`, looked up in the order of
-/// the full parser's forward searches: `chained`, `symmetric`, `asymmetric`.
+/// The opaque inline arm owning trigger byte `b` and opening run `count`,
+/// looked up in the full parser's forward-search order: `chained`,
+/// `symmetric`, `asymmetric`.
 /// The engine assumes a byte has one meaning per grammar, so the order only
-/// matters for a grammar that breaks that.
+/// matters for a grammar that breaks that. Counts select exact symmetric
+/// and asymmetric arms; balanced asymmetric and chained rules accept every
+/// opening run length.
 #[inline]
-fn rule_for(b: u8, sym: &[SymSpec], asym: &[AsymSpec], chained: &[ChainSpec]) -> Option<Opaque> {
+fn rule_for(
+    b: u8,
+    count: u32,
+    sym: &[SymSpec],
+    asym: &[AsymSpec],
+    chained: &[ChainSpec],
+) -> Option<Opaque> {
     if let Some(ri) = chained.iter().position(|spec| spec.first.0 == b) {
         return Some(Opaque::Chain(ri));
     }
-    if let Some(ri) = sym.iter().position(|&(sb, _)| sb == b) {
-        return Some(Opaque::Sym(ri));
+    if sym.iter().any(|&(sb, _)| sb == b) {
+        return sym
+            .iter()
+            .any(|&(sb, n)| sb == b && n == count)
+            .then_some(Opaque::Sym);
     }
-    asym.iter().position(|&(o, ..)| o == b).map(Opaque::Asym)
+    asym.iter()
+        .position(|&(o, _, n, balanced)| o == b && (balanced || n == count))
+        .map(Opaque::Asym)
 }
 
 /// The byte and run count of a fence of one of `bytes` opening at `pos` on
@@ -2604,5 +2600,38 @@ mod tests {
         let ctx = ParseContext::build(&src, b'\\', EXAMPLE_LINES, &[], &[], &[spec], 0);
         let end = src.len() as u32;
         assert_eq!(ctx.spans(), &[Span::new(end - 5, end)]);
+    }
+
+    // 60. Every declared symmetric run count owns its opaque region,
+    //     independently of the order of the arms.
+    #[test]
+    fn test_60_symmetric_arm_selected_by_run_count() {
+        for sym in [
+            [(b'`', 1), (b'`', 2), (b'`', 3)],
+            [(b'`', 3), (b'`', 1), (b'`', 2)],
+        ] {
+            for src in [&b"`x`"[..], b"``x``", b"```x```"] {
+                let ctx = ParseContext::build(src, b'\\', EXAMPLE_LINES, &sym, &[], &[], 0);
+                assert_eq!(ctx.spans(), &[Span::new(0, src.len() as u32)]);
+            }
+            let ctx = ParseContext::build(b"````x````", b'\\', EXAMPLE_LINES, &sym, &[], &[], 0);
+            assert!(ctx.spans().is_empty());
+        }
+    }
+
+    // 61. Exact asymmetric arms also select the declared opening count.
+    #[test]
+    fn test_61_asymmetric_arm_selected_by_run_count() {
+        for asym in [
+            [(b'<', b'>', 1, false), (b'<', b'>', 2, false)],
+            [(b'<', b'>', 2, false), (b'<', b'>', 1, false)],
+        ] {
+            for src in [&b"<x>"[..], b"<<x>"] {
+                let ctx = ParseContext::build(src, b'\\', EXAMPLE_LINES, &[], &asym, &[], 0);
+                assert_eq!(ctx.spans(), &[Span::new(0, src.len() as u32)]);
+            }
+            let ctx = ParseContext::build(b"<<<x>", b'\\', EXAMPLE_LINES, &[], &asym, &[], 0);
+            assert!(ctx.spans().is_empty());
+        }
     }
 }

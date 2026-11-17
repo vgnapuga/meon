@@ -840,3 +840,77 @@ fn chained_balanced_05_index_skips_continuation_markers() {
         assert_eq!(BalancedParser::context(src).spans(), &[Span::new(6, 16)]);
     }
 }
+
+// ================================================================
+// opaque arm selection shared by the full parse and the context
+// ================================================================
+
+mod opaque_arms {
+    meon::define_parser!(Arms {
+        sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+        inline {
+            on_trigger(b'`', b'<', b'*') {
+                symmetric b'`' {
+                    parse_inside = false;
+                    1 => singles [20], 2 => doubles [20], 3 => triples [20],
+                }
+                asymmetric b'<', b'>' {
+                    balanced = false; parse_inside = false;
+                    1 => first [20], 2 => second [20],
+                }
+                symmetric b'*' { parse_inside = true; 1 => ems [20], }
+            }
+            fallback => texts [10];
+        }
+        blocks { fallback => paras [20]; }
+    });
+}
+
+// 01. Every opaque arm hides its contents from context-aware consumers.
+#[test]
+fn opaque_arms_01_context_matches_full_parse() {
+    use opaque_arms::ArmsParser;
+    for src in [
+        &b"`*x*` *y*"[..],
+        b"``*x*`` *y*",
+        b"```*x*``` *y*",
+        b"<*x*> *y*",
+        b"<<*x*> *y*",
+    ] {
+        let c = ArmsParser::parse(src);
+        let ctx = ArmsParser::context(src);
+        assert_eq!(ctx.spans(), &[Span::new(0, (src.len() - 4) as u32)]);
+        assert_eq!(c.ems.len(), 1);
+        assert!(ArmsParser::find_context_ems(src, &ctx).eq(c.ems.iter().copied()));
+        assert!(ArmsParser::find_doubles(src).eq(c.doubles.iter().copied()));
+        assert!(ArmsParser::find_triples(src).eq(c.triples.iter().copied()));
+        assert!(ArmsParser::find_second(src).eq(c.second.iter().copied()));
+    }
+}
+
+// 02. An undeclared opening count, or an escaped opener, hides nothing.
+#[test]
+fn opaque_arms_02_literal_runs_preserve_inner_elements() {
+    use opaque_arms::ArmsParser;
+    for src in [&b"````*x*````"[..], b"<<<*x*>", b"\\``*x*``"] {
+        let c = ArmsParser::parse(src);
+        let ctx = ArmsParser::context(src);
+        assert!(ctx.spans().is_empty());
+        assert_eq!(c.ems.len(), 1);
+        assert!(ArmsParser::find_context_ems(src, &ctx).eq(c.ems.iter().copied()));
+    }
+}
+
+// 03. A failed longer arm leaves a later shorter opaque match available.
+#[test]
+fn opaque_arms_03_failed_longer_arm_recovers_shorter() {
+    use opaque_arms::ArmsParser;
+    let src = b"``x `*y*`";
+    let c = ArmsParser::parse(src);
+    let ctx = ArmsParser::context(src);
+    assert!(c.doubles.is_empty());
+    assert_eq!(c.singles.len(), 1);
+    assert!(c.ems.is_empty());
+    assert_eq!(ctx.spans(), &[Span::new(4, 9)]);
+    assert!(ArmsParser::find_context_ems(src, &ctx).eq(c.ems.iter().copied()));
+}
