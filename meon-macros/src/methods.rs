@@ -245,7 +245,7 @@ pub(crate) fn build_content_methods(
             }
         }
 
-        StandaloneRule::BlockNumbered { field, .. } => {
+        StandaloneRule::BlockNumbered { field, digits, .. } => {
             let clean = append_ident(field, "_clean");
             let raw = append_ident(field, "_raw");
             quote! {
@@ -255,6 +255,8 @@ pub(crate) fn build_content_methods(
                         &source[s.start as usize..s.end as usize]
                     })
                 }
+                /// Includes the number written with the grammar's digit
+                /// pattern, its terminator, separator and content.
                 pub fn #raw(&self) -> impl ::std::iter::Iterator<Item = &[u8]> + '_ {
                     let source = self.source;
                     self.#field.iter().map(move |(_, s)| {
@@ -267,7 +269,7 @@ pub(crate) fn build_content_methods(
                         if start > 0 {
                             start -= 1;
                         }
-                        while start > 0 && source[start - 1].is_ascii_digit() {
+                        while start > 0 && matches!(source[start - 1], #digits) {
                             start -= 1;
                         }
                         &source[start..s.end as usize]

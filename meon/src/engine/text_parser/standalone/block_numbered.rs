@@ -672,6 +672,57 @@ mod tests {
             });
         }
 
+        mod letters {
+            use super::Num;
+            crate::define_parser!(Letters {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline { fallback => texts [10]; }
+                blocks {
+                    block_simple { cont(b'>') => quotes [40]; }
+                    block {
+                        num(b'A'..=b'F' | b'K' | b'M', end = b':' | b';') |n, k|:
+                            Num { num: n, kind: k } => nums [40];
+                    }
+                    fallback => paragraphs [80];
+                }
+            });
+        }
+
+        // 24. Raw numbered spans use the declared digit pattern, preserve
+        //     separators and content, and exclude indentation and containers.
+        #[test]
+        fn test_24_generated_raw_uses_declared_digits() {
+            for (src, raw, clean) in [
+                (&b"AB: x"[..], &b"AB: x"[..], &b"x"[..]),
+                (b"KM; y", b"KM; y", b"y"),
+                (b"  AB;\tx", b"AB;\tx", b"x"),
+                (b"> AB: x", b"AB: x", b"x"),
+                (b"ABC: ", b"ABC: ", b""),
+                (b"ABC:  x", b"ABC:  x", b" x"),
+                (b"AB: x\n", b"AB: x", b"x"),
+                (b"ABCDEFABC; x", b"ABCDEFABC; x", b"x"),
+            ] {
+                let c = letters::LettersParser::parse(src);
+                assert_eq!(c.nums.len(), 1, "{src:?}");
+                assert!(c.nums_raw().eq([raw]));
+                assert!(c.nums_clean().eq([clean]));
+            }
+            let c = letters::LettersParser::parse(b"AB: x");
+            assert_eq!(c.nums[0].0.num, 188);
+            assert_eq!(c.nums[0].0.kind, b':');
+        }
+
+        // 25. Digit-like terminators and restricted decimal patterns keep
+        //     their full raw marker, including the original end byte.
+        #[test]
+        fn test_25_generated_raw_patterns_and_ends() {
+            let c = wide::WideParser::parse(b"  ab5 x\nq: y");
+            assert!(c.nums_raw().eq([&b"ab5 x"[..], &b"q: y"[..]]));
+            assert!(c.nums_clean().eq([&b"x"[..], &b"y"[..]]));
+            let c = narrow::NarrowParser::parse(b"10. no\n12) yes\n9: ");
+            assert!(c.nums_raw().eq([&b"12) yes"[..], &b"9: "[..]]));
+        }
+
         fn items(
             it: impl IntoIterator<Item = (Num, crate::span::Span)>,
         ) -> Vec<(u32, u8, u32, u32)> {
