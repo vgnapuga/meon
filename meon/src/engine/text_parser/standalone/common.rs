@@ -49,10 +49,10 @@ impl LineBreaks {
     }
 
     /// Where the content of the line `[ls, le)` ends: before a `\r` right
-    /// before `le` when `crlf` is set, at `le` otherwise.
+    /// before an actual `eol` at `le` when `crlf` is set; a CR at EOF is content.
     #[inline(always)]
     pub fn content_end(&self, src: &[u8], ls: usize, le: usize) -> usize {
-        if self.crlf && le > ls && src[le - 1] == b'\r' {
+        if self.crlf && le < src.len() && src[le] == self.eol && le > ls && src[le - 1] == b'\r' {
             le - 1
         } else {
             le
@@ -70,7 +70,7 @@ impl LineBreaks {
         }
         i >= len
             || src[i] == self.eol
-            || (self.crlf && src[i] == b'\r' && (i + 1 >= len || src[i + 1] == self.eol))
+            || (self.crlf && src[i] == b'\r' && i + 1 < len && src[i + 1] == self.eol)
     }
 
     /// Does a paragraph end at the `eol` at `q`: with the end of input, or a
@@ -413,5 +413,32 @@ mod tests {
         assert_eq!(scan_paragraph(b"ab\ncd", 0, b'>', b'\n', Some), Err(5));
         assert_eq!(scan_paragraph(b"ab\n", 0, b'>', b'\n', Some), Err(2));
         assert_eq!(scan_paragraph(b"ab\ncd>", 0, b'>', b'\n', |_| None), Err(2));
+    }
+
+    // 17. CR belongs to the line end only when an actual eol follows it.
+    #[test]
+    fn test_17_content_end_requires_eol() {
+        for eol in *b"\n|" {
+            let breaks = LineBreaks::new(eol, true, b" \t");
+            assert_eq!(breaks.content_end(b"x\r", 0, 2), 2);
+            let src = [b'x', b'\r', eol];
+            assert_eq!(breaks.content_end(&src, 0, 2), 1);
+            assert_eq!(breaks.content_end(b"x\ry", 0, 2), 2);
+            assert_eq!(breaks.content_end(b"", 0, 0), 0);
+        }
+    }
+
+    // 18. A bare CR at EOF makes a line nonblank, with or without padding.
+    #[test]
+    fn test_18_blank_line_requires_eol_after_cr() {
+        let breaks = LineBreaks::new(b'\n', true, b" \t");
+        for src in [&b"\r"[..], b" \t\r", b"\rx"] {
+            assert!(!breaks.blank_at(src, 0));
+        }
+        for src in [&b""[..], b" \t", b"\r\n", b" \t\r\n"] {
+            assert!(breaks.blank_at(src, 0));
+        }
+        assert!(!breaks.ends_paragraph(b"x\n\r", 1));
+        assert!(breaks.ends_paragraph(b"x\n\r\n", 1));
     }
 }

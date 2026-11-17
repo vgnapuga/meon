@@ -609,10 +609,11 @@ impl LineModel {
     }
 
     /// Where the content of the line `[ls, le)`, `le` its `eol` or the end
-    /// of input, ends: before the `\r` right before `le` with `crlf`.
+    /// of input, ends: before a CR followed by an actual `eol` with
+    /// `crlf`. A CR at EOF remains content.
     #[inline]
     pub(crate) fn content_end(&self, src: &[u8], ls: usize, le: usize) -> usize {
-        if self.crlf && le > ls && src[le - 1] == b'\r' {
+        if self.crlf && le < src.len() && src[le] == self.eol && le > ls && src[le - 1] == b'\r' {
             le - 1
         } else {
             le

@@ -429,7 +429,7 @@ macro_rules! parse_text {
                 } else {
                     $crate::memchr::memchr($eol, &src[pos..]).map_or(len, |i| pos + i)
                 };
-                let current_line_end = if $crlf && line_eol > pos && src[line_eol - 1] == b'\r' {
+                let current_line_end = if $crlf && line_eol < len && line_eol > pos && src[line_eol - 1] == b'\r' {
                     line_eol - 1
                 } else {
                     line_eol

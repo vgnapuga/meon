@@ -457,6 +457,85 @@ fn crlf_11_key_value() {
     assert_eq!(pairs(&found), pairs(&values));
 }
 
+// 12. EOF is not an eol byte: a trailing CR remains ordinary content.
+#[test]
+fn crlf_12_trailing_cr_is_content() {
+    for src in [&b"\r"[..], b" \t\r", b"a\r", b"a\r\n\r"] {
+        let c = CrDocParser::parse(src);
+        assert_eq!(c.paras.len(), 1);
+        assert_eq!(c.paras[0], Span::new(0, src.len() as u32));
+        assert_eq!(c.texts.last().unwrap().end, src.len() as u32);
+    }
+}
+
+// 13. Line and block content keep the final CR in full and selective scans.
+#[test]
+fn crlf_13_marker_content_at_eof() {
+    let src = b"# x\r";
+    let c = CrDocParser::parse(src);
+    assert_eq!(c.heads[0].1, Span::new(2, 4));
+    assert!(
+        CrDocParser::find_heads(src)
+            .map(|h| h.1)
+            .eq([Span::new(2, 4)])
+    );
+    let ctx = CrDocParser::context(src);
+    assert!(
+        CrDocParser::find_context_heads(src, &ctx)
+            .map(|h| h.1)
+            .eq([Span::new(2, 4)])
+    );
+    let src = b"- x\r";
+    let c = CrDocParser::parse(src);
+    assert_eq!(c.items[0].1, Span::new(2, 4));
+    assert!(
+        CrDocParser::find_items(src)
+            .map(|h| h.1)
+            .eq([Span::new(2, 4)])
+    );
+    let src = b"> x\r";
+    let c = CrDocParser::parse(src);
+    assert_eq!(c.texts.as_slice(), &[Span::new(2, 4)]);
+}
+
+// 14. A bare CR invalidates a uniform line and a fence closing line.
+#[test]
+fn crlf_14_trailing_cr_is_not_a_line_terminator() {
+    for src in [&b"===\r"[..], b"=== \r"] {
+        let c = CrDocParser::parse(src);
+        assert!(c.rules.is_empty());
+        assert!(CrDocParser::find_rules(src).next().is_none());
+        let ctx = CrDocParser::context(src);
+        assert!(CrDocParser::find_context_rules(src, &ctx).next().is_none());
+        assert_eq!(c.paras.as_slice(), &[Span::new(0, src.len() as u32)]);
+    }
+    let src = b"~~~\nx\n~~~\r";
+    let c = CrDocParser::parse(src);
+    assert_eq!(c.fences.len(), 1);
+    assert_eq!(c.fences[0].end, src.len() as u32);
+    assert!(CrDocParser::find_fences(src).eq(c.fences.iter().copied()));
+    assert_eq!(
+        CrDocParser::context(src).spans(),
+        &[Span::new(0, src.len() as u32)]
+    );
+}
+
+// 15. An actual CRLF still terminates content, including uniform lines.
+#[test]
+fn crlf_15_actual_crlf_at_eof() {
+    let src = b"# x\r\n";
+    let c = CrDocParser::parse(src);
+    assert_eq!(c.heads[0].1, Span::new(2, 3));
+    assert!(
+        CrDocParser::find_heads(src)
+            .map(|h| h.1)
+            .eq([Span::new(2, 3)])
+    );
+    let src = b"===\r\n";
+    assert_eq!(CrDocParser::parse(src).rules.len(), 1);
+    assert_eq!(CrDocParser::find_rules(src).count(), 1);
+}
+
 // ================================================================
 // a run of `cont` frames alone, with no `hard_break` and two `cont` rules
 // ================================================================

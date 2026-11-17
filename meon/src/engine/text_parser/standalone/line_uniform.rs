@@ -116,7 +116,7 @@ where
             while i < len {
                 let b = src[i];
                 if b == self.eol
-                    || (self.breaks.crlf && b == b'\r' && (i + 1 >= len || src[i + 1] == self.eol))
+                    || (self.breaks.crlf && b == b'\r' && i + 1 < len && src[i + 1] == self.eol)
                 {
                     break;
                 }
