@@ -272,6 +272,12 @@ macro_rules! parse_block {
     // field of the rule that opened it — the first rule, in order, that  //
     // would open a frame of that byte and count.                         //
     // ------------------------------------------------------------------ //
+    (@choose [], $normal:block, $limited:block) => {
+        $normal
+    };
+    (@choose [$n:literal], $normal:block, $limited:block) => {
+        $limited
+    };
     (@over [], $s:expr, $e:expr) => {
         false
     };
@@ -357,6 +363,7 @@ macro_rules! parse_block {
             $done = true;
             let _span = $crate::span::Span::new($start, $endpos);
             $crate::parse_block!(@push_simple_block $max_block, $st, $field, $para, _span);
+            $crate::parse_block!(@choose $max_block, {}, {
             if $crate::parse_block!(@over $max_block, _span.start, _span.end) {
                 let _cs = {
                     let mut _i = _span.start as usize;
@@ -379,6 +386,7 @@ macro_rules! parse_block {
                     $crate::parse_block!(@reparse $reparse, $st, $src, _cs, _ce, $contb, $contd);
                 }
             }
+            });
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $done, $endpos, $count, $byte, $start,
             max_block = $max_block, para = $para, reparse = $reparse,

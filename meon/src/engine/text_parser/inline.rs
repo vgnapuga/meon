@@ -327,6 +327,14 @@ macro_rules! parse_inline {
         )
     };
 
+    // Emit only the branch the grammar's cap needs.
+    (@choose [], $normal:block, $limited:block) => {
+        $normal
+    };
+    (@choose [$n:literal], $normal:block, $limited:block) => {
+        $limited
+    };
+
     // ------------------------------------------------------------------ //
     // Accumulation phase: collect all rule sections into typed buckets.  //
     // ------------------------------------------------------------------ //
@@ -991,14 +999,26 @@ macro_rules! parse_inline {
                     } else {
                         delim_start
                     };
-                    if !over_limit!($max_inline, _ks, _ve) {
-                        $crate::paste::paste! {
-                            $state.[<push_ $kv_f>]($kv_ty {
-                                $kv_kf: $crate::span::Span::new(_ks, _ke),
-                                $kv_vf: $crate::span::Span::new(_vs, _ve),
-                            });
+                    $crate::parse_inline!(@choose $max_inline,
+                        {
+                            $crate::paste::paste! {
+                                $state.[<push_ $kv_f>]($kv_ty {
+                                    $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                    $kv_vf: $crate::span::Span::new(_vs, _ve),
+                                });
+                            }
+                        },
+                        {
+                            if !over_limit!($max_inline, _ks, _ve) {
+                                $crate::paste::paste! {
+                                    $state.[<push_ $kv_f>]($kv_ty {
+                                        $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                        $kv_vf: $crate::span::Span::new(_vs, _ve),
+                                    });
+                                }
+                            }
                         }
-                    }
+                    );
                     pop_frame!();
                     _kv_seg_start = pos;
                     _kv_hit = true;
@@ -1094,19 +1114,31 @@ macro_rules! parse_inline {
                                     if _below_closes_here {
                                         let (_ks, _ke, _vs) = kv_pending[fdepth - 1];
                                         $(
-                                            if _top_b == $kv_end
-                                                && !over_limit!(
-                                                    $max_inline,
-                                                    _ks,
-                                                    _close_char_pos as u32
-                                                )
-                                            {
-                                                $crate::paste::paste! {
-                                                    $state.[<push_ $kv_f>]($kv_ty {
-                                                        $kv_kf: $crate::span::Span::new(_ks, _ke),
-                                                        $kv_vf: $crate::span::Span::new(_vs, _close_char_pos),
-                                                    });
-                                                }
+                                            if _top_b == $kv_end {
+                                                $crate::parse_inline!(@choose $max_inline,
+                                                    {
+                                                        $crate::paste::paste! {
+                                                            $state.[<push_ $kv_f>]($kv_ty {
+                                                                $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                                                $kv_vf: $crate::span::Span::new(_vs, _close_char_pos),
+                                                            });
+                                                        }
+                                                    },
+                                                    {
+                                                        if !over_limit!(
+                                                            $max_inline,
+                                                            _ks,
+                                                            _close_char_pos as u32
+                                                        ) {
+                                                            $crate::paste::paste! {
+                                                                $state.[<push_ $kv_f>]($kv_ty {
+                                                                    $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                                                    $kv_vf: $crate::span::Span::new(_vs, _close_char_pos),
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                );
                                             }
                                         )*
                                         pop_frame!();
@@ -1132,29 +1164,38 @@ macro_rules! parse_inline {
                                             if $api && _ob == $ao {
                                                 match 1u32 {
                                                     $( $an => {
-                                                        let _span_start =
-                                                            $state.$af[_vidx as usize].start;
-                                                        if over_limit!(
-                                                            $max_inline,
-                                                            _span_start,
-                                                            _close_char_pos
-                                                        ) {
-                                                            $state.$af.remove(_vidx as usize);
-                                                            pop_frame_keep_text!();
-                                                            if text_start
-                                                                < (_close_char_pos + 1) as usize
+                                                        $crate::parse_inline!(@choose $max_inline,
                                                             {
-                                                                push_il!($tx,
-                                                                    $crate::span::Span::new(
-                                                                        text_start as u32,
-                                                                        _close_char_pos + 1,
-                                                                    ));
+                                                                $state.$af[_vidx as usize].end =
+                                                                    _close_char_pos;
+                                                                pop_frame!();
+                                                            },
+                                                            {
+                                                                let _span_start =
+                                                                    $state.$af[_vidx as usize].start;
+                                                                if over_limit!(
+                                                                    $max_inline,
+                                                                    _span_start,
+                                                                    _close_char_pos
+                                                                ) {
+                                                                    $state.$af.remove(_vidx as usize);
+                                                                    pop_frame_keep_text!();
+                                                                    if text_start
+                                                                        < (_close_char_pos + 1) as usize
+                                                                    {
+                                                                        push_il!($tx,
+                                                                            $crate::span::Span::new(
+                                                                                text_start as u32,
+                                                                                _close_char_pos + 1,
+                                                                            ));
+                                                                    }
+                                                                } else {
+                                                                    $state.$af[_vidx as usize].end =
+                                                                        _close_char_pos;
+                                                                    pop_frame!();
+                                                                }
                                                             }
-                                                        } else {
-                                                            $state.$af[_vidx as usize].end =
-                                                                _close_char_pos;
-                                                            pop_frame!();
-                                                        }
+                                                        );
                                                     } )*
                                                     _ => {}
                                                 }
@@ -1259,39 +1300,62 @@ macro_rules! parse_inline {
                         // it and owns that text. A frame opened since and
                         // still open gets the snapshot of the vector as it now
                         // ends.
-                        if over_limit!($max_inline, ch_real_start, pos as u32) {
-                            if text_start < pos {
-                                push_il!($tx,
-                                    $crate::span::Span::new(
-                                        text_start as u32,
-                                        pos as u32,
-                                    ));
+                        $crate::parse_inline!(@choose $max_inline,
+                            {
+                                release_held!(_ch_base);
+                                if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
+                                    push_il!($tx, $crate::span::Span::new(
+                                        _ch_text_start as u32, ch_real_start));
+                                }
+                                let _after = hold_base!();
+                                for _k in _ch_low..fdepth {
+                                    held_base[_k] = _after;
+                                }
+                                $crate::paste::paste! {
+                                    $state.[<push_ $cf>]($ch_ty {
+                                        $cpi: ch_is_prefix,
+                                        $ct: $crate::span::Span::new(ch_first_start, ch_saved_first_end),
+                                        $cu: $crate::span::Span::new(ch_second_start, _cu_end),
+                                    });
+                                }
+                                text_start = pos;
+                            },
+                            {
+                                if over_limit!($max_inline, ch_real_start, pos as u32) {
+                                    if text_start < pos {
+                                        push_il!($tx,
+                                            $crate::span::Span::new(
+                                                text_start as u32,
+                                                pos as u32,
+                                            ));
+                                    }
+                                    let _after = hold_base!();
+                                    for _k in _ch_low..fdepth {
+                                        held_base[_k] = _after;
+                                    }
+                                    text_start = pos;
+                                    _kv_seg_start = pos;
+                                } else {
+                                    release_held!(_ch_base);
+                                    if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
+                                        push_il!($tx, $crate::span::Span::new(
+                                            _ch_text_start as u32, ch_real_start));
+                                    }
+                                    let _after = hold_base!();
+                                    for _k in _ch_low..fdepth {
+                                        held_base[_k] = _after;
+                                    }
+                                    $crate::paste::paste! {
+                                        $state.[<push_ $cf>]($ch_ty {
+                                            $cpi: ch_is_prefix,
+                                            $ct: $crate::span::Span::new(ch_first_start, ch_saved_first_end),
+                                            $cu: $crate::span::Span::new(ch_second_start, _cu_end),
+                                        });
+                                    }
+                                    text_start = pos;
+                                }
                             }
-                            let _after = hold_base!();
-                            for _k in _ch_low..fdepth {
-                                held_base[_k] = _after;
-                            }
-                            text_start = pos;
-                            _kv_seg_start = pos;
-                        } else {
-                            release_held!(_ch_base);
-                            if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
-                                push_il!($tx, $crate::span::Span::new(
-                                    _ch_text_start as u32, ch_real_start));
-                            }
-                            let _after = hold_base!();
-                            for _k in _ch_low..fdepth {
-                                held_base[_k] = _after;
-                            }
-                            $crate::paste::paste! {
-                                $state.[<push_ $cf>]($ch_ty {
-                                    $cpi: ch_is_prefix,
-                                    $ct: $crate::span::Span::new(ch_first_start, ch_saved_first_end),
-                                    $cu: $crate::span::Span::new(ch_second_start, _cu_end),
-                                });
-                            }
-                            text_start = pos;
-                        }
+                        );
                     }
                     _chained_handled = true;
                 }
@@ -1352,23 +1416,37 @@ macro_rules! parse_inline {
                                 push_il!($tx, $crate::span::Span::new(
                                     text_start as u32, real_start as u32));
                             }
-                            if over_limit!($max_inline, real_start as u32, (cu_end + 1) as u32) {
-                                push_il!($tx, $crate::span::Span::new(
-                                    real_start as u32, pos as u32));
-                                call_reparse!($reparse, &mut *$state, $src, pos, cu_end,
-                                              $depth);
-                                push_il!($tx, $crate::span::Span::new(
-                                    cu_end as u32, (cu_end + 1) as u32));
-                            } else {
-                                $crate::paste::paste! {
-                                    $state.[<push_ $cf>]($ch_ty {
-                                        $cpi: is_prefix,
-                                        $ct: $crate::span::Span::new(pos as u32, ct_end as u32),
-                                        $cu: $crate::span::Span::new((ct_end + 2) as u32, cu_end as u32),
-                                    });
+                            $crate::parse_inline!(@choose $max_inline,
+                                {
+                                    $crate::paste::paste! {
+                                        $state.[<push_ $cf>]($ch_ty {
+                                            $cpi: is_prefix,
+                                            $ct: $crate::span::Span::new(pos as u32, ct_end as u32),
+                                            $cu: $crate::span::Span::new((ct_end + 2) as u32, cu_end as u32),
+                                        });
+                                    }
+                                    _kv_opaque = Some((real_start, cu_end + 1));
+                                },
+                                {
+                                    if over_limit!($max_inline, real_start as u32, (cu_end + 1) as u32) {
+                                        push_il!($tx, $crate::span::Span::new(
+                                            real_start as u32, pos as u32));
+                                        call_reparse!($reparse, &mut *$state, $src, pos, cu_end,
+                                                      $depth);
+                                        push_il!($tx, $crate::span::Span::new(
+                                            cu_end as u32, (cu_end + 1) as u32));
+                                    } else {
+                                        $crate::paste::paste! {
+                                            $state.[<push_ $cf>]($ch_ty {
+                                                $cpi: is_prefix,
+                                                $ct: $crate::span::Span::new(pos as u32, ct_end as u32),
+                                                $cu: $crate::span::Span::new((ct_end + 2) as u32, cu_end as u32),
+                                            });
+                                        }
+                                        _kv_opaque = Some((real_start, cu_end + 1));
+                                    }
                                 }
-                                _kv_opaque = Some((real_start, cu_end + 1));
-                            }
+                            );
                             pos = cu_end + 1;
                             text_start = pos;
                         }
@@ -1389,25 +1467,33 @@ macro_rules! parse_inline {
                             let _vidx = frames[fdepth - 1].2;
                             match count {
                                 $( $sn => {
-                                    let _span_start = $state.$sf[_vidx as usize].start;
-                                    if over_limit!(
-                                        $max_inline,
-                                        _span_start,
-                                        delim_start
-                                    ) {
-                                        $state.$sf.remove(_vidx as usize);
-                                        pop_frame_keep_text!();
-                                        if text_start < pos {
-                                            push_il!($tx,
-                                                $crate::span::Span::new(
-                                                    text_start as u32,
-                                                    pos as u32,
-                                                ));
+                                    $crate::parse_inline!(@choose $max_inline,
+                                        {
+                                            $state.$sf[_vidx as usize].end = delim_start;
+                                            pop_frame!();
+                                        },
+                                        {
+                                            let _span_start = $state.$sf[_vidx as usize].start;
+                                            if over_limit!(
+                                                $max_inline,
+                                                _span_start,
+                                                delim_start
+                                            ) {
+                                                $state.$sf.remove(_vidx as usize);
+                                                pop_frame_keep_text!();
+                                                if text_start < pos {
+                                                    push_il!($tx,
+                                                        $crate::span::Span::new(
+                                                            text_start as u32,
+                                                            pos as u32,
+                                                        ));
+                                                }
+                                            } else {
+                                                $state.$sf[_vidx as usize].end = delim_start;
+                                                pop_frame!();
+                                            }
                                         }
-                                    } else {
-                                        $state.$sf[_vidx as usize].end = delim_start;
-                                        pop_frame!();
-                                    }
+                                    );
                                     text_start = pos;
                                     _kv_seg_start = pos;
                                 } )*
@@ -1472,15 +1558,23 @@ macro_rules! parse_inline {
                                 text_start as u32, delim_start));
                             }
                             let clean = $crate::span::Span::new(cs as u32, p as u32);
-                            if over_limit!($max_inline, clean.start, clean.end) {
-                                push_il!($tx, $crate::span::Span::new(
-                                    delim_start, cs as u32));
-                                call_reparse!($reparse, &mut *$state, $src, cs, p, $depth);
-                                push_il!($tx, $crate::span::Span::new(p as u32, end as u32));
-                            } else {
-                                match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
-                                _kv_opaque = Some((delim_start as usize, end));
-                            }
+                            $crate::parse_inline!(@choose $max_inline,
+                                {
+                                    match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
+                                    _kv_opaque = Some((delim_start as usize, end));
+                                },
+                                {
+                                    if over_limit!($max_inline, clean.start, clean.end) {
+                                        push_il!($tx, $crate::span::Span::new(
+                                            delim_start, cs as u32));
+                                        call_reparse!($reparse, &mut *$state, $src, cs, p, $depth);
+                                        push_il!($tx, $crate::span::Span::new(p as u32, end as u32));
+                                    } else {
+                                        match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
+                                        _kv_opaque = Some((delim_start as usize, end));
+                                    }
+                                }
+                            );
                             pos = end;
                             text_start = end;
                         }
@@ -1588,14 +1682,22 @@ macro_rules! parse_inline {
                             push_il!($tx, $crate::span::Span::new(text_start as u32, _o as u32));
                         }
                         let clean = $crate::span::Span::new((_o + 1) as u32, cp as u32);
-                        if over_limit!($max_inline, clean.start, clean.end) {
-                            push_il!($tx, $crate::span::Span::new(_o as u32, (_o + 1) as u32));
-                            call_reparse!($reparse, &mut *$state, $src, _o + 1, cp, $depth);
-                            push_il!($tx, $crate::span::Span::new(cp as u32, (cp + 1) as u32));
-                        } else {
-                            match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
-                            _kv_opaque = Some((_o, cp + 1));
-                        }
+                        $crate::parse_inline!(@choose $max_inline,
+                            {
+                                match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
+                                _kv_opaque = Some((_o, cp + 1));
+                            },
+                            {
+                                if over_limit!($max_inline, clean.start, clean.end) {
+                                    push_il!($tx, $crate::span::Span::new(_o as u32, (_o + 1) as u32));
+                                    call_reparse!($reparse, &mut *$state, $src, _o + 1, cp, $depth);
+                                    push_il!($tx, $crate::span::Span::new(cp as u32, (cp + 1) as u32));
+                                } else {
+                                    match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
+                                    _kv_opaque = Some((_o, cp + 1));
+                                }
+                            }
+                        );
                         pos = cp + 1;
                         text_start = pos;
                     }
@@ -1639,15 +1741,23 @@ macro_rules! parse_inline {
                             text_start as u32, delim_start));
                         }
                         let clean = $crate::span::Span::new(cs as u32, cp as u32);
-                        if over_limit!($max_inline, clean.start, clean.end) {
-                            push_il!($tx, $crate::span::Span::new(
-                                delim_start, cs as u32));
-                            call_reparse!($reparse, &mut *$state, $src, cs, cp, $depth);
-                            push_il!($tx, $crate::span::Span::new(cp as u32, (cp + 1) as u32));
-                        } else {
-                            match count { $( $an => { push_il!($af, clean); } )* _ => {} }
-                            _kv_opaque = Some((delim_start as usize, cp + 1));
-                        }
+                        $crate::parse_inline!(@choose $max_inline,
+                            {
+                                match count { $( $an => { push_il!($af, clean); } )* _ => {} }
+                                _kv_opaque = Some((delim_start as usize, cp + 1));
+                            },
+                            {
+                                if over_limit!($max_inline, clean.start, clean.end) {
+                                    push_il!($tx, $crate::span::Span::new(
+                                        delim_start, cs as u32));
+                                    call_reparse!($reparse, &mut *$state, $src, cs, cp, $depth);
+                                    push_il!($tx, $crate::span::Span::new(cp as u32, (cp + 1) as u32));
+                                } else {
+                                    match count { $( $an => { push_il!($af, clean); } )* _ => {} }
+                                    _kv_opaque = Some((delim_start as usize, cp + 1));
+                                }
+                            }
+                        );
                         pos = cp + 1;
                         text_start = pos;
                     }
@@ -1735,14 +1845,26 @@ macro_rules! parse_inline {
             $(
                 if _fb == $kv_end {
                     let (_ks, _ke, _vs) = kv_pending[fdepth];
-                    if !over_limit!($max_inline, _ks, parse_end as u32) {
-                        $crate::paste::paste! {
-                            $state.[<push_ $kv_f>]($kv_ty {
-                                $kv_kf: $crate::span::Span::new(_ks, _ke),
-                                $kv_vf: $crate::span::Span::new(_vs, parse_end as u32),
-                            });
+                    $crate::parse_inline!(@choose $max_inline,
+                        {
+                            $crate::paste::paste! {
+                                $state.[<push_ $kv_f>]($kv_ty {
+                                    $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                    $kv_vf: $crate::span::Span::new(_vs, parse_end as u32),
+                                });
+                            }
+                        },
+                        {
+                            if !over_limit!($max_inline, _ks, parse_end as u32) {
+                                $crate::paste::paste! {
+                                    $state.[<push_ $kv_f>]($kv_ty {
+                                        $kv_kf: $crate::span::Span::new(_ks, _ke),
+                                        $kv_vf: $crate::span::Span::new(_vs, parse_end as u32),
+                                    });
+                                }
+                            }
                         }
-                    }
+                    );
                     _matched_kv = true;
                 }
             )*
