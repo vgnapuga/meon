@@ -639,15 +639,25 @@ macro_rules! parse_text {
                 }
 
                 if pos < current_line_end {
-                    {
-                        let state = &mut state;
-                        let _ = $crate::parse_inline!(
-                            state, src, pos, current_line_end,
-                            $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false,
-                            max_inline = $max_inline, reparse = $reparse,
-                            depth = _reparse_depth ; $($ilt)*
-                        );
-                    }
+                    $crate::parse_text!(@choose $max_inline,
+                        {
+                            let _ = $crate::parse_inline!(
+                                state, src, pos, current_line_end,
+                                $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false,
+                                max_inline = $max_inline, reparse = $reparse,
+                                depth = _reparse_depth ; $($ilt)*
+                            );
+                        },
+                        {
+                            let state = &mut state;
+                            let _ = $crate::parse_inline!(
+                                state, src, pos, current_line_end,
+                                $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false,
+                                max_inline = $max_inline, reparse = $reparse,
+                                depth = _reparse_depth ; $($ilt)*
+                            );
+                        }
+                    );
                 }
                 pos = next_line_start;
             }
@@ -751,6 +761,14 @@ macro_rules! parse_text {
     };
 
     (@hb_push $st:ident, $le:ident, $hb:ident ; []) => {};
+
+    // Emit only the branch the grammar's cap needs.
+    (@choose [], $normal:block, $limited:block) => {
+        $normal
+    };
+    (@choose [$n:literal], $normal:block, $limited:block) => {
+        $limited
+    };
 
     (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, true) => {
         $crate::paste::paste! { $st.[<push_merge_ $field>]($span, $floor); }
