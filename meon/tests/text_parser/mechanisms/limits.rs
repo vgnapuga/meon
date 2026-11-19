@@ -187,6 +187,13 @@ mod limited {
     }
 
     #[test]
+    fn context_rescans_over_limit_region() {
+        let src = b"\"a `*b*` c\"";
+        let ctx = LimitedParser::context(src);
+        assert_eq!(LimitedParser::find_context_italics(src, &ctx).count(), 0);
+    }
+
+    #[test]
     fn context_keeps_under_limit_opaque_region() {
         let src = b"`*a*`";
         let ctx = LimitedParser::context(src);
