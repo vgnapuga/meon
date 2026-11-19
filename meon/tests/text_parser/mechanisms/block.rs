@@ -303,13 +303,13 @@ fn fence_08_open_stores_start_pos() {
     let src = b"```";
     let mut active = None;
     run_block!(&mut active, src, 0, src.len());
-    assert_eq!(active.unwrap().1, 0u32);
+    assert_eq!(active.unwrap().1, 0usize);
 }
 
 // 09. A closing fence matching the active parameters pushes a new span
 #[test]
 fn fence_09_close_matching_pushes_span() {
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let src = b"```";
     let (st, _) = run_block!(&mut active, src, 0, src.len());
     assert_eq!(st.fenced_codes.len(), 1);
@@ -319,7 +319,7 @@ fn fence_09_close_matching_pushes_span() {
 // 10. A closing fence with more markers than the opening successfully closes the block
 #[test]
 fn fence_10_close_longer_count_closes() {
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let src = b"````";
     let (st, _) = run_block!(&mut active, src, 0, src.len());
     assert_eq!(st.fenced_codes.len(), 1);
@@ -328,7 +328,7 @@ fn fence_10_close_longer_count_closes() {
 // 11. A closing fence with fewer markers than the opening is ignored
 #[test]
 fn fence_11_close_shorter_count_no_close() {
-    let mut active = Some((4u32, 0u32));
+    let mut active = Some((4usize, 0usize));
     let src = b"```";
     let (st, _) = run_block!(&mut active, src, 0, src.len());
     assert!(st.fenced_codes.is_empty());
@@ -338,7 +338,7 @@ fn fence_11_close_shorter_count_no_close() {
 // 12. A closing fence with a different marker byte is ignored
 #[test]
 fn fence_12_close_wrong_byte_no_close() {
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let src = b"~~~\n```";
     let (st, _) = run_block!(&mut active, src, 4, src.len());
     assert!(st.fenced_codes.is_empty());
@@ -348,7 +348,7 @@ fn fence_12_close_wrong_byte_no_close() {
 // 13. The resulting span starts at the original opening position recorded in the active state
 #[test]
 fn fence_13_close_span_start_is_active_start() {
-    let mut active = Some((3u32, 5u32));
+    let mut active = Some((3usize, 5usize));
     let src = b"text\n```\n```";
     let (st, _) = run_block!(&mut active, src, 9, src.len());
     assert_eq!(st.fenced_codes[0].start, 5);
@@ -357,7 +357,7 @@ fn fence_13_close_span_start_is_active_start() {
 // 14. The active state is cleared upon successfully closing a fence
 #[test]
 fn fence_14_close_active_cleared() {
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let src = b"```";
     run_block!(&mut active, src, 0, src.len());
     assert!(active.is_none());
@@ -366,7 +366,7 @@ fn fence_14_close_active_cleared() {
 // 15. Closing a fence returns an opened state of false
 #[test]
 fn fence_15_close_result_opened_false() {
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let src = b"```";
     let (_, result) = run_block!(&mut active, src, 0, src.len());
     assert_eq!(result.map(|(o, _)| o), Some(false));
@@ -375,7 +375,7 @@ fn fence_15_close_result_opened_false() {
 // 16. Processing a normal content line leaves the active state unchanged
 #[test]
 fn fence_16_content_line_active_unchanged() {
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let src = b"```\nsome code";
     let (st, result) = run_block!(&mut active, src, 4, src.len());
     assert!(st.fenced_codes.is_empty());
@@ -432,13 +432,13 @@ fn cont_05_open_stores_start_pos() {
     let src = b"> text";
     let mut active = None;
     run_block!(&mut active, src, 0, src.len());
-    assert_eq!(active.unwrap().1, 0u32);
+    assert_eq!(active.unwrap().1, 0usize);
 }
 
 // 06. Continuing a block with the same marker does not immediately produce a span
 #[test]
 fn cont_06_continue_same_byte_no_span_yet() {
-    let mut active = Some((0u32, 0u32));
+    let mut active = Some((0usize, 0usize));
     let src = b"> next";
     let (st, result) = run_block!(&mut active, src, 0, src.len());
     assert!(st.blockquotes.is_empty());
@@ -448,7 +448,7 @@ fn cont_06_continue_same_byte_no_span_yet() {
 // 07. Continuing a block calculates the continuation skip correctly with spaces
 #[test]
 fn cont_07_continue_cs_with_space() {
-    let mut active = Some((0u32, 0u32));
+    let mut active = Some((0usize, 0usize));
     let src = b"> next";
     let (_, result) = run_block!(&mut active, src, 0, src.len());
     assert_eq!(result.unwrap().1, 2);
@@ -457,7 +457,7 @@ fn cont_07_continue_cs_with_space() {
 // 08. Closing a continuation pushes a span when the marker is absent
 #[test]
 fn cont_08_close_non_gt_pushes_span() {
-    let mut active = Some((0u32, 0u32));
+    let mut active = Some((0usize, 0usize));
     let src = b"> a\ntext";
     let (st, _) = run_block!(&mut active, src, 4, src.len());
     assert_eq!(st.blockquotes.len(), 1);
@@ -466,7 +466,7 @@ fn cont_08_close_non_gt_pushes_span() {
 // 09. The active state is cleared upon closing a continuation block
 #[test]
 fn cont_09_close_active_cleared() {
-    let mut active = Some((0u32, 0u32));
+    let mut active = Some((0usize, 0usize));
     let src = b"> a\ntext";
     run_block!(&mut active, src, 4, src.len());
     assert!(active.is_none());
@@ -475,7 +475,7 @@ fn cont_09_close_active_cleared() {
 // 10. Closing a continuation returns no result
 #[test]
 fn cont_10_close_result_is_none() {
-    let mut active = Some((0u32, 0u32));
+    let mut active = Some((0usize, 0usize));
     let src = b"> a\ntext";
     let (_, result) = run_block!(&mut active, src, 4, src.len());
     assert!(result.is_none());
@@ -485,7 +485,7 @@ fn cont_10_close_result_is_none() {
 #[test]
 fn cont_11_close_span_start_is_active_start() {
     let src = b"> a\ntext";
-    let mut active = Some((0u32, 0u32));
+    let mut active = Some((0usize, 0usize));
     let (st, _) = run_block!(&mut active, src, 4, src.len());
     assert_eq!(st.blockquotes[0].start, 0);
     assert_eq!(st.blockquotes[0].end, 4);
@@ -499,7 +499,7 @@ fn cont_11_close_span_start_is_active_start() {
 #[test]
 fn nest_01_double_cont_opens_two_frames() {
     let src = b"> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 2);
@@ -509,7 +509,7 @@ fn nest_01_double_cont_opens_two_frames() {
 #[test]
 fn nest_02_double_cont_stack_bytes() {
     let src = b"> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!((stack[0].0, src[stack[0].1 as usize]), (0, b'>'));
@@ -520,7 +520,7 @@ fn nest_02_double_cont_stack_bytes() {
 #[test]
 fn nest_03_double_cont_continue_maintains_depth() {
     let src = b"> > a\n> > next";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -532,7 +532,7 @@ fn nest_03_double_cont_continue_maintains_depth() {
 #[test]
 fn nest_04_double_cont_drop_inner_closes_inner() {
     let src = b"> > a\n> text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -545,7 +545,7 @@ fn nest_04_double_cont_drop_inner_closes_inner() {
 #[test]
 fn nest_05_double_cont_drop_all_closes_both() {
     let src = b"> > a\ntext";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -558,7 +558,7 @@ fn nest_05_double_cont_drop_all_closes_both() {
 #[test]
 fn nest_06_bullet_inside_cont() {
     let src = b"> - item";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 1);
@@ -569,7 +569,7 @@ fn nest_06_bullet_inside_cont() {
 #[test]
 fn nest_07_ordered_inside_cont() {
     let src = b"> 1. item";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 1);
@@ -580,7 +580,7 @@ fn nest_07_ordered_inside_cont() {
 #[test]
 fn nest_08_fence_inside_cont_open() {
     let src = b"> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 2);
@@ -591,7 +591,7 @@ fn nest_08_fence_inside_cont_open() {
 #[test]
 fn nest_09_fence_inside_cont_content() {
     let src = b"> ```\n> code";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -604,7 +604,7 @@ fn nest_09_fence_inside_cont_content() {
 #[test]
 fn nest_10_fence_inside_cont_close() {
     let src = b"> ```\n> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -617,7 +617,7 @@ fn nest_10_fence_inside_cont_close() {
 #[test]
 fn nest_11_cont_inside_fence_no_open() {
     let src = b"```\n> text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (3, 0);
     let mut depth = 1;
     run_block_nested!(stack, depth, src, 4, src.len(), 4);
@@ -628,7 +628,7 @@ fn nest_11_cont_inside_fence_no_open() {
 #[test]
 fn nest_12_triple_cont_opens_three_frames() {
     let src = b"> > > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 3);
@@ -638,7 +638,7 @@ fn nest_12_triple_cont_opens_three_frames() {
 #[test]
 fn nest_13_triple_cont_drop_innermost() {
     let src = b"> > > a\n> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     stack[2] = (0, 4);
@@ -652,7 +652,7 @@ fn nest_13_triple_cont_drop_innermost() {
 #[test]
 fn nest_14_max_nest_limits_cont_depth() {
     let src = b"> > > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 2);
     assert_eq!(depth, 2);
@@ -665,7 +665,7 @@ fn nest_14_max_nest_limits_cont_depth() {
 #[test]
 fn nest_15_no_bullet_inside_cont_max_nest_1() {
     let src = b"> - item";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 1);
     assert_eq!(depth, 1);
@@ -676,7 +676,7 @@ fn nest_15_no_bullet_inside_cont_max_nest_1() {
 #[test]
 fn nest_16_outer_cont_closes_inner_fence() {
     let src = b"> ```\ntext";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -690,7 +690,7 @@ fn nest_16_outer_cont_closes_inner_fence() {
 #[test]
 fn nest_17_outer_cont_closes_inner_cont() {
     let src = b"> > a\ntext";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -703,7 +703,7 @@ fn nest_17_outer_cont_closes_inner_cont() {
 #[test]
 fn nest_18_inner_fence_close_keeps_outer_cont() {
     let src = b"> ```\n> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -717,7 +717,7 @@ fn nest_18_inner_fence_close_keeps_outer_cont() {
 #[test]
 fn nest_19_multiple_bullets_inside_cont() {
     let src1 = b"> - item 1";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st1, _) = run_block_nested!(stack, depth, src1, 0, src1.len(), 4);
     assert_eq!(st1.bullet_items.len(), 1);
@@ -732,7 +732,7 @@ fn nest_19_multiple_bullets_inside_cont() {
 #[test]
 fn nest_20_double_cont_skip_offset() {
     let src = b"> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (_, result) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(result.unwrap().1, 4);
@@ -746,7 +746,7 @@ fn nest_20_double_cont_skip_offset() {
 #[test]
 fn nest_21_double_cont_outer_contains_inner() {
     let src = b"> > a\nnext";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -766,7 +766,7 @@ fn nest_21_double_cont_outer_contains_inner() {
 #[test]
 fn nest_22_triple_cont_spans_sorted_by_start() {
     let src = b"> > > a\ntext";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     stack[2] = (0, 4);
@@ -782,7 +782,7 @@ fn nest_22_triple_cont_spans_sorted_by_start() {
 #[test]
 fn nest_23_fence_inside_cont_span_start_after_cont_markers() {
     let src = b"> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(stack[1].1, 2);
@@ -792,7 +792,7 @@ fn nest_23_fence_inside_cont_span_start_after_cont_markers() {
 #[test]
 fn nest_24_fence_inside_cont_span_end_at_close_fence() {
     let src = b"> ```\n> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -808,7 +808,7 @@ fn nest_24_fence_inside_cont_span_end_at_close_fence() {
 #[test]
 fn nest_25_max_nest_1_double_cont_opens_one_frame() {
     let src = b"> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 1);
     assert_eq!(depth, 1);
@@ -818,7 +818,7 @@ fn nest_25_max_nest_1_double_cont_opens_one_frame() {
 #[test]
 fn nest_26_max_nest_1_fence_inside_cont_no_open() {
     let src = b"> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 1);
     assert_eq!(depth, 1);
@@ -830,7 +830,7 @@ fn nest_26_max_nest_1_fence_inside_cont_no_open() {
 #[test]
 fn nest_27_max_nest_1_ordered_inside_cont_no_open() {
     let src = b"> 1. item";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 1);
     assert_eq!(depth, 1);
@@ -841,7 +841,7 @@ fn nest_27_max_nest_1_ordered_inside_cont_no_open() {
 #[test]
 fn nest_28_max_nest_1_fence_still_opens() {
     let src = b"```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 1);
     assert_eq!(depth, 1);
@@ -856,7 +856,7 @@ fn nest_28_max_nest_1_fence_still_opens() {
 #[test]
 fn nest_29_stray_cont_marker_beyond_depth() {
     let src = b"> > > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     let mut depth = 1;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 2);
@@ -868,7 +868,7 @@ fn nest_29_stray_cont_marker_beyond_depth() {
 #[test]
 fn nest_30_multiple_independent_bullet_groups_inside_cont() {
     let src1 = b"> - item1";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st1, _) = run_block_nested!(stack, depth, src1, 0, src1.len(), 4);
 
@@ -884,7 +884,7 @@ fn nest_30_multiple_independent_bullet_groups_inside_cont() {
 #[test]
 fn nest_31_overflow_beyond_max_nest_not_tracked() {
     let src = b"> > > > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 2);
     assert_eq!(depth, 2);
@@ -894,7 +894,7 @@ fn nest_31_overflow_beyond_max_nest_not_tracked() {
 #[test]
 fn nest_32_unclosed_outer_cont_with_closed_inner_fence() {
     let src = b"> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -908,7 +908,7 @@ fn nest_32_unclosed_outer_cont_with_closed_inner_fence() {
 #[test]
 fn nest_33_cont_with_empty_content_creates_span() {
     let src = b"> a\n";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     let mut depth = 1;
     let (st, _) = run_block_nested!(stack, depth, src, 4, 4, 4);
@@ -921,7 +921,7 @@ fn nest_33_cont_with_empty_content_creates_span() {
 #[test]
 fn nest_34_leading_stray_cont_marker_no_corruption() {
     let src = b"> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 2);
@@ -933,7 +933,7 @@ fn nest_34_leading_stray_cont_marker_no_corruption() {
 #[test]
 fn nest_35_top_level_fence_line_opens_frame() {
     let src = b"```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 1);
@@ -949,7 +949,7 @@ fn nest_35_top_level_fence_line_opens_frame() {
 #[test]
 fn nest_36_bullet_inside_cont_content_correct() {
     let src = b"> - hello";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(txt(src, st.bullet_items[0].1), "hello");
@@ -959,7 +959,7 @@ fn nest_36_bullet_inside_cont_content_correct() {
 #[test]
 fn nest_37_fence_inside_cont_content_not_parsed() {
     let src = b"> ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -974,7 +974,7 @@ fn nest_37_fence_inside_cont_content_not_parsed() {
 #[test]
 fn nest_38_ordered_inside_cont_content_correct() {
     let src = b"> 1. world";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(txt(src, st.ordered_items[0].1), "world");
@@ -984,7 +984,7 @@ fn nest_38_ordered_inside_cont_content_correct() {
 #[test]
 fn nest_39_text_between_nested_cont_no_separate_para() {
     let src = b"> > text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -996,7 +996,7 @@ fn nest_39_text_between_nested_cont_no_separate_para() {
 #[test]
 fn nest_40_all_frames_unclosed_no_spans_until_closed() {
     let src = b"> > text\nend";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, 8, 4);
     assert_eq!(depth, 2);
@@ -1018,7 +1018,7 @@ fn nest_40_all_frames_unclosed_no_spans_until_closed() {
 #[test]
 fn nest_41_double_cont_close_emits_outer_and_inner() {
     let src = b"> > a\ntext";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -1035,7 +1035,7 @@ fn nest_41_double_cont_close_emits_outer_and_inner() {
 #[test]
 fn nest_42_fence_inside_cont_span_excludes_cont_markers() {
     let src = b"> ```rust";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1048,7 +1048,7 @@ fn nest_42_fence_inside_cont_span_excludes_cont_markers() {
 #[test]
 fn nest_43_bullet_inside_cont_content_excludes_both_markers() {
     let src = b"> - item text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1062,7 +1062,7 @@ fn nest_43_bullet_inside_cont_content_excludes_both_markers() {
 #[test]
 fn nest_44_ordered_inside_cont_content_excludes_all_markers() {
     let src = b"> 42. item text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1077,7 +1077,7 @@ fn nest_44_ordered_inside_cont_content_excludes_all_markers() {
 #[test]
 fn nest_45_triple_cont_all_spans_correct_boundaries() {
     let src = b"> > > text\nend";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, 10, 4);
 
@@ -1093,7 +1093,7 @@ fn nest_45_triple_cont_all_spans_correct_boundaries() {
 //     to the closing fence line end (single call, no trailing newline).
 #[test]
 fn nest_46_fence_inside_cont_close_span() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (3, 2);
     let mut depth = 2;
@@ -1108,7 +1108,7 @@ fn nest_46_fence_inside_cont_close_span() {
 // 47. Multiple bullet items inside single continuation frame
 #[test]
 fn nest_47_multiple_bullets_inside_single_cont() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let line1 = b"> - item1";
@@ -1133,7 +1133,7 @@ fn nest_47_multiple_bullets_inside_single_cont() {
 // 48. Continuation dropped mid-line: inner span ends at line start
 #[test]
 fn nest_48_cont_dropped_mid_line_inner_span_ends_at_line_start() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     stack[0] = (0, 0);
     stack[1] = (0, 2);
     let mut depth = 2;
@@ -1152,7 +1152,7 @@ fn nest_48_cont_dropped_mid_line_inner_span_ends_at_line_start() {
 #[test]
 fn nest_49_fence_inside_cont_info_string_included() {
     let src = b"> ```javascript";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1165,7 +1165,7 @@ fn nest_49_fence_inside_cont_info_string_included() {
 //     span count is checked (each call has a fresh ParseState, so spans don't accumulate).
 #[test]
 fn nest_50_nested_cont_different_content_per_level() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let src = b"> outer\n> > inner\n> outer again\nend";
 
@@ -1189,7 +1189,7 @@ fn nest_50_nested_cont_different_content_per_level() {
 #[test]
 fn nest_51_bullet_tab_sep_inside_cont() {
     let src = b"> -\titem";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1201,7 +1201,7 @@ fn nest_51_bullet_tab_sep_inside_cont() {
 #[test]
 fn nest_52_ordered_paren_inside_cont() {
     let src = b"> 1) item";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     let (st, _) = run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1213,7 +1213,7 @@ fn nest_52_ordered_paren_inside_cont() {
 // 53. Fence with backticks inside continuation with backticks in content
 #[test]
 fn nest_53_fence_inside_cont_backticks_in_content() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let open = b"> ```";
@@ -1237,7 +1237,7 @@ fn nest_53_fence_inside_cont_backticks_in_content() {
 #[test]
 fn nest_54_cont_with_extra_spaces() {
     let src = b">  >  text";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
     assert_eq!(depth, 1);
@@ -1246,7 +1246,7 @@ fn nest_54_cont_with_extra_spaces() {
 // 55. Bullet item with different marker kinds inside same continuation
 #[test]
 fn nest_55_different_bullet_markers_inside_cont() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let line1 = b"> - dash";
@@ -1267,7 +1267,7 @@ fn nest_55_different_bullet_markers_inside_cont() {
 #[test]
 fn nest_56_fence_inside_double_cont_excludes_both_markers() {
     let src = b"> > ```";
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
 
@@ -1278,7 +1278,7 @@ fn nest_56_fence_inside_double_cont_excludes_both_markers() {
 // 57. Ordered items with increasing numbers inside continuation
 #[test]
 fn nest_57_ordered_increasing_nums_inside_cont() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let line1 = b"> 1. first";
@@ -1298,7 +1298,7 @@ fn nest_57_ordered_increasing_nums_inside_cont() {
 // 58. A line of a bare marker opens a continuation with empty content
 #[test]
 fn nest_58_cont_only_markers_empty_span() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let (st, result) = run_block_nested!(stack, depth, b">", 0, 1, 4);
@@ -1312,7 +1312,7 @@ fn nest_58_cont_only_markers_empty_span() {
 // 59. Mixed content: bullet then ordered inside continuation
 #[test]
 fn nest_59_mixed_content_inside_cont() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let line1 = b"> - bullet";
@@ -1331,7 +1331,7 @@ fn nest_59_mixed_content_inside_cont() {
 //     (checked per call — each call has its own ParseState).
 #[test]
 fn nest_60_fence_close_inside_cont_span_includes_content() {
-    let mut stack = [(0u32, 0u32); 4];
+    let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
 
     let open = b"> ```";
@@ -1357,7 +1357,7 @@ fn nest_60_fence_close_inside_cont_span_includes_content() {
 #[test]
 fn fence_17_close_with_trailing_whitespace() {
     let src = b"``` \t ";
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let (st, _) = run_block!(&mut active, src, 0, src.len());
     assert!(active.is_none());
     assert_eq!(st.fenced_codes.len(), 1);
@@ -1367,7 +1367,7 @@ fn fence_17_close_with_trailing_whitespace() {
 #[test]
 fn fence_18_close_with_junk_not_closed() {
     let src = b"``` x";
-    let mut active = Some((3u32, 0u32));
+    let mut active = Some((3usize, 0usize));
     let (st, _) = run_block!(&mut active, src, 0, src.len());
     assert!(active.is_some());
     assert!(st.fenced_codes.is_empty());

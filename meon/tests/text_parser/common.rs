@@ -1,6 +1,11 @@
 use meon::define_content;
 use meon::span::Span;
 
+#[allow(dead_code)]
+pub(crate) type __Span = Span<u32>;
+#[allow(dead_code)]
+pub(crate) type __Pos = u32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Link {
     pub is_image: bool,
@@ -208,7 +213,7 @@ macro_rules! run_block {
     ($active:expr, $src:expr, $pos:expr, $le:expr) => {{
         let src: &[u8] = $src;
         let mut st = ParseState::new(src.len());
-        let mut _stack: [(u32, u32); 1] = [(0u32, 0u32); 1];
+        let mut _stack: [(usize, usize); 1] = [(0, 0); 1];
         let mut _depth: usize = 0;
         if let Some(frame) = *$active {
             _stack[0] = frame;

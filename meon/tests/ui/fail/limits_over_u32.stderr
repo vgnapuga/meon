@@ -1,4 +1,4 @@
-error: `max_inline_span` must not exceed `u32::MAX`
+error: `max_inline_span` must not exceed `4294967295`
  --> tests/ui/fail/limits_over_u32.rs:6:27
   |
 6 |         max_inline_span = 4_294_967_296;

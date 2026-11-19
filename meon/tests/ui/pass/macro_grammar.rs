@@ -32,14 +32,14 @@ grammar!(Wrapped, 4, b'*', b'~' | b'=', 3, 40, 1 + 1);
 
 fn main() {
     let src = b"*a*\n~~~\nx\n~~~\n= item";
-    let c = WrappedParser::parse(src);
+    let c = WrappedParser::parse_unchecked(src);
     assert_eq!(c.ems.len(), 1);
     assert_eq!(c.codes.len(), 1);
     assert_eq!(c.items.len(), 1);
     assert_eq!(c.items[0].0.weight, 4);
-    assert_eq!(WrappedParser::find_codes(src).count(), 1);
+    assert_eq!(WrappedParser::find_codes_unchecked(src).count(), 1);
     assert_eq!(
-        WrappedParser::find_items(src).next().map(|i| i.0.weight),
+        WrappedParser::find_items_unchecked(src).next().map(|i| i.0.weight),
         Some(4)
     );
 }

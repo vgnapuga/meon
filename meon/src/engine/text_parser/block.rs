@@ -139,8 +139,16 @@ macro_rules! parse_block {
         block        { $($br:tt)* }
     ) => {{
         let src: &[u8] = $src;
+        macro_rules! __span {
+            ($a:expr, $b:expr) => {
+                $crate::span::Span::<usize>::from_usize($a as usize, $b as usize)
+            };
+            ($a:expr, $b:expr,) => {
+                __span!($a, $b)
+            };
+        }
         let pos: usize = $pos;
-        let le:  usize = $le;
+        let le:  usize = ($le as usize).min($crate::span::Span::<usize>::MAX_INPUT_LEN);
         // Where the next line starts: past the line's `eol`, and past
         // whatever the caller counts as part of the line end before it.
         let nl:  usize = $nl;
@@ -172,7 +180,7 @@ macro_rules! parse_block {
                         _j -= 1;
                         let (_c2, _s2) = $stack[_j];
                         $crate::parse_block!(@close_frame
-                            $state, src, pos as u32, _c2, _s2,
+                            $state, src, pos, _c2, _s2,
                             max_block = $max_block,
                             para = $para, reparse = $reparse, eol = $eol,
                             closed = false, contb = &[], contd = 0 ; $($sr)*);
@@ -184,7 +192,7 @@ macro_rules! parse_block {
             } else {
                 // fence frame (always the top): does this line close it?
                 let mut _i = _cur;
-                let mut _fc: u32 = 0;
+                let mut _fc: usize = 0;
                 while _i < le && src[_i] == _ab { _fc += 1; _i += 1; }
                 if _fc >= _ac && src[_i..le].iter().all(|&b| b == $sep || b == $tab) {
                     let mut _cont_bytes: [u8; $maxn] = [0u8; $maxn];
@@ -194,7 +202,7 @@ macro_rules! parse_block {
                         _cont_depth += 1;
                     }
                     $crate::parse_block!(@close_frame
-                        $state, src, nl as u32, _ac, _astart,
+                        $state, src, nl, _ac, _astart,
                         max_block = $max_block,
                         para = $para, reparse = $reparse, eol = $eol,
                         closed = true, contb = &_cont_bytes, contd = _cont_depth ; $($sr)*);
@@ -282,7 +290,7 @@ macro_rules! parse_block {
         false
     };
     (@over [$n:literal], $s:expr, $e:expr) => {
-        (($e) - ($s)) > $n as u32
+        ((($e) as usize) - (($s) as usize)) > $n as usize
     };
     (@reparse [], $st:ident, $src:ident, $s:expr, $e:expr, $cb:expr, $cd:expr) => {};
     (@reparse [$f:ident], $st:ident, $src:ident, $s:expr, $e:expr, $cb:expr, $cd:expr) => {
@@ -295,7 +303,7 @@ macro_rules! parse_block {
     };
     (@push_block [$n:literal], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {{
         let _span = $span;
-        if (_span.end - _span.start) > $n as u32 {
+        if _span.len_usize() > $n as usize {
             $crate::paste::paste! {
                 $st.[<push_ $para>](_span);
             }
@@ -312,7 +320,7 @@ macro_rules! parse_block {
     };
     (@push_simple_block [$n:literal], $st:ident, $field:ident, $para:ident, $span:expr) => {{
         let _span = $span;
-        if (_span.end - _span.start) > $n as u32 {
+        if _span.len_usize() > $n as usize {
             $crate::paste::paste! {
                 $st.[<push_ $para>](_span);
             }
@@ -329,8 +337,8 @@ macro_rules! parse_block {
         contb = $contb:expr, contd = $contd:expr ;
         $($sr:tt)*
     ) => {{
-        let _fcount: u32 = $count;
-        let _fstart: u32 = $start;
+        let _fcount: usize = $count;
+        let _fstart: usize = $start;
         let _fbyte: u8 = $src[_fstart as usize];
         let mut _fdone = false;
         $crate::parse_block!(@close_frame_inner
@@ -346,7 +354,7 @@ macro_rules! parse_block {
     ) => {
         if !$done && $count == 0 && $byte == $cb {
             $done = true;
-            let _span = $crate::span::Span::new($start, $endpos);
+            let _span = __span!($start, $endpos);
             $crate::parse_block!(@push_simple_block $max_block, $st, $field, $para, _span);
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $done, $endpos, $count, $byte, $start,
@@ -361,7 +369,7 @@ macro_rules! parse_block {
     ) => {
         if !$done && $count != 0 && matches!($byte, $pat) && $count >= $min {
             $done = true;
-            let _span = $crate::span::Span::new($start, $endpos);
+            let _span = __span!($start, $endpos);
             $crate::parse_block!(@push_simple_block $max_block, $st, $field, $para, _span);
             $crate::parse_block!(@choose $max_block, {}, {
             if $crate::parse_block!(@over $max_block, _span.start, _span.end) {
@@ -427,10 +435,10 @@ macro_rules! parse_block {
         if $res.is_none() && $pos < $le && matches!($src[$pos], $pat) {
             let _byte = $src[$pos];
             let mut _i: usize = $pos;
-            let mut _c: u32   = 0;
+            let mut _c: usize = 0;
             while _i < $le && $src[_i] == _byte { _c += 1; _i += 1; }
             if _c >= $min && $src[_i..$le].iter().all(|&b| b != _byte) {
-                $stack[$depth] = (_c, $pos as u32);
+                $stack[$depth] = (_c as usize, $pos);
                 $depth += 1;
                 $res = Some((true, $nl));
             }
@@ -443,7 +451,7 @@ macro_rules! parse_block {
      cont($byte:literal) => $field:ident $($rest:tt)*
     ) => {
         if $res.is_none() && $pos < $le && $src[$pos] == $byte {
-            $stack[$depth] = (0u32, $pos as u32);
+            $stack[$depth] = (0, $pos);
             $depth += 1;
             let cs = if $pos + 1 < $le
                 && ($src[$pos + 1] == $sep || $src[$pos + 1] == $tab)
@@ -483,7 +491,7 @@ macro_rules! parse_block {
                     let cs    = next + 1;
                     let $b    = $src[_p];
                     let _meta = $meta;
-                    let _span = $crate::span::Span::new(cs as u32, $le as u32);
+                    let _span = __span!(cs as u32, $le as u32);
                     $crate::parse_block!(@push_block $max_block, $st, $field, $para, _meta, _span);
                     $res = Some((true, cs));
                 }
@@ -521,7 +529,7 @@ macro_rules! parse_block {
                         let $n    = _num;
                         let $k    = _end;
                         let _meta = $meta;
-                        let _span = $crate::span::Span::new(cs as u32, $le as u32);
+                        let _span = __span!(cs as u32, $le as u32);
                         $crate::parse_block!(@push_block $max_block, $st, $field, $para, _meta, _span);
                         $res = Some((true, cs));
                     }

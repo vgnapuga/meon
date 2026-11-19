@@ -34,7 +34,7 @@
 //! [`JsonContent`]; the caller asks for it when it wants it:
 //!
 //! ```ignore
-//! let c = JsonParser::parse(input);
+//! let c = JsonParser::parse(input).unwrap();
 //! let typed = c.type_scalars();   // one cache-friendly pass, owned vectors out
 //! // typed.nums / typed.trues / typed.falses / typed.nulls : Vec<Span>
 //! ```

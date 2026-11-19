@@ -44,7 +44,7 @@ define_parser!(Messy {
 
 fn main() {
     let src = b"a *i* **b** `c` <u> ![t](x) k = v\n";
-    let c = MessyParser::parse(src);
+    let c = MessyParser::parse_unchecked(src);
     assert_eq!(c.italics.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.codes.len(), 1);

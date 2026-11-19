@@ -702,12 +702,12 @@ mod tests {
                 (b"AB: x\n", b"AB: x", b"x"),
                 (b"ABCDEFABC; x", b"ABCDEFABC; x", b"x"),
             ] {
-                let c = letters::LettersParser::parse(src);
+                let c = letters::LettersParser::parse_unchecked(src);
                 assert_eq!(c.nums.len(), 1, "{src:?}");
                 assert!(c.nums_raw().eq([raw]));
                 assert!(c.nums_clean().eq([clean]));
             }
-            let c = letters::LettersParser::parse(b"AB: x");
+            let c = letters::LettersParser::parse_unchecked(b"AB: x");
             assert_eq!(c.nums[0].0.num, 188);
             assert_eq!(c.nums[0].0.kind, b':');
         }
@@ -716,10 +716,10 @@ mod tests {
         //     their full raw marker, including the original end byte.
         #[test]
         fn test_25_generated_raw_patterns_and_ends() {
-            let c = wide::WideParser::parse(b"  ab5 x\nq: y");
+            let c = wide::WideParser::parse_unchecked(b"  ab5 x\nq: y");
             assert!(c.nums_raw().eq([&b"ab5 x"[..], &b"q: y"[..]]));
             assert!(c.nums_clean().eq([&b"x"[..], &b"y"[..]]));
-            let c = narrow::NarrowParser::parse(b"10. no\n12) yes\n9: ");
+            let c = narrow::NarrowParser::parse_unchecked(b"10. no\n12) yes\n9: ");
             assert!(c.nums_raw().eq([&b"12) yes"[..], &b"9: "[..]]));
         }
 
@@ -736,23 +736,26 @@ mod tests {
         #[test]
         fn test_22_generated_patterns() {
             let src: &[u8] = b"1. a\n10. b\n9: c\n  3) d\n0. e\nab5 f\nzzzzzzzzz: g\nq. h";
-            let full = narrow::NarrowParser::parse(src);
+            let full = narrow::NarrowParser::parse_unchecked(src);
             let want = vec![(1, b'.', 3, 4), (9, b':', 14, 15), (3, b')', 21, 22)];
             assert_eq!(items(full.nums.iter().copied()), want);
-            assert_eq!(items(narrow::NarrowParser::find_nums(src)), want);
-            let ctx = narrow::NarrowParser::context(src);
+            assert_eq!(items(narrow::NarrowParser::find_nums_unchecked(src)), want);
+            let ctx = narrow::NarrowParser::context_unchecked(src);
             assert_eq!(
-                items(narrow::NarrowParser::find_context_nums(src, &ctx)),
+                items(narrow::NarrowParser::find_context_nums_unchecked(src, &ctx)),
                 want
             );
 
-            let full = wide::WideParser::parse(src);
+            let full = wide::WideParser::parse_unchecked(src);
             let zs = (0..9).fold(0u32, |n, _| n.wrapping_mul(10).wrapping_add(74));
             let want = vec![(49 * 10 + 50, b'5', 32, 33), (zs, b':', 45, 46)];
             assert_eq!(items(full.nums.iter().copied()), want);
-            assert_eq!(items(wide::WideParser::find_nums(src)), want);
-            let ctx = wide::WideParser::context(src);
-            assert_eq!(items(wide::WideParser::find_context_nums(src, &ctx)), want);
+            assert_eq!(items(wide::WideParser::find_nums_unchecked(src)), want);
+            let ctx = wide::WideParser::context_unchecked(src);
+            assert_eq!(
+                items(wide::WideParser::find_context_nums_unchecked(src, &ctx)),
+                want
+            );
         }
     }
 

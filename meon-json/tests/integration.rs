@@ -74,7 +74,7 @@ fn members(c: &JsonContent<'_>) -> Vec<(String, String)> {
 // 01. An empty object is one container, no members.
 #[test]
 fn test_01_empty_object() {
-    let c = JsonParser::parse(br#"{}"#);
+    let c = JsonParser::parse_unchecked(br#"{}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.arrays.len(), 0);
     assert_eq!(c.members.len(), 0);
@@ -83,7 +83,7 @@ fn test_01_empty_object() {
 // 02. An empty array is one container, no members.
 #[test]
 fn test_02_empty_array() {
-    let c = JsonParser::parse(br#"[]"#);
+    let c = JsonParser::parse_unchecked(br#"[]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.objects.len(), 0);
     assert_eq!(c.members.len(), 0);
@@ -92,7 +92,7 @@ fn test_02_empty_array() {
 // 03. Empty input does not panic and yields nothing.
 #[test]
 fn test_03_empty_input() {
-    let c = JsonParser::parse(b"");
+    let c = JsonParser::parse_unchecked(b"");
     assert_eq!(c.objects.len(), 0);
     assert_eq!(c.arrays.len(), 0);
     assert_eq!(c.members.len(), 0);
@@ -103,7 +103,7 @@ fn test_03_empty_input() {
 // 04. Whitespace-only input does not panic and produces no containers.
 #[test]
 fn test_04_whitespace_only_input() {
-    let c = JsonParser::parse(b"   ");
+    let c = JsonParser::parse_unchecked(b"   ");
     assert_eq!(c.objects.len(), 0);
     assert_eq!(c.arrays.len(), 0);
     assert_eq!(c.members.len(), 0);
@@ -112,7 +112,7 @@ fn test_04_whitespace_only_input() {
 // 05. An object whose only member's value is an empty object.
 #[test]
 fn test_05_nested_empty_object() {
-    let c = JsonParser::parse(br#"{"a":{}}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":{}}"#);
     assert_eq!(c.objects.len(), 2);
     assert_eq!(c.members.len(), 1);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "{}".into())]);
@@ -121,7 +121,7 @@ fn test_05_nested_empty_object() {
 // 06. An object whose only member's value is an empty array.
 #[test]
 fn test_06_nested_empty_array() {
-    let c = JsonParser::parse(br#"{"a":[]}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":[]}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "[]".into())]);
@@ -130,7 +130,7 @@ fn test_06_nested_empty_array() {
 // 07. An array of three empty objects: three containers, no members.
 #[test]
 fn test_07_array_of_empty_objects() {
-    let c = JsonParser::parse(br#"[{},{},{}]"#);
+    let c = JsonParser::parse_unchecked(br#"[{},{},{}]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.objects.len(), 3);
     assert_eq!(c.members.len(), 0);
@@ -143,7 +143,7 @@ fn test_07_array_of_empty_objects() {
 // 08. A number value: captured verbatim as the member's raw value text.
 #[test]
 fn test_08_single_member_number_raw() {
-    let c = JsonParser::parse(br#"{"a":1}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
 }
@@ -151,28 +151,28 @@ fn test_08_single_member_number_raw() {
 // 09. A string value: raw member value includes the quotes.
 #[test]
 fn test_09_single_member_string_raw() {
-    let c = JsonParser::parse(br#"{"a":"b"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"b"}"#);
     assert_eq!(members(&c), vec![(r#""a""#.into(), r#""b""#.into())]);
 }
 
 // 10. `true` as a value: just raw text "true", no claim about its "type".
 #[test]
 fn test_10_single_member_true_raw() {
-    let c = JsonParser::parse(br#"{"a":true}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":true}"#);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "true".into())]);
 }
 
 // 11. `false` as a value: raw text only.
 #[test]
 fn test_11_single_member_false_raw() {
-    let c = JsonParser::parse(br#"{"a":false}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":false}"#);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "false".into())]);
 }
 
 // 12. `null` as a value: raw text only.
 #[test]
 fn test_12_single_member_null_raw() {
-    let c = JsonParser::parse(br#"{"a":null}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":null}"#);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "null".into())]);
 }
 
@@ -180,7 +180,7 @@ fn test_12_single_member_null_raw() {
 //     containment, not a per-element breakdown.
 #[test]
 fn test_13_single_member_array_value_whole_span() {
-    let c = JsonParser::parse(br#"{"a":[1,2,3]}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":[1,2,3]}"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "[1,2,3]".into())]);
 }
@@ -188,7 +188,7 @@ fn test_13_single_member_array_value_whole_span() {
 // 14. An object value: the member's raw value is the whole nested object.
 #[test]
 fn test_14_single_member_object_value_whole_span() {
-    let c = JsonParser::parse(br#"{"a":{"b":2}}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":{"b":2}}"#);
     assert_eq!(c.objects.len(), 2);
     assert_eq!(c.members.len(), 2);
     let vals: Vec<String> = members(&c).into_iter().map(|(_, v)| v).collect();
@@ -198,7 +198,7 @@ fn test_14_single_member_object_value_whole_span() {
 // 15. Two members: first finalised at `,`, second at `}`.
 #[test]
 fn test_15_two_members_comma() {
-    let c = JsonParser::parse(br#"{"a":1,"b":2}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1,"b":2}"#);
     assert_eq!(c.members.len(), 2);
     assert_eq!(
         members(&c),
@@ -209,7 +209,7 @@ fn test_15_two_members_comma() {
 // 16. Three members, declaration order preserved in `members`.
 #[test]
 fn test_16_three_members_order_preserved() {
-    let c = JsonParser::parse(br#"{"a":1,"b":2,"c":3}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1,"b":2,"c":3}"#);
     assert_eq!(
         members(&c),
         vec![
@@ -231,7 +231,7 @@ fn test_17_many_members_flat_count() {
         s.push_str(&format!(r#""k{i}":{i}"#));
     }
     s.push('}');
-    let c = JsonParser::parse(s.as_bytes());
+    let c = JsonParser::parse_unchecked(s.as_bytes());
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.members.len(), 20);
 }
@@ -241,7 +241,7 @@ fn test_17_many_members_flat_count() {
 //     layer, not this engine; the engine reports what it saw.)
 #[test]
 fn test_18_duplicate_keys_both_recorded() {
-    let c = JsonParser::parse(br#"{"a":1,"a":2}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1,"a":2}"#);
     assert_eq!(c.members.len(), 2);
     assert_eq!(
         members(&c),
@@ -256,7 +256,7 @@ fn test_18_duplicate_keys_both_recorded() {
 // 19. A string value and its key both land in `strings` (unquoted content).
 #[test]
 fn test_19_string_value_and_key_in_strings_field() {
-    let c = JsonParser::parse(br#"{"name":"Alice"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"name":"Alice"}"#);
     assert_eq!(sorted(&c, &c.strings), vec!["Alice", "name"]);
 }
 
@@ -265,7 +265,7 @@ fn test_19_string_value_and_key_in_strings_field() {
 //     recoverable from the raw member value (`""`).
 #[test]
 fn test_20_empty_string_value_no_strings_span() {
-    let c = JsonParser::parse(br#"{"a":""}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":""}"#);
     assert_eq!(members(&c), vec![(r#""a""#.into(), r#""""#.into())]);
     // Only the key "a" lands in `strings`; the empty value does not.
     assert_eq!(sorted(&c, &c.strings), vec!["a"]);
@@ -275,7 +275,7 @@ fn test_20_empty_string_value_no_strings_span() {
 //     `strings` alongside string values.
 #[test]
 fn test_21_key_quotes_included_in_member_key() {
-    let c = JsonParser::parse(br#"{"age":30}"#);
+    let c = JsonParser::parse_unchecked(br#"{"age":30}"#);
     assert_eq!(members(&c), vec![(r#""age""#.into(), "30".into())]);
     assert_eq!(sorted(&c, &c.strings), vec!["age"]);
 }
@@ -284,7 +284,7 @@ fn test_21_key_quotes_included_in_member_key() {
 //     search is not fooled by `\"` into closing early.
 #[test]
 fn test_22_string_with_escaped_quote() {
-    let c = JsonParser::parse(br#"{"a":"say \"hi\""}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"say \"hi\""}"#);
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].value).unwrap(), r#""say \"hi\"""#);
     // The string content itself (between the outer quotes) is captured too.
@@ -296,7 +296,7 @@ fn test_22_string_with_escaped_quote() {
 //     it.
 #[test]
 fn test_23_string_ending_escaped_backslash_then_real_quote() {
-    let c = JsonParser::parse(br#"{"a":"x\\"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"x\\"}"#);
     assert_eq!(members(&c), vec![(r#""a""#.into(), r#""x\\""#.into())]);
 }
 
@@ -304,7 +304,7 @@ fn test_23_string_ending_escaped_backslash_then_real_quote() {
 //     quoted run, escape included.
 #[test]
 fn test_24_key_with_escaped_quote_inside() {
-    let c = JsonParser::parse(br#"{"a\"b":1}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a\"b":1}"#);
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].key).unwrap(), r#""a\"b""#);
 }
@@ -313,7 +313,7 @@ fn test_24_key_with_escaped_quote_inside() {
 //     bytes are opaque content inside the string, not structure.
 #[test]
 fn test_25_string_containing_colon_and_comma_not_structural() {
-    let c = JsonParser::parse(br#"{"a":"x:y,z","b":2}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"x:y,z","b":2}"#);
     assert_eq!(c.members.len(), 2);
     assert_eq!(
         members(&c),
@@ -328,7 +328,7 @@ fn test_25_string_containing_colon_and_comma_not_structural() {
 //     phantom container is opened inside the string.
 #[test]
 fn test_26_string_containing_brackets_not_structural() {
-    let c = JsonParser::parse(br#"{"a":"x{y[z"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"x{y[z"}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.arrays.len(), 0);
     assert_eq!(members(&c), vec![(r#""a""#.into(), r#""x{y[z""#.into())]);
@@ -344,7 +344,7 @@ fn test_26_string_containing_brackets_not_structural() {
 //     accessor.
 #[test]
 fn test_27_array_whole_span_text() {
-    let c = JsonParser::parse(br#"[1,2,-3,42]"#);
+    let c = JsonParser::parse_unchecked(br#"[1,2,-3,42]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.str(c.arrays[0]).unwrap(), "1,2,-3,42");
     assert_eq!(
@@ -357,7 +357,7 @@ fn test_27_array_whole_span_text() {
 // 28. An array of strings: every element lands in `strings`.
 #[test]
 fn test_28_array_of_strings_in_strings_field() {
-    let c = JsonParser::parse(br#"["x","y","z"]"#);
+    let c = JsonParser::parse_unchecked(br#"["x","y","z"]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(sorted(&c, &c.strings), vec!["x", "y", "z"]);
 }
@@ -365,14 +365,14 @@ fn test_28_array_of_strings_in_strings_field() {
 // 29. Nested arrays: each level is its own container.
 #[test]
 fn test_29_nested_arrays_depth_count() {
-    let c = JsonParser::parse(br#"[[1, 2], [3]]"#);
+    let c = JsonParser::parse_unchecked(br#"[[1, 2], [3]]"#);
     assert_eq!(c.arrays.len(), 3); // one outer + two inner
 }
 
 // 30. An array of objects: containers and members counted on both axes.
 #[test]
 fn test_30_array_of_objects_counts() {
-    let c = JsonParser::parse(br#"[{"a":1},{"b":2}]"#);
+    let c = JsonParser::parse_unchecked(br#"[{"a":1},{"b":2}]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.objects.len(), 2);
     assert_eq!(
@@ -384,7 +384,7 @@ fn test_30_array_of_objects_counts() {
 // 31. Four levels of array nesting: four containers.
 #[test]
 fn test_31_deeply_nested_arrays_count() {
-    let c = JsonParser::parse(br#"[[[[1]]]]"#);
+    let c = JsonParser::parse_unchecked(br#"[[[[1]]]]"#);
     assert_eq!(c.arrays.len(), 4);
 }
 
@@ -394,7 +394,7 @@ fn test_31_deeply_nested_arrays_count() {
 //     of the double comma is the typing post-pass's concern.)
 #[test]
 fn test_32_array_double_comma_no_panic() {
-    let c = JsonParser::parse(br#"[1,,2]"#);
+    let c = JsonParser::parse_unchecked(br#"[1,,2]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.str(c.arrays[0]).unwrap(), "1,,2");
     assert_eq!(
@@ -407,7 +407,7 @@ fn test_32_array_double_comma_no_panic() {
 //     raw value is the whole array; the sibling is unaffected.
 #[test]
 fn test_33_array_in_member_value_whole_span() {
-    let c = JsonParser::parse(br#"{"a":[1,2],"b":3}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":[1,2],"b":3}"#);
     assert_eq!(c.members.len(), 2);
     assert_eq!(
         members(&c),
@@ -425,7 +425,7 @@ fn test_33_array_in_member_value_whole_span() {
 // 34. Three levels deep: three objects, three members.
 #[test]
 fn test_34_nested_objects_three_levels() {
-    let c = JsonParser::parse(br#"{"a":{"b":{"c":1}}}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":{"b":{"c":1}}}"#);
     assert_eq!(c.objects.len(), 3);
     assert_eq!(c.members.len(), 3);
 }
@@ -434,7 +434,7 @@ fn test_34_nested_objects_three_levels() {
 //     axis, the deepest combination this suite exercises.
 #[test]
 fn test_35_mixed_nesting_array_object_array() {
-    let c = JsonParser::parse(br#"{"a":[{"b":[1,2]},{"c":3}]}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":[{"b":[1,2]},{"c":3}]}"#);
     // outer object, plus the two objects inside the array.
     assert_eq!(c.objects.len(), 3);
     // "a"'s array, plus "b"'s inner array.
@@ -446,7 +446,7 @@ fn test_35_mixed_nesting_array_object_array() {
 // 36. Three sibling objects directly inside a top-level array.
 #[test]
 fn test_36_sibling_objects_in_top_level_array() {
-    let c = JsonParser::parse(br#"[{"x":1},{"y":2},{"z":3}]"#);
+    let c = JsonParser::parse_unchecked(br#"[{"x":1},{"y":2},{"z":3}]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.objects.len(), 3);
     assert_eq!(
@@ -466,7 +466,7 @@ fn test_36_sibling_objects_in_top_level_array() {
 // 37. The member value's raw bytes match the literal source slice exactly.
 #[test]
 fn test_37_member_value_matches_raw_text() {
-    let c = JsonParser::parse(br#"{"a":7}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":7}"#);
     assert_eq!(c.bytes(c.members[0].value), b"7");
 }
 
@@ -477,7 +477,7 @@ fn test_37_member_value_matches_raw_text() {
 //     just expressed against the `_raw()` form.
 #[test]
 fn test_38_member_value_container_containment_matches_array_span() {
-    let c = JsonParser::parse(br#"{"a":[1,2,3]}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":[1,2,3]}"#);
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.arrays.len(), 1);
     let v = c.bytes(c.members[0].value);
@@ -490,7 +490,7 @@ fn test_38_member_value_container_containment_matches_array_span() {
 //     `objects_raw()` accessor recovers the brace-inclusive form.
 #[test]
 fn test_39_object_span_includes_braces() {
-    let c = JsonParser::parse(br#"{"a":1}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1}"#);
     let content = c.str(c.objects[0]).unwrap();
     assert_eq!(content, r#""a":1"#);
     assert!(!content.starts_with('{'));
@@ -503,7 +503,7 @@ fn test_39_object_span_includes_braces() {
 //     generated `arrays_raw()` accessor recovers the bracket-inclusive form.
 #[test]
 fn test_40_array_span_includes_brackets() {
-    let c = JsonParser::parse(br#"[1,2]"#);
+    let c = JsonParser::parse_unchecked(br#"[1,2]"#);
     let content = c.str(c.arrays[0]).unwrap();
     assert_eq!(content, "1,2");
     assert!(!content.starts_with('['));
@@ -522,7 +522,7 @@ fn test_40_array_span_includes_brackets() {
 //     included.
 #[test]
 fn test_41_spaces_around_colon_and_comma() {
-    let c = JsonParser::parse(br#"{ "a" : 1 , "b" : 2 }"#);
+    let c = JsonParser::parse_unchecked(br#"{ "a" : 1 , "b" : 2 }"#);
     assert_eq!(c.members.len(), 2);
     let (k0, v0) = &members(&c)[0];
     let (k1, v1) = &members(&c)[1];
@@ -537,7 +537,7 @@ fn test_41_spaces_around_colon_and_comma() {
 //     tab itself.
 #[test]
 fn test_42_tab_after_colon_not_skipped_raw() {
-    let c = JsonParser::parse(b"{\"a\":\t5}");
+    let c = JsonParser::parse_unchecked(b"{\"a\":\t5}");
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].value).unwrap(), "\t5");
 }
@@ -547,7 +547,7 @@ fn test_42_tab_after_colon_not_skipped_raw() {
 //     it.
 #[test]
 fn test_43_value_spanning_newline_raw() {
-    let c = JsonParser::parse(b"{\"a\":\n  5\n}");
+    let c = JsonParser::parse_unchecked(b"{\"a\":\n  5\n}");
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].value).unwrap(), "\n  5\n");
 }
@@ -557,7 +557,7 @@ fn test_43_value_spanning_newline_raw() {
 //     ordinary content, captured raw as part of the value.
 #[test]
 fn test_44_value_with_crlf_raw() {
-    let c = JsonParser::parse(b"{\"a\":1\r\n}");
+    let c = JsonParser::parse_unchecked(b"{\"a\":1\r\n}");
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.str(c.members[0].value).unwrap(), "1\r\n");
@@ -572,7 +572,7 @@ fn test_44_value_with_crlf_raw() {
 #[test]
 fn test_45_pretty_printed_simple_object() {
     let src = b"{\n  \"a\": 1,\n  \"b\": 2\n}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.members.len(), 2);
     let m = members(&c);
@@ -586,8 +586,8 @@ fn test_45_pretty_printed_simple_object() {
 fn test_46_pretty_printed_nested_object() {
     let pretty = b"{\n  \"a\": {\n    \"b\": {\n      \"c\": 1\n    }\n  }\n}";
     let compact = br#"{"a":{"b":{"c":1}}}"#;
-    let cp = JsonParser::parse(pretty);
-    let cc = JsonParser::parse(compact);
+    let cp = JsonParser::parse_unchecked(pretty);
+    let cc = JsonParser::parse_unchecked(compact);
     assert_eq!(cp.objects.len(), cc.objects.len());
     assert_eq!(cp.objects.len(), 3);
     assert_eq!(cp.members.len(), cc.members.len());
@@ -599,7 +599,7 @@ fn test_46_pretty_printed_nested_object() {
 #[test]
 fn test_47_pretty_printed_array_of_objects() {
     let src = b"[\n  {\n    \"id\": 1,\n    \"name\": \"Alice\"\n  },\n  {\n    \"id\": 2,\n    \"name\": \"Bob\"\n  }\n]";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.objects.len(), 2);
     assert_eq!(c.members.len(), 4);
@@ -614,7 +614,7 @@ fn test_47_pretty_printed_array_of_objects() {
 #[test]
 fn test_48_stack_survives_many_lines_deep_indent() {
     let src = b"{\n  \"a\": {\n    \"b\": {\n      \"c\": {\n        \"d\": {\n          \"e\": 1\n        }\n      }\n    }\n  }\n}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.objects.len(), 5);
     assert_eq!(c.members.len(), 5);
 }
@@ -631,7 +631,7 @@ fn test_48_stack_survives_many_lines_deep_indent() {
 //     `text_start` past the committed value before the final flush runs.
 #[test]
 fn test_49_unterminated_object_member_committed_container_discarded() {
-    let c = JsonParser::parse(br#"{"a":1"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1"#);
     assert_eq!(c.objects.len(), 0);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
     assert_eq!(texts(&c, &c.scalars), vec!["{"]);
@@ -644,7 +644,7 @@ fn test_49_unterminated_object_member_committed_container_discarded() {
 //     order.
 #[test]
 fn test_50_unterminated_array_discarded_tail_leaks_to_scalars() {
-    let c = JsonParser::parse(br#"[1,2"#);
+    let c = JsonParser::parse_unchecked(br#"[1,2"#);
     assert_eq!(c.arrays.len(), 0);
     assert_eq!(texts(&c, &c.scalars), vec!["[1,2"]);
 }
@@ -655,7 +655,7 @@ fn test_50_unterminated_array_discarded_tail_leaks_to_scalars() {
 //     unconditional final flush as one `scalars` entry.
 #[test]
 fn test_51_unterminated_string_top_level_falls_to_scalars() {
-    let c = JsonParser::parse(b"\"abc");
+    let c = JsonParser::parse_unchecked(b"\"abc");
     assert!(c.strings.is_empty());
     assert_eq!(texts(&c, &c.scalars), vec!["\"abc"]);
 }
@@ -669,7 +669,7 @@ fn test_51_unterminated_string_top_level_falls_to_scalars() {
 //     inline fallback field.
 #[test]
 fn test_52_bare_top_level_scalar_in_scalars_field() {
-    let c = JsonParser::parse(br#"42"#);
+    let c = JsonParser::parse_unchecked(br#"42"#);
     assert_eq!(c.objects.len(), 0);
     assert_eq!(c.arrays.len(), 0);
     assert_eq!(c.members.len(), 0);
@@ -692,7 +692,7 @@ fn test_52_bare_top_level_scalar_in_scalars_field() {
 //     is discarded the same way any unterminated object is.
 #[test]
 fn test_53_mismatched_closing_bracket_no_panic() {
-    let c = JsonParser::parse(br#"{"a":1]"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1]"#);
     assert_eq!(c.objects.len(), 0);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1]".into())]);
 }
@@ -701,7 +701,7 @@ fn test_53_mismatched_closing_bracket_no_panic() {
 //     still parsed correctly; the garbage tail is swept into `scalars`.
 #[test]
 fn test_54_trailing_garbage_after_valid_json() {
-    let c = JsonParser::parse(br#"{"a":1}garbage"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1}garbage"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
     assert_eq!(texts(&c, &c.scalars), vec!["garbage"]);
@@ -712,7 +712,7 @@ fn test_54_trailing_garbage_after_valid_json() {
 //     container it sees, regardless of how many sit at the top level.
 #[test]
 fn test_55_multiple_top_level_siblings_no_wrapper() {
-    let c = JsonParser::parse(br#"{}{}[]"#);
+    let c = JsonParser::parse_unchecked(br#"{}{}[]"#);
     assert_eq!(c.objects.len(), 2);
     assert_eq!(c.arrays.len(), 1);
 }
@@ -730,7 +730,7 @@ fn test_56_deep_nesting_near_max_no_panic() {
     for _ in 0..DEPTH {
         s.push('}');
     }
-    let c = JsonParser::parse(s.as_bytes());
+    let c = JsonParser::parse_unchecked(s.as_bytes());
     assert_eq!(c.objects.len(), DEPTH);
     assert_eq!(c.members.len(), DEPTH);
 }
@@ -756,7 +756,7 @@ fn test_56_deep_nesting_near_max_no_panic() {
 fn test_57_array_nesting_at_max_nest_cap() {
     let depth = 64;
     let s = "[".repeat(depth) + &"]".repeat(depth);
-    let c = JsonParser::parse(s.as_bytes());
+    let c = JsonParser::parse_unchecked(s.as_bytes());
     assert_eq!(c.arrays.len(), 64);
 }
 
@@ -769,7 +769,7 @@ fn test_57_array_nesting_at_max_nest_cap() {
 fn test_58_array_nesting_beyond_cap_clamped() {
     let depth = 70;
     let s = "[".repeat(depth) + &"]".repeat(depth);
-    let c = JsonParser::parse(s.as_bytes());
+    let c = JsonParser::parse_unchecked(s.as_bytes());
     assert_eq!(c.arrays.len(), 64);
 }
 
@@ -781,7 +781,7 @@ fn test_58_array_nesting_beyond_cap_clamped() {
 fn test_59_object_nesting_at_frame_cap() {
     let depth = 32;
     let s = r#"{"a":"#.repeat(depth) + "1" + &"}".repeat(depth);
-    let c = JsonParser::parse(s.as_bytes());
+    let c = JsonParser::parse_unchecked(s.as_bytes());
     assert_eq!(c.objects.len(), 32);
     assert_eq!(c.members.len(), 32);
 }
@@ -796,7 +796,7 @@ fn test_59_object_nesting_at_frame_cap() {
 fn test_60_object_nesting_beyond_cap_no_panic_bounded() {
     let depth = 40;
     let s = r#"{"a":"#.repeat(depth) + "1" + &"}".repeat(depth);
-    let c = JsonParser::parse(s.as_bytes());
+    let c = JsonParser::parse_unchecked(s.as_bytes());
     assert!(c.objects.len() <= 32);
     assert!(c.members.len() <= 32);
     assert!(!c.members.is_empty());
@@ -816,7 +816,7 @@ fn test_60_object_nesting_beyond_cap_no_panic_bounded() {
 //     separate `loose` spans.
 #[test]
 fn test_61_blank_line_between_complete_documents() {
-    let c = JsonParser::parse(b"{\"a\":1}\n\n{\"b\":2}");
+    let c = JsonParser::parse_unchecked(b"{\"a\":1}\n\n{\"b\":2}");
     assert_eq!(c.objects.len(), 2);
     assert_eq!(c.members.len(), 2);
     assert_eq!(c.loose.len(), 2);
@@ -832,7 +832,7 @@ fn test_61_blank_line_between_complete_documents() {
 //     learns to span blank lines, this test will flag the behaviour change.
 #[test]
 fn test_62_blank_line_inside_container_breaks_it() {
-    let c = JsonParser::parse(b"{\n\n  \"a\": 1\n}");
+    let c = JsonParser::parse_unchecked(b"{\n\n  \"a\": 1\n}");
     assert_eq!(c.objects.len(), 0); // the outer object did not survive
     assert_eq!(c.members.len(), 1); // its member did, orphaned
     assert_eq!(c.loose.len(), 2); // two runs, split by the blank line
@@ -850,7 +850,7 @@ fn test_62_blank_line_inside_container_breaks_it() {
 //     byte offsets land on char boundaries, `str()` succeeds.
 #[test]
 fn test_63_multibyte_key_and_value_resolve() {
-    let c = JsonParser::parse("{\"ключ\":\"значение\"}".as_bytes());
+    let c = JsonParser::parse_unchecked("{\"ключ\":\"значение\"}".as_bytes());
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].key).unwrap(), "\"ключ\"");
     assert_eq!(c.str(c.members[0].value).unwrap(), "\"значение\"");
@@ -863,7 +863,7 @@ fn test_63_multibyte_key_and_value_resolve() {
 //     all four content bytes plus the quotes, and resolves cleanly.
 #[test]
 fn test_64_emoji_string_value_resolves() {
-    let c = JsonParser::parse("{\"a\":\"😀\"}".as_bytes());
+    let c = JsonParser::parse_unchecked("{\"a\":\"😀\"}".as_bytes());
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].value).unwrap(), "\"😀\"");
     assert!(texts(&c, &c.strings).contains(&"😀".to_string()));
@@ -876,7 +876,7 @@ fn test_64_emoji_string_value_resolves() {
 //     which unwraps `str()`.
 #[test]
 fn test_65_invalid_utf8_value_str_none_bytes_raw() {
-    let c = JsonParser::parse(b"{\"a\":\"\xff\xfe\"}");
+    let c = JsonParser::parse_unchecked(b"{\"a\":\"\xff\xfe\"}");
     assert_eq!(c.members.len(), 1);
     assert!(c.str(c.members[0].value).is_none()); // contract: None, not panic
     assert_eq!(c.bytes(c.members[0].value), b"\"\xff\xfe\"");
@@ -892,7 +892,7 @@ fn test_65_invalid_utf8_value_str_none_bytes_raw() {
 #[test]
 fn test_66_loose_single_span_covers_whole_input() {
     let src = br#"{"a":1}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.loose.len(), 1);
     assert_eq!(c.bytes(c.loose[0]), src);
 }
@@ -903,7 +903,7 @@ fn test_66_loose_single_span_covers_whole_input() {
 #[test]
 fn test_67_loose_single_span_over_multiline_no_blank() {
     let src = b"{\n  \"a\": 1,\n  \"b\": 2\n}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.loose.len(), 1);
     assert_eq!(c.bytes(c.loose[0]), src);
 }
@@ -919,7 +919,7 @@ fn test_67_loose_single_span_over_multiline_no_blank() {
 //     yields the bare content. (`strings` itself is the content-only form.)
 #[test]
 fn test_68_strings_raw_and_clean_accessors() {
-    let c = JsonParser::parse(br#"{"a":"b"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"b"}"#);
     let raws: Vec<String> = c
         .strings_raw()
         .map(|b| std::str::from_utf8(b).unwrap().to_string())
@@ -944,7 +944,7 @@ fn test_68_strings_raw_and_clean_accessors() {
 //     with no phantom extra member.
 #[test]
 fn test_69_object_trailing_comma_tolerated() {
-    let c = JsonParser::parse(br#"{"a":1,}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1,}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
 }
@@ -954,7 +954,7 @@ fn test_69_object_trailing_comma_tolerated() {
 //     handling is a post-pass concern, not the engine's).
 #[test]
 fn test_70_array_trailing_comma_no_panic() {
-    let c = JsonParser::parse(br#"[1,2,]"#);
+    let c = JsonParser::parse_unchecked(br#"[1,2,]"#);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(c.str(c.arrays[0]).unwrap(), "1,2,");
 }
@@ -964,7 +964,7 @@ fn test_70_array_trailing_comma_no_panic() {
 //     guarantee test_25 made for a member value, here for an array element.)
 #[test]
 fn test_71_comma_inside_array_element_string_is_opaque() {
-    let c = JsonParser::parse(br#"["a,b","c"]"#);
+    let c = JsonParser::parse_unchecked(br#"["a,b","c"]"#);
     assert_eq!(c.arrays.len(), 1);
     let s = texts(&c, &c.strings);
     assert!(s.contains(&"a,b".to_string()));
@@ -976,7 +976,7 @@ fn test_71_comma_inside_array_element_string_is_opaque() {
 //     `\u0041`, not `A`. (Decoding, if wanted, is a caller concern.)
 #[test]
 fn test_72_unicode_escape_is_opaque_content() {
-    let c = JsonParser::parse(br#"{"a":"\u0041"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"\u0041"}"#);
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].value).unwrap(), r#""\u0041""#);
     assert!(texts(&c, &c.strings).contains(&r#"\u0041"#.to_string()));
@@ -987,7 +987,7 @@ fn test_72_unicode_escape_is_opaque_content() {
 //     with an empty value span; no panic.
 #[test]
 fn test_73_missing_value_empty_no_panic() {
-    let c = JsonParser::parse(br#"{"a":}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.members.len(), 1);
     assert_eq!(c.str(c.members[0].key).unwrap(), r#""a""#);
@@ -999,7 +999,7 @@ fn test_73_missing_value_empty_no_panic() {
 //     `"a"` landing in `strings`. No panic.
 #[test]
 fn test_74_key_without_colon_no_member() {
-    let c = JsonParser::parse(br#"{"a"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a"}"#);
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.members.len(), 0);
     assert_eq!(sorted(&c, &c.strings), vec!["a"]);
@@ -1008,7 +1008,7 @@ fn test_74_key_without_colon_no_member() {
 // 75. A key containing a space is kept whole, quotes included.
 #[test]
 fn test_75_key_with_space() {
-    let c = JsonParser::parse(br#"{"first name": "Ada", "last name": "L"}"#);
+    let c = JsonParser::parse_unchecked(br#"{"first name": "Ada", "last name": "L"}"#);
     assert_eq!(
         members(&c),
         vec![
@@ -1026,7 +1026,7 @@ fn test_76_unindented_keys_carry_no_line_break() {
         &b"{\n\"a\": 1,\n\"b\": 2\n}"[..],
         b"{\r\n\"a\": 1,\r\n\"b\": 2\r\n}",
     ] {
-        let c = JsonParser::parse(src);
+        let c = JsonParser::parse_unchecked(src);
         let keys: Vec<String> = members(&c).into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![r#""a""#, r#""b""#]);
     }
@@ -1035,7 +1035,7 @@ fn test_76_unindented_keys_carry_no_line_break() {
 // 77. Leading blank lines produce no scalars.
 #[test]
 fn test_77_leading_blank_lines_no_scalars() {
-    let c = JsonParser::parse(b"\n\n\n\n\n{}");
+    let c = JsonParser::parse_unchecked(b"\n\n\n\n\n{}");
     assert_eq!(c.objects.len(), 1);
     assert!(c.scalars.is_empty());
 }
@@ -1043,7 +1043,7 @@ fn test_77_leading_blank_lines_no_scalars() {
 // 78. The newline that ends the document is not a scalar.
 #[test]
 fn test_78_trailing_newline_no_scalar() {
-    let c = JsonParser::parse(b"{\"a\": 1}\n");
+    let c = JsonParser::parse_unchecked(b"{\"a\": 1}\n");
     assert_eq!(c.objects.len(), 1);
     assert!(c.scalars.is_empty());
 }
@@ -1051,14 +1051,14 @@ fn test_78_trailing_newline_no_scalar() {
 // 79. Bare values on lines separated by a blank line carry no line break.
 #[test]
 fn test_79_bare_values_carry_no_line_break() {
-    let c = JsonParser::parse(b"1\n\n2\n");
+    let c = JsonParser::parse_unchecked(b"1\n\n2\n");
     assert_eq!(texts(&c, &c.scalars), vec!["1", "2"]);
 }
 
 // 80. The value of an unterminated member ends before the final newline.
 #[test]
 fn test_80_unterminated_member_value_excludes_newline() {
-    let c = JsonParser::parse(b"{\"a\": 1\n");
+    let c = JsonParser::parse_unchecked(b"{\"a\": 1\n");
     assert_eq!(members(&c), vec![(r#""a""#.to_string(), "1".to_string())]);
 }
 
@@ -1069,7 +1069,7 @@ fn test_80_unterminated_member_value_excludes_newline() {
 fn test_81_open_past_cap_does_not_repeat_text() {
     let mut src = vec![b'['; 64];
     src.extend_from_slice(b"x{y");
-    let c = JsonParser::parse(&src);
+    let c = JsonParser::parse_unchecked(&src);
     let opens = "[".repeat(64) + "x";
     assert_eq!(texts(&c, &c.scalars), vec![opens.as_str(), "{y"]);
 }
@@ -1080,7 +1080,7 @@ fn test_81_open_past_cap_does_not_repeat_text() {
 fn test_82_array_past_cap_keeps_its_content() {
     let mut src = vec![b'['; 64];
     src.extend_from_slice(b"[a]b");
-    let c = JsonParser::parse(&src);
+    let c = JsonParser::parse_unchecked(&src);
     let all = "[".repeat(65) + "a]b";
     assert_eq!(texts(&c, &c.scalars), vec![all.as_str()]);
 }
@@ -1089,7 +1089,7 @@ fn test_82_array_past_cap_keeps_its_content() {
 //     them is kept.
 #[test]
 fn test_83_empty_strings_do_not_swallow_members() {
-    let c = JsonParser::parse(br#"{"a":"","b":"x","c":""}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":"","b":"x","c":""}"#);
     assert_eq!(
         members(&c),
         vec![
@@ -1106,7 +1106,7 @@ fn test_83_empty_strings_do_not_swallow_members() {
 fn test_84_member_past_cap_keeps_its_key() {
     let mut src = vec![b'{'; 64];
     src.extend_from_slice(b"a b:1");
-    let c = JsonParser::parse(&src);
+    let c = JsonParser::parse_unchecked(&src);
     assert!(c.members.is_empty());
     let all = "{".repeat(64) + "a b:1";
     assert_eq!(texts(&c, &c.scalars), vec![all.as_str()]);
@@ -1115,7 +1115,7 @@ fn test_84_member_past_cap_keeps_its_key() {
 // 85. A doubled `:` starts the value at the second one.
 #[test]
 fn test_85_doubled_colon_is_value_content() {
-    let c = JsonParser::parse(br#"{"a"::1}"#);
+    let c = JsonParser::parse_unchecked(br#"{"a"::1}"#);
     assert_eq!(members(&c), vec![(r#""a""#.to_string(), ":1".to_string())]);
 }
 
@@ -1124,7 +1124,7 @@ fn test_85_doubled_colon_is_value_content() {
 //     own key.
 #[test]
 fn test_86_doubled_comma_keeps_bare_text() {
-    let c = JsonParser::parse(br#"{"a":1,,"b":2"#);
+    let c = JsonParser::parse_unchecked(br#"{"a":1,,"b":2"#);
     assert_eq!(
         members(&c),
         vec![

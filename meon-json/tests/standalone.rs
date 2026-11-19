@@ -14,12 +14,12 @@ type Member = (Span, Span);
 
 /// The members of the full parse and those `find_members` yields.
 fn members(src: &[u8]) -> (Vec<Member>, Vec<Member>) {
-    let full = JsonParser::parse(src)
+    let full = JsonParser::parse_unchecked(src)
         .members
         .iter()
         .map(|m| (m.key, m.value))
         .collect();
-    let find = JsonParser::find_members(src)
+    let find = JsonParser::find_members_unchecked(src)
         .map(|m| (m.key, m.value))
         .collect();
     (full, find)
@@ -30,17 +30,20 @@ fn members(src: &[u8]) -> (Vec<Member>, Vec<Member>) {
 #[test]
 fn test_01_containers() {
     for src in [&b"{a{b}c}"[..], b"{a\\}b}", b"[[1],[2,[3]]]", b"{a {b}"] {
-        let full = JsonParser::parse(src);
+        let full = JsonParser::parse_unchecked(src);
         assert_eq!(
-            spans(JsonParser::find_objects(src)),
+            spans(JsonParser::find_objects_unchecked(src)),
             spans(full.objects.iter().copied())
         );
         assert_eq!(
-            spans(JsonParser::find_arrays(src)),
+            spans(JsonParser::find_arrays_unchecked(src)),
             spans(full.arrays.iter().copied())
         );
     }
-    assert_eq!(spans(JsonParser::find_objects(b"{a\\}b}")), vec![(1, 5)]);
+    assert_eq!(
+        spans(JsonParser::find_objects_unchecked(b"{a\\}b}")),
+        vec![(1, 5)]
+    );
 }
 
 // 02. An escaped `:` opens no member and an escaped `,` ends none; the next

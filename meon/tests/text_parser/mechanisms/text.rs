@@ -56,7 +56,7 @@ fn all(src: &[u8], v: &[Span]) -> Vec<String> {
 #[test]
 fn cont_run_01_pair_across_lines() {
     let src = b"> *a\n> b*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(c.quotes.len(), 1);
     assert_eq!(all(src, &c.ems), vec!["a\n> b"]);
     assert!(c.texts.is_empty());
@@ -66,7 +66,7 @@ fn cont_run_01_pair_across_lines() {
 #[test]
 fn cont_run_02_text_per_line() {
     let src = b"> a\n> b\n> c\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.texts), vec!["a", "b", "c"]);
 }
 
@@ -75,13 +75,13 @@ fn cont_run_02_text_per_line() {
 #[test]
 fn cont_run_03_markers_are_no_close_bytes() {
     let src = b"> <a\n> b>\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.angles), vec!["a\n> b"]);
     let src = b"> {a\n>b}\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.rings), vec!["a\n>b"]);
     let src = b"> `a\n> b`\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.codes), vec!["a\n> b"]);
 }
 
@@ -89,7 +89,7 @@ fn cont_run_03_markers_are_no_close_bytes() {
 #[test]
 fn cont_run_04_nested_frames() {
     let src = b"> > *a\n> > b*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(c.quotes.len(), 2);
     assert_eq!(all(src, &c.ems), vec!["a\n> > b"]);
 }
@@ -98,11 +98,11 @@ fn cont_run_04_nested_frames() {
 #[test]
 fn cont_run_05_other_frames_end_the_run() {
     for src in [&b"> *a\n> > b*\n"[..], b"> > *a\n> b*\n", b"> *a\nb*\n"] {
-        let c = DocParser::parse(src);
+        let c = DocParser::parse_unchecked(src);
         assert!(c.ems.is_empty(), "{:?}", String::from_utf8_lossy(src));
     }
     let src = b"> *a\n> > b*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.texts), vec!["*a", "b*"]);
 }
 
@@ -110,7 +110,7 @@ fn cont_run_05_other_frames_end_the_run() {
 #[test]
 fn cont_run_06_item_ends_the_run() {
     let src = b"> *a\n> - b*\n> c\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert!(c.ems.is_empty());
     assert_eq!(c.items.len(), 1);
     assert_eq!(c.items[0].0.kind, b'-');
@@ -122,7 +122,7 @@ fn cont_run_06_item_ends_the_run() {
 #[test]
 fn cont_run_07_blank_content_ends_the_run() {
     for src in [&b"> *a\n>\n> b*\n"[..], b"> *a\n>  \t\n> b*\n"] {
-        let c = DocParser::parse(src);
+        let c = DocParser::parse_unchecked(src);
         assert!(c.ems.is_empty(), "{:?}", String::from_utf8_lossy(src));
         assert_eq!(c.quotes.len(), 1);
         assert_eq!(all(src, &c.texts), vec!["*a", "b*"]);
@@ -133,7 +133,7 @@ fn cont_run_07_blank_content_ends_the_run() {
 #[test]
 fn cont_run_08_hard_break() {
     let src = b"> a  \n> b\\\n> c\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(
         c.breaks
             .iter()
@@ -149,7 +149,7 @@ fn cont_run_08_hard_break() {
 #[test]
 fn cont_run_09_fence_ends_the_run() {
     let src = b"> *a\n> ~~~\n> b*\n> ~~~\n> c*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert!(c.ems.is_empty());
     assert_eq!(c.fences.len(), 1);
     assert_eq!(all(src, &c.texts), vec!["*a", "c*"]);
@@ -163,7 +163,7 @@ fn cont_run_09_fence_ends_the_run() {
 #[test]
 fn blank_01_ends_paragraph_run() {
     let src = b"*a\n  \t \nb*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert!(c.ems.is_empty());
     assert_eq!(all(src, &c.paras), vec!["*a\n", "b*\n"]);
     assert_eq!(all(src, &c.texts), vec!["*a", "b*"]);
@@ -173,7 +173,7 @@ fn blank_01_ends_paragraph_run() {
 #[test]
 fn blank_02_closes_frames() {
     let src = b"> a\n \n> b\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(c.quotes.len(), 2);
 }
 
@@ -181,7 +181,7 @@ fn blank_02_closes_frames() {
 #[test]
 fn blank_03_fence_content() {
     let src = b"~~~\n  \n~~~\nx\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.fences), vec!["~~~\n  \n~~~\n"]);
     assert_eq!(all(src, &c.texts), vec!["x"]);
 }
@@ -190,7 +190,7 @@ fn blank_03_fence_content() {
 #[test]
 fn blank_04_at_end_of_input() {
     let src = b"a\n   ";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.paras), vec!["a\n"]);
     assert_eq!(all(src, &c.texts), vec!["a"]);
 }
@@ -211,11 +211,11 @@ fn cont_run_10_context_finders_agree() {
         b"*a\n \nb*\n",
         b"> *a {\n>b*}*\n",
     ] {
-        let c = DocParser::parse(src);
-        let ctx = DocParser::context(src);
+        let c = DocParser::parse_unchecked(src);
+        let ctx = DocParser::context_unchecked(src);
         let what = String::from_utf8_lossy(src);
-        let ems: Vec<Span> = DocParser::find_context_ems(src, &ctx).collect();
-        let strongs: Vec<Span> = DocParser::find_context_strongs(src, &ctx).collect();
+        let ems: Vec<Span> = DocParser::find_context_ems_unchecked(src, &ctx).collect();
+        let strongs: Vec<Span> = DocParser::find_context_strongs_unchecked(src, &ctx).collect();
         assert_eq!(spans(&ems), spans(&c.ems), "ems in {what:?}");
         assert_eq!(spans(&strongs), spans(&c.strongs), "strongs in {what:?}");
     }
@@ -226,7 +226,7 @@ fn cont_run_10_context_finders_agree() {
 #[test]
 fn cont_run_11_line_rule_ends_paragraph_run() {
     let src = b"*a\n## b*\nc*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert!(c.ems.is_empty());
     assert_eq!(c.heads.len(), 1);
     assert_eq!(c.heads[0].0.level, 2);
@@ -287,7 +287,7 @@ fn pairs(v: &[Span]) -> Vec<(u32, u32)> {
 #[test]
 fn crlf_01_line_content_ends_before_cr() {
     let src = b"a *b\r\nc* d\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.ems), vec!["b\r\nc"]);
     assert_eq!(all(src, &c.texts), vec!["a ", " d"]);
     assert_eq!(all(src, &c.paras), vec!["a *b\r\nc* d\r\n"]);
@@ -297,7 +297,7 @@ fn crlf_01_line_content_ends_before_cr() {
 #[test]
 fn crlf_02_lone_cr_is_content() {
     let src = b"a\rb\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.texts), vec!["a\rb"]);
 }
 
@@ -305,7 +305,7 @@ fn crlf_02_lone_cr_is_content() {
 #[test]
 fn crlf_03_hard_break() {
     let src = b"a\\\r\nb  \r\nc\\\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(pairs(&c.breaks), vec![(1, 1), (5, 5), (10, 10)]);
     assert_eq!(all(src, &c.texts), vec!["a", "b", "c"]);
 }
@@ -314,7 +314,7 @@ fn crlf_03_hard_break() {
 #[test]
 fn crlf_04_line_and_block_rules() {
     let src = b"# h\r\n===\r\n- i\r\n#\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.heads.len(), 2);
     assert_eq!(
         all(src, &c.heads.iter().map(|h| h.1).collect::<Vec<_>>()),
@@ -335,7 +335,7 @@ fn crlf_04_line_and_block_rules() {
 #[test]
 fn crlf_05_fence_close() {
     let src = b"~~~\r\nx\r\n~~~ \r\ny\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.fences), vec!["~~~\r\nx\r\n~~~ \r\n"]);
     assert_eq!(all(src, &c.texts), vec!["y"]);
 }
@@ -344,7 +344,7 @@ fn crlf_05_fence_close() {
 #[test]
 fn crlf_06_blank_lines() {
     for src in [&b"*a\r\n\r\nb*\r\n"[..], b"*a\r\n \t\r\nb*\r\n"] {
-        let c = CrDocParser::parse(src);
+        let c = CrDocParser::parse_unchecked(src);
         assert!(c.ems.is_empty(), "{:?}", String::from_utf8_lossy(src));
         assert_eq!(c.paras.len(), 2);
     }
@@ -354,11 +354,11 @@ fn crlf_06_blank_lines() {
 #[test]
 fn crlf_07_cont_run() {
     let src = b"> *a\r\n> b*\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.ems), vec!["a\r\n> b"]);
     assert_eq!(all(src, &c.texts), vec![] as Vec<String>);
     let src = b"> a\r\n>\r\n> b\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.texts), vec!["a", "b"]);
 }
 
@@ -366,7 +366,7 @@ fn crlf_07_cont_run() {
 #[test]
 fn crlf_08_off_keeps_cr() {
     let src = b"a\r\n# h\r\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.texts), vec!["a\r", "h\r"]);
 }
 
@@ -382,30 +382,30 @@ fn crlf_09_finders_agree() {
         b"~~~\r\n*x*\r\n~~~\r\n*y*\r\n",
         b"# *h*\r\n- *i*\r\n===\r\n",
     ] {
-        let c = CrDocParser::parse(src);
-        let ctx = CrDocParser::context(src);
+        let c = CrDocParser::parse_unchecked(src);
+        let ctx = CrDocParser::context_unchecked(src);
         let what = String::from_utf8_lossy(src);
-        let ems: Vec<Span> = CrDocParser::find_context_ems(src, &ctx).collect();
+        let ems: Vec<Span> = CrDocParser::find_context_ems_unchecked(src, &ctx).collect();
         assert_eq!(pairs(&ems), pairs(&c.ems), "ems in {what:?}");
-        let angles: Vec<Span> = CrDocParser::find_angles(src).collect();
+        let angles: Vec<Span> = CrDocParser::find_angles_unchecked(src).collect();
         assert_eq!(pairs(&angles), pairs(&c.angles), "angles in {what:?}");
-        let fences: Vec<Span> = CrDocParser::find_fences(src).collect();
+        let fences: Vec<Span> = CrDocParser::find_fences_unchecked(src).collect();
         assert_eq!(pairs(&fences), pairs(&c.fences), "fences in {what:?}");
-        let heads: Vec<Span> = CrDocParser::find_context_heads(src, &ctx)
+        let heads: Vec<Span> = CrDocParser::find_context_heads_unchecked(src, &ctx)
             .map(|h| h.1)
             .collect();
         assert_eq!(
             pairs(&heads),
             pairs(&c.heads.iter().map(|h| h.1).collect::<Vec<_>>())
         );
-        let rules: Vec<Span> = CrDocParser::find_context_rules(src, &ctx)
+        let rules: Vec<Span> = CrDocParser::find_context_rules_unchecked(src, &ctx)
             .map(|h| h.1)
             .collect();
         assert_eq!(
             pairs(&rules),
             pairs(&c.rules.iter().map(|h| h.1).collect::<Vec<_>>())
         );
-        let items: Vec<Span> = CrDocParser::find_context_items(src, &ctx)
+        let items: Vec<Span> = CrDocParser::find_context_items_unchecked(src, &ctx)
             .map(|h| h.1)
             .collect();
         assert_eq!(
@@ -419,16 +419,16 @@ fn crlf_09_finders_agree() {
 #[test]
 fn blank_05_finders_agree() {
     for src in [&b"*a\n  \nb*\n"[..], b"<a\n\t\nb>\n", b"`a\n \n` `b`\n"] {
-        let c = DocParser::parse(src);
-        let ctx = DocParser::context(src);
+        let c = DocParser::parse_unchecked(src);
+        let ctx = DocParser::context_unchecked(src);
         let what = String::from_utf8_lossy(src);
-        let ems: Vec<Span> = DocParser::find_ems(src).collect();
+        let ems: Vec<Span> = DocParser::find_ems_unchecked(src).collect();
         assert_eq!(pairs(&ems), pairs(&c.ems), "ems in {what:?}");
-        let ems: Vec<Span> = DocParser::find_context_ems(src, &ctx).collect();
+        let ems: Vec<Span> = DocParser::find_context_ems_unchecked(src, &ctx).collect();
         assert_eq!(pairs(&ems), pairs(&c.ems), "context ems in {what:?}");
-        let angles: Vec<Span> = DocParser::find_angles(src).collect();
+        let angles: Vec<Span> = DocParser::find_angles_unchecked(src).collect();
         assert_eq!(pairs(&angles), pairs(&c.angles), "angles in {what:?}");
-        let codes: Vec<Span> = DocParser::find_codes(src).collect();
+        let codes: Vec<Span> = DocParser::find_codes_unchecked(src).collect();
         assert_eq!(pairs(&codes), pairs(&c.codes), "codes in {what:?}");
     }
 }
@@ -438,7 +438,7 @@ fn blank_05_finders_agree() {
 #[test]
 fn crlf_10_fence_inside_cont() {
     let src = b"> ~~~\r\n> x\r\n> ~~~\r\n> y\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.quotes.len(), 1);
     assert_eq!(c.fences.len(), 1);
     assert_eq!(all(src, &c.texts), vec!["y"]);
@@ -448,12 +448,14 @@ fn crlf_10_fence_inside_cont() {
 #[test]
 fn crlf_11_key_value() {
     let src = b"k = v\r\nj=w\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     let keys: Vec<Span> = c.pairs.iter().map(|p| p.key).collect();
     assert_eq!(all(src, &keys), vec!["k", "j"]);
     let values: Vec<Span> = c.pairs.iter().map(|p| p.value).collect();
     assert_eq!(all(src, &values), vec!["v", "w"]);
-    let found: Vec<Span> = CrDocParser::find_pairs(src).map(|p| p.value).collect();
+    let found: Vec<Span> = CrDocParser::find_pairs_unchecked(src)
+        .map(|p| p.value)
+        .collect();
     assert_eq!(pairs(&found), pairs(&values));
 }
 
@@ -461,7 +463,7 @@ fn crlf_11_key_value() {
 #[test]
 fn crlf_12_trailing_cr_is_content() {
     for src in [&b"\r"[..], b" \t\r", b"a\r", b"a\r\n\r"] {
-        let c = CrDocParser::parse(src);
+        let c = CrDocParser::parse_unchecked(src);
         assert_eq!(c.paras.len(), 1);
         assert_eq!(c.paras[0], Span::new(0, src.len() as u32));
         assert_eq!(c.texts.last().unwrap().end, src.len() as u32);
@@ -472,29 +474,29 @@ fn crlf_12_trailing_cr_is_content() {
 #[test]
 fn crlf_13_marker_content_at_eof() {
     let src = b"# x\r";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.heads[0].1, Span::new(2, 4));
     assert!(
-        CrDocParser::find_heads(src)
+        CrDocParser::find_heads_unchecked(src)
             .map(|h| h.1)
             .eq([Span::new(2, 4)])
     );
-    let ctx = CrDocParser::context(src);
+    let ctx = CrDocParser::context_unchecked(src);
     assert!(
-        CrDocParser::find_context_heads(src, &ctx)
+        CrDocParser::find_context_heads_unchecked(src, &ctx)
             .map(|h| h.1)
             .eq([Span::new(2, 4)])
     );
     let src = b"- x\r";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.items[0].1, Span::new(2, 4));
     assert!(
-        CrDocParser::find_items(src)
+        CrDocParser::find_items_unchecked(src)
             .map(|h| h.1)
             .eq([Span::new(2, 4)])
     );
     let src = b"> x\r";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.texts.as_slice(), &[Span::new(2, 4)]);
 }
 
@@ -502,20 +504,24 @@ fn crlf_13_marker_content_at_eof() {
 #[test]
 fn crlf_14_trailing_cr_is_not_a_line_terminator() {
     for src in [&b"===\r"[..], b"=== \r"] {
-        let c = CrDocParser::parse(src);
+        let c = CrDocParser::parse_unchecked(src);
         assert!(c.rules.is_empty());
-        assert!(CrDocParser::find_rules(src).next().is_none());
-        let ctx = CrDocParser::context(src);
-        assert!(CrDocParser::find_context_rules(src, &ctx).next().is_none());
+        assert!(CrDocParser::find_rules_unchecked(src).next().is_none());
+        let ctx = CrDocParser::context_unchecked(src);
+        assert!(
+            CrDocParser::find_context_rules_unchecked(src, &ctx)
+                .next()
+                .is_none()
+        );
         assert_eq!(c.paras.as_slice(), &[Span::new(0, src.len() as u32)]);
     }
     let src = b"~~~\nx\n~~~\r";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.fences.len(), 1);
     assert_eq!(c.fences[0].end, src.len() as u32);
-    assert!(CrDocParser::find_fences(src).eq(c.fences.iter().copied()));
+    assert!(CrDocParser::find_fences_unchecked(src).eq(c.fences.iter().copied()));
     assert_eq!(
-        CrDocParser::context(src).spans(),
+        CrDocParser::context_unchecked(src).spans(),
         &[Span::new(0, src.len() as u32)]
     );
 }
@@ -524,16 +530,16 @@ fn crlf_14_trailing_cr_is_not_a_line_terminator() {
 #[test]
 fn crlf_15_actual_crlf_at_eof() {
     let src = b"# x\r\n";
-    let c = CrDocParser::parse(src);
+    let c = CrDocParser::parse_unchecked(src);
     assert_eq!(c.heads[0].1, Span::new(2, 3));
     assert!(
-        CrDocParser::find_heads(src)
+        CrDocParser::find_heads_unchecked(src)
             .map(|h| h.1)
             .eq([Span::new(2, 3)])
     );
     let src = b"===\r\n";
-    assert_eq!(CrDocParser::parse(src).rules.len(), 1);
-    assert_eq!(CrDocParser::find_rules(src).count(), 1);
+    assert_eq!(CrDocParser::parse_unchecked(src).rules.len(), 1);
+    assert_eq!(CrDocParser::find_rules_unchecked(src).count(), 1);
 }
 
 // ================================================================
@@ -565,11 +571,11 @@ use plain::PlainParser;
 #[test]
 fn cont_plain_01_markers_skipped() {
     let src = b"> *a\n> b*\n> <c\n>d>\n";
-    let c = PlainParser::parse(src);
+    let c = PlainParser::parse_unchecked(src);
     assert_eq!(all(src, &c.ems), vec!["a\n> b"]);
     assert_eq!(all(src, &c.angles), vec!["c\n>d"]);
     let src = b"> a\n>b\n";
-    let c = PlainParser::parse(src);
+    let c = PlainParser::parse_unchecked(src);
     assert_eq!(all(src, &c.texts), vec!["a", "b"]);
 }
 
@@ -577,12 +583,16 @@ fn cont_plain_01_markers_skipped() {
 #[test]
 fn cont_plain_02_other_frame_same_depth() {
     let src = b"> *a\n| b*\n";
-    let c = PlainParser::parse(src);
+    let c = PlainParser::parse_unchecked(src);
     assert!(c.ems.is_empty());
     assert_eq!((c.quotes.len(), c.bars.len()), (1, 1));
     assert_eq!(all(src, &c.texts), vec!["*a", "b", "*"]);
-    let ctx = PlainParser::context(src);
-    assert!(PlainParser::find_context_ems(src, &ctx).next().is_none());
+    let ctx = PlainParser::context_unchecked(src);
+    assert!(
+        PlainParser::find_context_ems_unchecked(src, &ctx)
+            .next()
+            .is_none()
+    );
 }
 
 // 03. A blank line inside a fence inside the frames keeps them open, for the
@@ -593,11 +603,11 @@ fn cont_run_12_blank_line_in_nested_fence() {
         &b"> ~~~\n  \n> *x*\n> ~~~\n*y*\n"[..],
         b"> ~~~\n\n> *x*\n> ~~~\n*y*\n",
     ] {
-        let c = DocParser::parse(src);
+        let c = DocParser::parse_unchecked(src);
         assert_eq!(c.fences.len(), 1);
         assert_eq!(all(src, &c.ems), vec!["y"]);
-        let ctx = DocParser::context(src);
-        let ems: Vec<Span> = DocParser::find_context_ems(src, &ctx).collect();
+        let ctx = DocParser::context_unchecked(src);
+        let ems: Vec<Span> = DocParser::find_context_ems_unchecked(src, &ctx).collect();
         assert_eq!(
             pairs(&ems),
             pairs(&c.ems),
@@ -612,15 +622,15 @@ fn cont_run_12_blank_line_in_nested_fence() {
 #[test]
 fn cont_run_13_one_line_runs() {
     let src = b"> *a*\nb\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(all(src, &c.ems), vec!["a"]);
     assert_eq!(all(src, &c.texts), vec!["b"]);
     let src = b"> *a\n> > b*\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert!(c.ems.is_empty());
     assert_eq!(all(src, &c.texts), vec!["*a", "b*"]);
     for src in [&b"> <a> *b*\n\nc"[..], b"> <a> *b*"] {
-        let c = DocParser::parse(src);
+        let c = DocParser::parse_unchecked(src);
         assert_eq!(all(src, &c.angles), vec!["a"]);
         assert_eq!(all(src, &c.ems), vec!["b"]);
     }
@@ -637,13 +647,13 @@ fn cont_run_13_one_line_runs() {
 // 01. A line beginning with a marker opens its rule after a paragraph line
 #[test]
 fn para_01_marker_lines_open_rules() {
-    let c = DocParser::parse(b"a\n- b\n");
+    let c = DocParser::parse_unchecked(b"a\n- b\n");
     assert_eq!((c.paras.len(), c.items.len()), (1, 1));
-    let c = DocParser::parse(b"a\n# b\n");
+    let c = DocParser::parse_unchecked(b"a\n# b\n");
     assert_eq!((c.paras.len(), c.heads.len()), (1, 1));
-    let c = DocParser::parse(b"a\n> b\n");
+    let c = DocParser::parse_unchecked(b"a\n> b\n");
     assert_eq!((c.paras.len(), c.quotes.len()), (1, 1));
-    let c = DocParser::parse(b"a\n~~~\nb\n~~~\n");
+    let c = DocParser::parse_unchecked(b"a\n~~~\nb\n~~~\n");
     assert_eq!((c.paras.len(), c.fences.len()), (1, 1));
 }
 
@@ -651,7 +661,7 @@ fn para_01_marker_lines_open_rules() {
 #[test]
 fn para_02_marker_after_sep_or_tab() {
     for src in [&b"a\n - b\n"[..], b"a\n\t- b\n"] {
-        let c = DocParser::parse(src);
+        let c = DocParser::parse_unchecked(src);
         assert_eq!(c.items.len(), 1, "{:?}", String::from_utf8_lossy(src));
         assert_eq!(c.paras.len(), 1);
     }
@@ -661,7 +671,7 @@ fn para_02_marker_after_sep_or_tab() {
 #[test]
 fn para_03_text_lines_one_run() {
     let src = b"a *b\nc* d\ne\n";
-    let c = DocParser::parse(src);
+    let c = DocParser::parse_unchecked(src);
     assert_eq!(c.paras.len(), 1);
     assert_eq!(all(src, &c.ems), vec!["b\nc"]);
 }
@@ -704,7 +714,7 @@ use links::LkParser;
 #[test]
 fn chained_plain_01_escaped_close_before_close() {
     let src = b"[a\\]](u\\)) ![b](c)";
-    let c = LkParser::parse(src);
+    let c = LkParser::parse_unchecked(src);
     let got: Vec<(bool, String, String)> = c
         .links
         .iter()
@@ -726,7 +736,7 @@ fn chained_plain_01_escaped_close_before_close() {
 #[test]
 fn chained_plain_02_across_run_lines() {
     let src = b"> [a\n> b](c\n> d)\n";
-    let c = LkParser::parse(src);
+    let c = LkParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert_eq!(all(src, &[c.links[0].text]), vec!["a\n> b"]);
     assert_eq!(all(src, &[c.links[0].url]), vec!["c\n> d"]);
@@ -767,12 +777,15 @@ use balanced_links::BalancedParser;
 #[test]
 fn chained_balanced_01_text_marker_is_no_opener() {
     let src = b"[ x[a\n[ b](u)\n";
-    let c = BalancedParser::parse(src);
+    let c = BalancedParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(!c.links[0].is_image);
     assert_eq!(c.links[0].text, Span::new(4, 9));
     assert_eq!(c.links[0].url, Span::new(11, 12));
-    assert_eq!(BalancedParser::context(src).spans(), &[Span::new(3, 13)]);
+    assert_eq!(
+        BalancedParser::context_unchecked(src).spans(),
+        &[Span::new(3, 13)]
+    );
 }
 
 // 02. A continuation marker equal to the url opener does not nest in
@@ -780,12 +793,15 @@ fn chained_balanced_01_text_marker_is_no_opener() {
 #[test]
 fn chained_balanced_02_url_marker_is_no_opener() {
     let src = b"( x[a](u\n( v)\n";
-    let c = BalancedParser::parse(src);
+    let c = BalancedParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(!c.links[0].is_image);
     assert_eq!(c.links[0].text, Span::new(4, 5));
     assert_eq!(c.links[0].url, Span::new(7, 12));
-    assert_eq!(BalancedParser::context(src).spans(), &[Span::new(3, 13)]);
+    assert_eq!(
+        BalancedParser::context_unchecked(src).spans(),
+        &[Span::new(3, 13)]
+    );
 }
 
 // 03. A failed balanced text search with a close in its paragraph does
@@ -793,12 +809,15 @@ fn chained_balanced_02_url_marker_is_no_opener() {
 #[test]
 fn chained_balanced_03_text_failure_ends_at_paragraph() {
     let src = b"x[a [b]\n\nx[c](d)";
-    let c = BalancedParser::parse(src);
+    let c = BalancedParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(!c.links[0].is_image);
     assert_eq!(c.links[0].text, Span::new(11, 12));
     assert_eq!(c.links[0].url, Span::new(14, 15));
-    assert_eq!(BalancedParser::context(src).spans(), &[Span::new(10, 16)]);
+    assert_eq!(
+        BalancedParser::context_unchecked(src).spans(),
+        &[Span::new(10, 16)]
+    );
 }
 
 // 04. A failed balanced url search leaves both the valid inner pair and
@@ -806,13 +825,13 @@ fn chained_balanced_03_text_failure_ends_at_paragraph() {
 #[test]
 fn chained_balanced_04_url_failure_ends_at_paragraph() {
     let src = b"x[a](b [c](d)\n\nx[e](f)";
-    let c = BalancedParser::parse(src);
+    let c = BalancedParser::parse_unchecked(src);
     assert!(c.links.iter().map(|l| (l.is_image, l.text, l.url)).eq([
         (false, Span::new(8, 9), Span::new(11, 12)),
         (false, Span::new(17, 18), Span::new(20, 21)),
     ]));
     assert_eq!(
-        BalancedParser::context(src).spans(),
+        BalancedParser::context_unchecked(src).spans(),
         &[Span::new(7, 13), Span::new(16, 22)]
     );
 }
@@ -833,11 +852,14 @@ fn chained_balanced_05_index_skips_continuation_markers() {
             Span::new(10, 15),
         ),
     ] {
-        let c = BalancedParser::parse(src);
+        let c = BalancedParser::parse_unchecked(src);
         assert_eq!(c.links.len(), 1);
         assert_eq!(c.links[0].text, text);
         assert_eq!(c.links[0].url, url);
-        assert_eq!(BalancedParser::context(src).spans(), &[Span::new(6, 16)]);
+        assert_eq!(
+            BalancedParser::context_unchecked(src).spans(),
+            &[Span::new(6, 16)]
+        );
     }
 }
 
@@ -877,14 +899,14 @@ fn opaque_arms_01_context_matches_full_parse() {
         b"<*x*> *y*",
         b"<<*x*> *y*",
     ] {
-        let c = ArmsParser::parse(src);
-        let ctx = ArmsParser::context(src);
+        let c = ArmsParser::parse_unchecked(src);
+        let ctx = ArmsParser::context_unchecked(src);
         assert_eq!(ctx.spans(), &[Span::new(0, (src.len() - 4) as u32)]);
         assert_eq!(c.ems.len(), 1);
-        assert!(ArmsParser::find_context_ems(src, &ctx).eq(c.ems.iter().copied()));
-        assert!(ArmsParser::find_doubles(src).eq(c.doubles.iter().copied()));
-        assert!(ArmsParser::find_triples(src).eq(c.triples.iter().copied()));
-        assert!(ArmsParser::find_second(src).eq(c.second.iter().copied()));
+        assert!(ArmsParser::find_context_ems_unchecked(src, &ctx).eq(c.ems.iter().copied()));
+        assert!(ArmsParser::find_doubles_unchecked(src).eq(c.doubles.iter().copied()));
+        assert!(ArmsParser::find_triples_unchecked(src).eq(c.triples.iter().copied()));
+        assert!(ArmsParser::find_second_unchecked(src).eq(c.second.iter().copied()));
     }
 }
 
@@ -893,11 +915,11 @@ fn opaque_arms_01_context_matches_full_parse() {
 fn opaque_arms_02_literal_runs_preserve_inner_elements() {
     use opaque_arms::ArmsParser;
     for src in [&b"````*x*````"[..], b"<<<*x*>", b"\\``*x*``"] {
-        let c = ArmsParser::parse(src);
-        let ctx = ArmsParser::context(src);
+        let c = ArmsParser::parse_unchecked(src);
+        let ctx = ArmsParser::context_unchecked(src);
         assert!(ctx.spans().is_empty());
         assert_eq!(c.ems.len(), 1);
-        assert!(ArmsParser::find_context_ems(src, &ctx).eq(c.ems.iter().copied()));
+        assert!(ArmsParser::find_context_ems_unchecked(src, &ctx).eq(c.ems.iter().copied()));
     }
 }
 
@@ -906,11 +928,11 @@ fn opaque_arms_02_literal_runs_preserve_inner_elements() {
 fn opaque_arms_03_failed_longer_arm_recovers_shorter() {
     use opaque_arms::ArmsParser;
     let src = b"``x `*y*`";
-    let c = ArmsParser::parse(src);
-    let ctx = ArmsParser::context(src);
+    let c = ArmsParser::parse_unchecked(src);
+    let ctx = ArmsParser::context_unchecked(src);
     assert!(c.doubles.is_empty());
     assert_eq!(c.singles.len(), 1);
     assert!(c.ems.is_empty());
     assert_eq!(ctx.spans(), &[Span::new(4, 9)]);
-    assert!(ArmsParser::find_context_ems(src, &ctx).eq(c.ems.iter().copied()));
+    assert!(ArmsParser::find_context_ems_unchecked(src, &ctx).eq(c.ems.iter().copied()));
 }

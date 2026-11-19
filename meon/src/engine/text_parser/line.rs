@@ -59,8 +59,16 @@ macro_rules! parse_line {
      max_line = $max_line:tt, para = $para:ident ;
      $($rules:tt)*) => {{
         let src: &[u8] = $src;
+        macro_rules! __span {
+            ($a:expr, $b:expr) => {
+                $crate::span::Span::<usize>::from_usize($a as usize, $b as usize)
+            };
+            ($a:expr, $b:expr,) => {
+                __span!($a, $b)
+            };
+        }
         let pos: usize  = $pos;
-        let le:  usize  = $le;
+        let le:  usize  = ($le as usize).min($crate::span::Span::<usize>::MAX_INPUT_LEN);
         let mut _r: Option<usize> = None;
         $crate::parse_line!(@emit _r, $state, src, pos, le, $sep, $max_line, $para ; $($rules)*);
         _r
@@ -83,7 +91,7 @@ macro_rules! parse_line {
                 let $n    = _c;
                 let _meta = $meta;
                 $crate::parse_line!(@push $max_line, $st, $field, $para, _meta,
-                    $crate::span::Span::new(_i as u32, $le as u32));
+                    __span!(_i as u32, $le as u32));
                 $res = Some(_i);
             }
         }
@@ -108,7 +116,7 @@ macro_rules! parse_line {
                     let $b    = _delim;
                     let _meta = $meta;
                     $crate::parse_line!(@push $max_line, $st, $field, $para, _meta,
-                        $crate::span::Span::new($pos as u32, $le as u32));
+                        __span!($pos as u32, $le as u32));
                     $res = Some($le);
                 }
             }
@@ -123,7 +131,7 @@ macro_rules! parse_line {
     };
     (@push [$n:literal], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {{
         let _span = $span;
-        if (_span.end - _span.start) > $n as u32 {
+        if _span.len_usize() > $n as usize {
             $crate::paste::paste! {
                 $st.[<push_ $para>](_span);
             }

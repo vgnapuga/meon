@@ -12,7 +12,7 @@
 //! ```rust
 //! use meon_md::MarkdownParser;
 //!
-//! let content = MarkdownParser::parse(b"# Hello\n**world**\n");
+//! let content = MarkdownParser::parse(b"# Hello\n**world**\n").unwrap();
 //! assert_eq!(content.headings.len(), 1);
 //! assert_eq!(content.bolds.len(), 1);
 //! ```

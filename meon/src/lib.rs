@@ -13,8 +13,10 @@
 //! invocation and get back:
 //!
 //! - a **content struct** with `Vec` fields for every element kind,
-//! - a **`...Parser` type** with a `parse(source: &[u8]) -> ...Content<'_>` method
-//!   for full single-pass parsing,
+//! - a **`...Parser` type** with a `parse(source: &[u8]) ->
+//!   Result<...Content<'_>, InputBytesTooLarge>` method for full single-pass
+//!   parsing, plus `parse_unchecked` for the same parse without the grammar's
+//!   input length check,
 //! - **`find_*` standalone iterators** for lazily scanning one element kind
 //!   without parsing the whole document,
 //! - a **`context(source)` builder** producing the [`ParseContext`] opaque-region
@@ -22,8 +24,14 @@
 //!   fenced blocks and `parse_inside = false` constructs and read lines the
 //!   way the full parse does.
 //!
-//! All span endpoints are `u32` byte offsets into the original source slice.
-//! Input must not exceed [`span::MAX_INPUT_LEN`] (4 GiB).
+//! All span endpoints are byte offsets into the original source slice.
+//! Their type defaults to `u32` and can be selected per grammar with
+//! `limits { offset = u8 | u16 | u32 | u64; }`.
+//! A grammar can set `max_input_bytes` in its `limits` section to reject a
+//! source longer than the limit with [`InputBytesTooLarge`]; `0` and
+//! `u32::MAX` mean the maximum (`u32::MAX`), while an absent key or `_` means
+//! no check. Without a check, input longer than [`span::MAX_INPUT_LEN`]
+//! (4 GiB) silently truncates span endpoints.
 //!
 //! # Quick start
 //!
@@ -40,7 +48,7 @@
 //!     }
 //! });
 //!
-//! let content = PlainParser::parse(b"hello world\n");
+//! let content = PlainParser::parse(b"hello world\n").unwrap();
 //! assert_eq!(content.paragraphs.len(), 1);
 //! ```
 //!
@@ -55,6 +63,7 @@
 //!
 //! # Crate structure
 //!
+//! - [`error`] — [`InputBytesTooLarge`], returned by the checked methods.
 //! - [`span`] — the [`span::Span`] type and [`span::MAX_INPUT_LEN`] constant.
 //! - [`define_parser!`] — the grammar macro (re-exported from `meon-macros`).
 //! - `find_*` iterators — re-exported from the standalone iterator module;
@@ -67,10 +76,12 @@ pub use paste;
 
 #[doc(hidden)]
 pub mod engine;
+pub mod error;
 pub mod span;
 #[doc(hidden)]
 pub mod swar;
 
+pub use error::InputBytesTooLarge;
 pub use meon_macros::define_parser;
 
 pub use engine::text_parser::standalone::{

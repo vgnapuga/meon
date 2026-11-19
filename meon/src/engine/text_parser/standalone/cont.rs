@@ -443,12 +443,12 @@ mod tests {
         fn test_24_generated_deep_nesting() {
             let mut src = b"> ".repeat(35);
             src.extend_from_slice(b"x\n");
-            let full = QuotesParser::parse(&src);
+            let full = QuotesParser::parse_unchecked(&src);
             assert_eq!(full.quotes.len(), 35);
-            let found: Vec<_> = QuotesParser::find_quotes(&src).collect();
+            let found: Vec<_> = QuotesParser::find_quotes_unchecked(&src).collect();
             assert_eq!(sorted(&found), sorted(&full.quotes));
-            let ctx = QuotesParser::context(&src);
-            let found: Vec<_> = QuotesParser::find_context_quotes(&src, &ctx).collect();
+            let ctx = QuotesParser::context_unchecked(&src);
+            let found: Vec<_> = QuotesParser::find_context_quotes_unchecked(&src, &ctx).collect();
             assert_eq!(sorted(&found), sorted(&full.quotes));
         }
     }

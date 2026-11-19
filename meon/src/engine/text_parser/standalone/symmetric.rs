@@ -366,19 +366,19 @@ mod tests {
         #[test]
         fn test_20_generated_hard_break_marker_is_its_own() {
             for src in [&b"~~a~~"[..], b"~~a~~\nb", b"~~a~~~\nb"] {
-                let full = run::RunParser::parse(src);
+                let full = run::RunParser::parse_unchecked(src);
                 assert!(full.s2.is_empty(), "{:?}", String::from_utf8_lossy(src));
                 assert_eq!(spans(&full.hbs), vec![(3, 3)]);
             }
-            let full = run::RunParser::parse(b"~~a~~ x\nb");
+            let full = run::RunParser::parse_unchecked(b"~~a~~ x\nb");
             assert_eq!((spans(&full.s2), spans(&full.hbs)), (vec![(2, 3)], vec![]));
             // One `~` is the marker: the run before it is one byte short.
             for src in [&b"~~a~~"[..], b"~~a~~\nb"] {
-                let full = single::SingleParser::parse(src);
+                let full = single::SingleParser::parse_unchecked(src);
                 assert!(full.s2.is_empty(), "{:?}", String::from_utf8_lossy(src));
                 assert_eq!(spans(&full.hbs), vec![(4, 4)]);
             }
-            let full = single::SingleParser::parse(b"~~a~~~\nb");
+            let full = single::SingleParser::parse_unchecked(b"~~a~~~\nb");
             assert_eq!(
                 (spans(&full.s2), spans(&full.hbs)),
                 (vec![(2, 3)], vec![(5, 5)])

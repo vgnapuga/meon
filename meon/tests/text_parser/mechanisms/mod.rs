@@ -6,4 +6,5 @@ mod block;
 mod inline;
 mod limits;
 mod line;
+mod offset;
 mod text;

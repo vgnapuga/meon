@@ -386,12 +386,12 @@ mod tests {
         #[test]
         fn test_18_generated_pattern_fence() {
             let src: &[u8] = b"```\n- a\n~~~\n```\n~~~\n- b\n```\n~~~\n- c";
-            let full = FencesParser::parse(src);
+            let full = FencesParser::parse_unchecked(src);
             assert_eq!(spans(&full.codes), vec![(0, 16), (16, 32)]);
-            let found: Vec<_> = FencesParser::find_codes(src).collect();
+            let found: Vec<_> = FencesParser::find_codes_unchecked(src).collect();
             assert_eq!(spans(&found), spans(&full.codes));
-            let ctx = FencesParser::context(src);
-            let items: Vec<_> = FencesParser::find_context_items(src, &ctx)
+            let ctx = FencesParser::context_unchecked(src);
+            let items: Vec<_> = FencesParser::find_context_items_unchecked(src, &ctx)
                 .map(|(_, s)| s)
                 .collect();
             assert_eq!(spans(&items), spans(full.items.iter().map(|(_, s)| s)));
@@ -408,11 +408,11 @@ mod tests {
             src.extend_from_slice(b"\n- b\n");
             src.extend(std::iter::repeat_n(b'~', 300));
             src.extend_from_slice(b"\n- c");
-            let full = FencesParser::parse(&src);
+            let full = FencesParser::parse_unchecked(&src);
             let close = src.len() as u32 - 3;
             assert_eq!(spans(&full.codes), vec![(0, close)]);
             assert_eq!(full.items.len(), 1);
-            let found: Vec<_> = FencesParser::find_codes(&src).collect();
+            let found: Vec<_> = FencesParser::find_codes_unchecked(&src).collect();
             assert_eq!(spans(&found), spans(&full.codes));
         }
 
@@ -438,7 +438,7 @@ mod tests {
         #[test]
         fn test_20_frame_goes_to_its_own_rule() {
             let src: &[u8] = b"```\nx\n```\n``\ny\n``\n> z";
-            let full = shared::SharedParser::parse(src);
+            let full = shared::SharedParser::parse_unchecked(src);
             assert_eq!(spans(&full.long), vec![(0, 10)]);
             assert_eq!(spans(&full.short), vec![(10, 18)]);
             assert_eq!(spans(&full.first), vec![(18, 21)]);

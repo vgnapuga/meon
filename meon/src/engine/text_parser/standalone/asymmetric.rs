@@ -297,7 +297,6 @@ impl Iterator for AsymmetricBalancedIter<'_> {
 }
 
 /// End of a placeholder span: its frame is open, or was dropped unclosed.
-const OPEN: u32 = u32::MAX;
 
 /// The frames one asymmetric rule keeps on the full parse's stack, and the
 /// spans they open, in open order.
@@ -308,7 +307,7 @@ const OPEN: u32 = u32::MAX;
 /// dropped with it. A frame left open when its run ends is dropped, and so
 /// is its span. Once no frame is open every span is final, and they are
 /// handed out in open order.
-pub(crate) struct FrameStack {
+pub(crate) struct FrameStack<O = u32> {
     cap: usize,
     balanced: bool,
     /// Indices into `out` of the open frames' spans, innermost last.
@@ -317,12 +316,12 @@ pub(crate) struct FrameStack {
     /// while `cap` frames are open, as only a pop or the run's end makes
     /// room.
     overflow: u32,
-    out: Vec<Span>,
+    out: Vec<Span<O>>,
     /// The next span of `out` to hand out.
     next: usize,
 }
 
-impl FrameStack {
+impl<O: crate::span::SpanIndex> FrameStack<O> {
     /// A stack for a rule with the `balanced` flag in a grammar of
     /// `max_nest`: `max_nest` frames when balanced, one otherwise.
     pub(crate) fn new(balanced: bool, max_nest: usize) -> Self {
@@ -347,7 +346,7 @@ impl FrameStack {
     pub(crate) fn open(&mut self, at: usize) -> bool {
         if self.frames.len() < self.cap {
             self.frames.push(self.out.len());
-            self.out.push(Span::new(at as u32 + 1, OPEN));
+            self.out.push(Span::<O>::from_usize(at + 1, O::MAX));
             true
         } else {
             if self.balanced && !self.frames.is_empty() {
@@ -364,7 +363,7 @@ impl FrameStack {
             if self.overflow > 0 {
                 self.overflow -= 1;
             } else {
-                self.out[top].end = at as u32;
+                self.out[top].end = O::from_usize(at);
                 self.frames.pop();
             }
         }
@@ -379,12 +378,12 @@ impl FrameStack {
 
     /// The next span, in open order, while no frame is open.
     #[inline(always)]
-    pub(crate) fn pop_closed(&mut self) -> Option<Span> {
+    pub(crate) fn pop_closed(&mut self) -> Option<Span<O>> {
         debug_assert!(self.frames.is_empty());
         while self.next < self.out.len() {
             let s = self.out[self.next];
             self.next += 1;
-            if s.end != OPEN {
+            if s.end_usize() != O::MAX {
                 return Some(s);
             }
         }
@@ -917,12 +916,15 @@ mod tests {
             macro_rules! check {
                 ($m:ident :: $p:ident, $src:expr, $want:expr) => {{
                     let src: &[u8] = $src;
-                    let full = spans(&$m::$p::parse(src).objs);
-                    let ctx = $m::$p::context(src);
+                    let full = spans(&$m::$p::parse_unchecked(src).objs);
+                    let ctx = $m::$p::context_unchecked(src);
                     assert_eq!(full, $want);
-                    assert_eq!(spans(&$m::$p::find_objs(src).collect::<Vec<_>>()), full);
                     assert_eq!(
-                        spans(&$m::$p::find_context_objs(src, &ctx).collect::<Vec<_>>()),
+                        spans(&$m::$p::find_objs_unchecked(src).collect::<Vec<_>>()),
+                        full
+                    );
+                    assert_eq!(
+                        spans(&$m::$p::find_context_objs_unchecked(src, &ctx).collect::<Vec<_>>()),
                         full
                     );
                 }};
@@ -976,7 +978,7 @@ mod tests {
                 (b"{[a}]", vec![(1, 3)]),
                 (b"{a{b}c}", vec![(1, 6)]),
             ] {
-                let full = OpqParser::parse(src);
+                let full = OpqParser::parse_unchecked(src);
                 assert_eq!(
                     spans(&full.objs),
                     objs,
@@ -984,23 +986,27 @@ mod tests {
                     String::from_utf8_lossy(src)
                 );
                 assert!(full.arrs.is_empty());
-                let ctx = OpqParser::context(src);
-                assert!(OpqParser::find_context_arrs(src, &ctx).next().is_none());
+                let ctx = OpqParser::context_unchecked(src);
+                assert!(
+                    OpqParser::find_context_arrs_unchecked(src, &ctx)
+                        .next()
+                        .is_none()
+                );
                 assert_eq!(
-                    spans(&OpqParser::find_objs(src).collect::<Vec<_>>()),
+                    spans(&OpqParser::find_objs_unchecked(src).collect::<Vec<_>>()),
                     spans(&full.objs)
                 );
             }
-            assert!(OpqParser::parse(b"{*a*}").ems.is_empty());
+            assert!(OpqParser::parse_unchecked(b"{*a*}").ems.is_empty());
             // A ring that never closes is text, and the other rules act there.
             let src = b"{a [b] *c*";
-            let full = OpqParser::parse(src);
+            let full = OpqParser::parse_unchecked(src);
             assert!(full.objs.is_empty());
             assert_eq!(spans(&full.arrs), vec![(4, 5)]);
             assert_eq!(spans(&full.ems), vec![(8, 9)]);
-            let ctx = OpqParser::context(src);
+            let ctx = OpqParser::context_unchecked(src);
             assert_eq!(
-                spans(&OpqParser::find_context_arrs(src, &ctx).collect::<Vec<_>>()),
+                spans(&OpqParser::find_context_arrs_unchecked(src, &ctx).collect::<Vec<_>>()),
                 spans(&full.arrs)
             );
         }
@@ -1009,7 +1015,7 @@ mod tests {
         //     inside it: the ring's bytes do not close the component
         #[test]
         fn test_29_generated_chained_over_opaque_ring() {
-            let full = OpqParser::parse(b"(a {b) c})<u>");
+            let full = OpqParser::parse_unchecked(b"(a {b) c})<u>");
             assert_eq!(spans(&full.objs), vec![(4, 8)]);
             let links: Vec<_> = full
                 .links
@@ -1024,10 +1030,16 @@ mod tests {
         //     text and keeps them
         #[test]
         fn test_30_generated_hard_break_in_opaque_ring() {
-            assert!(OpqParser::parse(b"{a\\\nb}").hbs.is_empty());
-            assert!(OpqParser::parse(b"{a  \nb}").hbs.is_empty());
-            assert_eq!(spans(&OpqParser::parse(b"{a\\\nb").hbs), vec![(2, 2)]);
-            assert_eq!(spans(&OpqParser::parse(b"[a\\\nb]").hbs), vec![(2, 2)]);
+            assert!(OpqParser::parse_unchecked(b"{a\\\nb}").hbs.is_empty());
+            assert!(OpqParser::parse_unchecked(b"{a  \nb}").hbs.is_empty());
+            assert_eq!(
+                spans(&OpqParser::parse_unchecked(b"{a\\\nb").hbs),
+                vec![(2, 2)]
+            );
+            assert_eq!(
+                spans(&OpqParser::parse_unchecked(b"[a\\\nb]").hbs),
+                vec![(2, 2)]
+            );
         }
 
         mod one {
@@ -1054,21 +1066,27 @@ mod tests {
                 (&b"*a {b} c*"[..], vec![(4, 5)]),
                 (b"{a {b} c}", vec![(1, 5)]),
             ] {
-                let full = OneParser::parse(src);
+                let full = OneParser::parse_unchecked(src);
                 assert_eq!(
                     spans(&full.objs),
                     objs,
                     "{:?}",
                     String::from_utf8_lossy(src)
                 );
-                let ctx = OneParser::context(src);
-                assert_eq!(spans(&OneParser::find_objs(src).collect::<Vec<_>>()), objs);
+                let ctx = OneParser::context_unchecked(src);
                 assert_eq!(
-                    spans(&OneParser::find_context_objs(src, &ctx).collect::<Vec<_>>()),
+                    spans(&OneParser::find_objs_unchecked(src).collect::<Vec<_>>()),
+                    objs
+                );
+                assert_eq!(
+                    spans(&OneParser::find_context_objs_unchecked(src, &ctx).collect::<Vec<_>>()),
                     objs
                 );
             }
-            assert_eq!(spans(&OneParser::parse(b"*a {b} c*").ems), vec![(1, 8)]);
+            assert_eq!(
+                spans(&OneParser::parse_unchecked(b"*a {b} c*").ems),
+                vec![(1, 8)]
+            );
         }
     }
 

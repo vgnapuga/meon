@@ -1,0 +1,5 @@
+error: `max_inline_span` must not exceed `255`
+ --> tests/ui/fail/offset_cap_over_max.rs:7:27
+  |
+7 |         max_inline_span = 300;
+  |                           ^^^
