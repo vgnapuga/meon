@@ -78,7 +78,9 @@ every entry below is labelled with the crate(s) it applies to.
 
 - **`benches`** — `small` and `big` Cargo features select the working-set
   size; `big` is 100× `small`. Benchmarks call the checked parser APIs with
-  `unwrap`. No throughput numbers were re-measured for this entry.
+  `unwrap`. A new `meon-md_offsets` target parses the same small Markdown
+  corpora with `Span<u16>`, `Span<u32>` and `Span<u64>` offsets. No throughput
+  numbers were re-measured for this entry.
 
 ### Testing
 
