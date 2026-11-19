@@ -53,6 +53,12 @@
 //! value/element/scalar span it was routed from (after trimming surrounding
 //! whitespace), so it still projects back onto the same interval; the type is
 //! just "which vector it landed in".
+//!
+//! ## Limits
+//!
+//! The grammar sets `max_nest = 64` in its `limits` section. The three span
+//! caps — `max_inline_span`, `max_line_span` and `max_block_span` — are `0`,
+//! which the engine treats as absent, so no span is dropped for its length.
 
 use meon::define_parser;
 
@@ -64,7 +70,15 @@ pub struct Member {
 }
 
 define_parser!(Json {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 64;
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+
+    limits {
+        max_nest = 64;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+    }
+
     inline {
         merge_simple = false;
         // The close bytes `}` and `]` MUST be in this trigger set: the engine
