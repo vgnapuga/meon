@@ -374,7 +374,7 @@ fn expand(input: TS2) -> Result<TS2> {
     // A reparse helper is emitted only when an inline cap is configured. It
     // scans an oversized opaque construct's interior with the same grammar.
     let reparse_helper = Ident::new(&format!("__meon_reparse_{}", name), name.span());
-    let has_inline_limit = limits.max_inline_span.is_some();
+    let has_inline_limit = limits.max_inline_span.is_some() || limits.max_block_span.is_some();
     let reparse_fn = if let (Some(tx), true) = (&cf.inline_fallback, has_inline_limit) {
         let merge = cf
             .merge_simple

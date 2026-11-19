@@ -470,7 +470,9 @@ macro_rules! parse_text {
                     };
 
                     if !is_fence {
-                        $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, pos ;
+                        $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, pos,
+                            max_block = $max_block, max_inline = $max_inline,
+                            para = $para, reparse = $reparse, eol = $eol ;
                             block_simple { $($sr)* } block { $($br)* });
                     }
                     pos = next_line_start;
@@ -511,7 +513,9 @@ macro_rules! parse_text {
                     match $crate::parse_block!(
                         _active_stack, _active_depth, state, src, pos, current_line_end,
                         nl = next_line_start,
-                        sep = $sep, tab = $tab, max_nest = $maxn ;
+                        sep = $sep, tab = $tab, max_nest = $maxn,
+                        max_block = $max_block, max_inline = $max_inline,
+                        para = $para, reparse = $reparse, eol = $eol ;
                         block_simple { $($sr)* } block { $($br)* }
                     ) {
                         Some((opened, cs)) => {
@@ -538,7 +542,8 @@ macro_rules! parse_text {
                     }
 
                     match $crate::parse_line!(
-                        state, src, pos, current_line_end, sep = $sep ; $($ln)*
+                        state, src, pos, current_line_end, sep = $sep,
+                        max_line = $max_line, para = $para ; $($ln)*
                     ) {
                         Some(cs) => {
                             flush_para_inline!(pos);
@@ -654,7 +659,9 @@ macro_rules! parse_text {
                     state.[<push_ $para>]($crate::span::Span::new(s, len as u32));
                 }
             }
-            $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len ;
+            $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len,
+                max_block = $max_block, max_inline = $max_inline,
+                para = $para, reparse = $reparse, eol = $eol ;
                 block_simple { $($sr)* } block { $($br)* });
 
             state.into_content(src)
@@ -756,14 +763,19 @@ macro_rules! parse_text {
     // caller, on a blank line), top → down. Each frame's span is dispatched to
     // the field of the rule that opened it by `parse_block!`'s `@close_frame`
     // arm.
-    (@close_stack $stack:ident, $depth:ident, $st:ident, $src:ident, $pos:expr ;
+    (@close_stack $stack:ident, $depth:ident, $st:ident, $src:ident, $pos:expr,
+        max_block = $max_block:tt, max_inline = $max_inline:tt,
+        para = $para:ident, reparse = $reparse:tt, eol = $eol:literal ;
         block_simple { $($sr:tt)* } block { $($br:tt)* }
     ) => {
         while $depth > 0 {
             $depth -= 1;
             let (_c2, _s2) = $stack[$depth];
             $crate::parse_block!(@close_frame
-                $st, $src, $pos as u32, _c2, _s2 ; $($sr)*);
+                $st, $src, $pos as u32, _c2, _s2,
+                max_block = $max_block,
+                para = $para, reparse = $reparse, eol = $eol,
+                closed = false ; $($sr)*);
         }
     };
 }
