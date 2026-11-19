@@ -4,5 +4,6 @@ mod common;
 
 mod block;
 mod inline;
+mod limits;
 mod line;
 mod text;
