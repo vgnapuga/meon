@@ -125,7 +125,8 @@ and the knobs in `benches/benches/docs_json.rs`.
 
 Each corpus is one valid top-level JSON array, scaled by `COUNT`
 (`benches/benches/docs_json.rs`). The `small` and `big` runs differ only in
-`COUNT`.
+`COUNT`, selected by the `small` / `big` Cargo features of the `benches`
+package.
 
 | Corpus    | Shape                                                                                     | Stresses                                                                 |
 |-----------|-------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|

@@ -128,7 +128,8 @@ and the knobs in `benches/benches/docs_md.rs`.
 ## Corpora
 
 Each base document is tiled `REPEAT_COUNT` times so the working set exceeds
-cache. The `small` and `big` runs differ only in `REPEAT_COUNT`.
+cache. The `small` and `big` runs differ only in `REPEAT_COUNT`, selected
+by the `small` / `big` Cargo features of the `benches` package.
 
 | Corpus  | Shape                                                                  | Stresses                                                          |
 |---------|------------------------------------------------------------------------|-------------------------------------------------------------------|

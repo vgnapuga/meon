@@ -17,9 +17,17 @@
 
 use meon_json::JsonParser;
 
-/// Scales every corpus. `REPEAT_COUNT` top-level array elements (×30 for `numbers`,
-/// which are cheaper per element). Raise it for a `big` run that exceeds cache.
-pub const REPEAT_COUNT: usize = 10000;
+/// Scales every corpus. `REPEAT_COUNT` top-level array elements (×30 for
+/// `numbers`, which are cheaper per element). The `big` feature multiplies the
+/// default working set by 100.
+#[cfg(all(feature = "small", feature = "big"))]
+compile_error!("features `small` and `big` are mutually exclusive");
+
+#[cfg(feature = "big")]
+pub const REPEAT_COUNT: usize = 10_000 * 100;
+
+#[cfg(not(feature = "big"))]
+pub const REPEAT_COUNT: usize = 10_000;
 
 // Criterion knobs, shared with the markdown benches' values.
 pub const WARMUP_TIME: u64 = 3;

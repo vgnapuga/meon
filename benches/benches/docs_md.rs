@@ -20,6 +20,16 @@
 //! `REPEAT_COUNT` tiles each base document so the working set is large enough
 //! for a stable measurement and clearly larger than L2/L3.
 
+#[cfg(all(feature = "small", feature = "big"))]
+compile_error!("features `small` and `big` are mutually exclusive");
+
+/// Tiling factor for the Markdown corpora. `big` multiplies the default
+/// working set by 100.
+#[cfg(feature = "big")]
+pub const REPEAT_COUNT: usize = 10 * 100;
+
+/// Tiling factor for the Markdown corpora.
+#[cfg(not(feature = "big"))]
 pub const REPEAT_COUNT: usize = 10;
 
 // Criterion knobs. Tuned for a sane local run time while staying statistically

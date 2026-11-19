@@ -50,8 +50,9 @@ fairness frame and test hardware. For the cross-parser comparisons see
 
 ### Markdown corpora (`meon-md_*`)
 
-Each base document is tiled `REPEAT_COUNT` times (default `10`) so the working
-set comfortably exceeds cache.
+Each base document is tiled `REPEAT_COUNT` times so the working set
+comfortably exceeds cache. The `small` feature keeps the default tiling;
+`big` multiplies it by 100. With neither feature set, `small` is used.
 
 | Corpus  | Shape                                                                  | Stresses                                                          |
 |---------|------------------------------------------------------------------------|-------------------------------------------------------------------|
@@ -75,9 +76,9 @@ Current composition and historical measurements are in
 
 ### JSON corpora (`meon-json_*`)
 
-Each corpus is one valid top-level JSON array, scaled by `COUNT`
+Each corpus is one valid top-level JSON array, scaled by `REPEAT_COUNT`
 (`benches/benches/docs_json.rs`); the `small` and `big` runs differ only in
-`COUNT`.
+that factor, selected by the corresponding Cargo feature.
 
 | Corpus    | Shape                                                                  | Stresses                                                                 |
 |-----------|------------------------------------------------------------------------|--------------------------------------------------------------------------|
@@ -113,6 +114,10 @@ RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_standalone   --feat
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_compare      --features avx2
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_parse      --features avx2
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_compare    --features avx2
+
+# Working-set size: `small` (default) or `big` (100x larger).
+cargo bench --bench meon-md_parse        --features small
+cargo bench --bench meon-json_parse      --features big
 ```
 
 Criterion knobs (`SAMPLE_SIZE`, `SAMPLE_TIME`, `WARMUP_TIME`) live in
