@@ -12,13 +12,22 @@ every entry below is labelled with the crate(s) it applies to.
 ### Added
 
 - **`meon`, `meon-macros`** — optional `limits { ... }` grammar section:
-  `max_nest`, `max_inline_span`, `max_line_span` and `max_block_span`.
-  `max_nest` is still accepted in the header for existing grammars; when both
-  places are present they must agree.
+  `offset`, `max_nest`, `max_inline_span`, `max_line_span`,
+  `max_block_span` and `max_input_bytes`. `max_nest` is still accepted in
+  the header for existing grammars; when both places are present they must
+  agree.
+- **`meon`, `meon-macros`** — `limits { offset = u8 | u16 | u32 | u64; }`
+  selects the span offset type (default `u32`). `Span<T>` and `SpanIndex` are
+  public; generated content, finders and context use the selected type.
+- **`meon`, `meon-macros`** — optional `max_input_bytes` in `limits`. `0` and
+  the offset type's maximum mean that maximum; `_` or an absent key means no
+  check and the parser reads only the prefix that fits. The checked methods
+  reject an over-limit source with `InputBytesTooLarge` before allocating any
+  parser state; when no limit is set, no check code is generated.
 - Span caps are measured on the clean span, `end - start` without delimiters.
-  `0` and the offset type's maximum mean absent; a value above the offset maximum is a compile error.
-  When a cap is absent, no comparison, fallback or reparse code is generated
-  for that level.
+  `0` and the offset type's maximum mean absent; a value above the offset
+  maximum is a compile error. When a cap is absent, no comparison, fallback or
+  reparse code is generated for that level.
 - An over-limit span is not emitted: a transparent inline span keeps its text
   and inner spans; an opaque inline span and a `chained` element are reparsed
   inside; a `key_value` pair is dropped without reparse; a line or block item
@@ -26,30 +35,30 @@ every entry below is labelled with the crate(s) it applies to.
   paragraph runs, skipping the `cont` markers of the frames that held it.
 - `find_*` and `find_context_*` apply the caps. `ParseContext` drops an
   over-limit opaque region and rescans its interior for nested regions.
-- **`meon`, `meon-macros`** — `limits { offset = u8 | u16 | u32 | u64; }`
-  selects the span offset type (default `u32`). `Span<T>` is generic; the
-  generated content, finders and context use the selected type.
-- **`meon`, `meon-macros`** — optional `max_input_bytes` in `limits`. `0` and
-  the offset type's maximum mean that maximum; `_` or an absent key means no
-  check and the parser reads only the prefix that fits. The checked methods
-  reject an over-limit source with `InputBytesTooLarge` before allocating any
-  parser state; when no limit is set, no check code is generated.
 
 ### Changed
 
-- **`meon`** — `parse`, `find_*`, `find_context_*` and `context` now return
-  `Result<_, InputBytesTooLarge>`. `parse_unchecked`, `find_*_unchecked`,
+- **`meon`** — `Span` is generic over its offset type. `Span` without a
+  parameter is `Span<u32>`; `Span::new` keeps the `u32` constructor and
+  `from_usize`/`from_parts` cover the other types. `MAX_INPUT_LEN` remains
+  `u32::MAX`; `Span<T>::MAX_INPUT_LEN` gives the selected type's bound.
+- **`meon`** — `InputBytesTooLarge<T = u32>` and `ParseContext<T = u32>` are
+  generic. The default `u32` keeps existing type paths valid.
+- **`meon`** — `parse`, `find_*`, `find_context_*` and `context` return
+  `Result<_, InputBytesTooLarge<O>>`. `parse_unchecked`, `find_*_unchecked`,
   `find_context_*_unchecked` and `context_unchecked` keep the previous
   infallible behaviour.
-- **`meon-md`, `meon-json`** — their grammars leave `max_input_bytes` unset,
-  so their checked methods never fail on length.
-
+- **`meon`** — `max_inline_span`, `max_line_span`, `max_block_span` and
+  `max_input_bytes` are bounded by the selected offset type. `u8` and `u16`
+  grammars read only the prefix that fits when no `max_input_bytes` is set.
+- **`meon-md`, `meon-json`** — grammars leave `max_input_bytes` unset and use
+  the default `offset = u32`, so their checked methods never fail on length.
+- **`meon`** — `parse_text!`, `parse_inline!`, `parse_line!` and
+  `parse_block!` accept optional `[]`/`[N]` cap tokens and an `off` type
+  token; direct callers default to `u32`.
 - **`meon-md`, `meon-json`** — grammars now declare `max_nest` in `limits`,
   with `max_inline_span = 0`, `max_line_span = 0` and `max_block_span = 0`.
   The header form is still accepted.
-- **`meon`** — `parse_text!`, `parse_inline!`, `parse_line!` and
-  `parse_block!` accept optional `[]`/`[N]` cap tokens; `[]` emits the normal
-  path only.
 
 ### Fixed
 
@@ -58,10 +67,24 @@ every entry below is labelled with the crate(s) it applies to.
 - Context caps are measured on the clean span, not on the delimiter-inclusive
   region.
 
+### Documentation
+
+- `README.md`, crate `README.md`s, `ARCHITECTURE.md` §19 and rustdoc describe
+  `offset`, `Span<T>`, the per-type input bound and the checked/unchecked API.
+- `benches/README.md`, `MD_COMPARE.md` and `JSON_COMPARE.md` document the
+  `small`/`big` Cargo features.
+
+### Benchmarks
+
+- **`benches`** — `small` and `big` Cargo features select the working-set
+  size; `big` is 100× `small`. Benchmarks call the checked parser APIs with
+  `unwrap`. No throughput numbers were re-measured for this entry.
+
 ### Testing
 
-- Unit, UI (`trybuild`) and mechanism tests for `limits`; the full workspace
-  test suite passes.
+- Unit, UI (`trybuild`) and mechanism tests cover the `limits` section,
+  `max_input_bytes`, and `offset = u8/u16/u32/u64`; the full workspace test
+  suite passes.
 
 ## [0.7.0] - 2026-11-19
 
