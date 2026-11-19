@@ -1355,12 +1355,10 @@ macro_rules! parse_inline {
                             if over_limit!($max_inline, real_start as u32, (cu_end + 1) as u32) {
                                 push_il!($tx, $crate::span::Span::new(
                                     real_start as u32, pos as u32));
-                                push_il!($tx, $crate::span::Span::new(
-                                    ct_end as u32, (ct_end + 2) as u32));
-                                push_il!($tx, $crate::span::Span::new(
-                                    cu_end as u32, (cu_end + 1) as u32));
                                 call_reparse!($reparse, &mut *$state, $src, pos, cu_end,
                                               $depth);
+                                push_il!($tx, $crate::span::Span::new(
+                                    cu_end as u32, (cu_end + 1) as u32));
                             } else {
                                 $crate::paste::paste! {
                                     $state.[<push_ $cf>]($ch_ty {
