@@ -29,6 +29,7 @@ mod codegen;
 mod collect;
 mod cursor;
 mod error;
+mod limits;
 mod methods;
 mod model;
 mod normalize;
@@ -42,6 +43,7 @@ use crate::codegen::{build_define_content, build_standalone_dsl};
 use crate::collect::{collect_blocks, collect_inline, collect_lines};
 use crate::cursor::Cursor;
 use crate::error::{Error, Result};
+use crate::limits::{Limits, literal_u64};
 use crate::methods::build_content_methods;
 use crate::model::{CF, crate_path};
 use crate::normalize::canonicalize_inline;
@@ -272,16 +274,26 @@ fn expand(input: TS2) -> Result<TS2> {
             }
         }
     }
-    let max_nest = max_nest.unwrap_or_else(|| Literal::usize_unsuffixed(1));
     let crlf = crlf.unwrap_or_else(|| Ident::new("false", PS::call_site()));
     bc.skip(';');
 
     let mut inline_ts = TS2::new();
     let mut lines_ts = TS2::new();
     let mut blocks_ts = TS2::new();
+    let mut limits = Limits::default();
+    let mut limits_seen = false;
 
     loop {
         match bc.peek_str().as_deref() {
+            Some("limits") => {
+                let span = bc.span();
+                if limits_seen {
+                    return Err(Error::new(span, "`limits` is set twice"));
+                }
+                bc.advance();
+                limits = Limits::parse(bc.next_group(Delimiter::Brace, "limits")?.stream())?;
+                limits_seen = true;
+            }
             Some("inline") => {
                 bc.advance();
                 inline_ts = bc.next_group(Delimiter::Brace, "inline")?.stream();
@@ -297,6 +309,26 @@ fn expand(input: TS2) -> Result<TS2> {
             _ => break,
         }
     }
+
+    // `max_nest` may be written in the header or in `limits`. The header form
+    // is kept for existing grammars; when both are present they must agree.
+    let max_nest = match (max_nest, limits.max_nest.take()) {
+        (Some(header), Some(section)) => {
+            if literal_u64(&header) != literal_u64(&section) {
+                return Err(Error::new(
+                    section.span(),
+                    "`max_nest` differs from the value in the grammar header",
+                ));
+            }
+            header
+        }
+        (Some(header), None) => header,
+        (None, Some(section)) => section,
+        (None, None) => Literal::usize_unsuffixed(1),
+    };
+    let lim_inline = limits.inline_tt();
+    let lim_line = limits.line_tt();
+    let lim_block = limits.block_tt();
 
     let mut cf = CF::default();
     collect_inline(inline_ts.clone(), &mut cf)?;
@@ -327,7 +359,10 @@ fn expand(input: TS2) -> Result<TS2> {
                 #mc::parse_text!(
                     source;
                     sep = #sep, eol = #eol, tab = #tab, escape = #esc,
-                    max_nest = #max_nest, crlf = #crlf;
+                    max_nest = #max_nest, crlf = #crlf,
+                    max_inline_span = #lim_inline,
+                    max_line_span = #lim_line,
+                    max_block_span = #lim_block;
                     inline { #(#pt_inline)* }
                     lines  { #(#pt_lines)* }
                     blocks { #(#pt_blocks)* }
@@ -658,9 +693,10 @@ mod tests {
             }
         };
         let s = expand_str(g);
-        assert_eq!(s.matches("max_nest = 2 , crlf = true ;").count(), 2, "{s}");
+        assert_eq!(s.matches("max_nest = 2").count(), 2, "{s}");
+        assert!(s.contains("crlf = true"), "{s}");
         let s = expand_str(valid());
-        assert!(s.contains("crlf = false ;"), "{s}");
+        assert!(s.contains("crlf = false"), "{s}");
     }
 
     // 23. A context setting set twice, an unknown one, or a `crlf` that is

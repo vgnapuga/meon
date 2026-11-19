@@ -222,6 +222,26 @@
 #[macro_export]
 macro_rules! parse_inline {
     // A multi-line run whose lines after the first are led by the `cont`
+    // markers `$cs[..$cd]`, outermost first (see `parse_text!`), with an
+    // optional inline span cap and reparse helper.
+    ($state:ident, $src:ident, $start:expr, $le:expr,
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal,
+     cont($cs:ident, $cd:expr), crlf = $crl:ident,
+     max_inline = $max_inline:tt, reparse = $reparse:tt ;
+     $($tail:tt)*) => {
+        $crate::parse_inline!(
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true,
+                      [$cs, $cd], $crl, $max_inline, $reparse)
+            (hard_break: )
+            finders  = []
+            sy_rules = []
+            as_rules = []
+            ch_rules = []
+            kv_rules = []
+            tail = [$($tail)*]
+        )
+    };
+    // A multi-line run whose lines after the first are led by the `cont`
     // markers `$cs[..$cd]`, outermost first (see `parse_text!`).
     ($state:ident, $src:ident, $start:expr, $le:expr,
      $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal,
@@ -229,7 +249,25 @@ macro_rules! parse_inline {
      $($tail:tt)*) => {
         $crate::parse_inline!(
             @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true,
-                      [$cs, $cd], $crl)
+                      [$cs, $cd], $crl, [], [])
+            (hard_break: )
+            finders  = []
+            sy_rules = []
+            as_rules = []
+            ch_rules = []
+            kv_rules = []
+            tail = [$($tail)*]
+        )
+    };
+    // A run whose internal `eol` bytes, with `crlf = true`, take the `\r`
+    // right before them as part of the line end, with optional limits.
+    ($state:ident, $src:ident, $start:expr, $le:expr,
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt,
+     crlf = $crl:ident, max_inline = $max_inline:tt, reparse = $reparse:tt ;
+     $($tail:tt)*) => {
+        $crate::parse_inline!(
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], $crl,
+                      $max_inline, $reparse)
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -246,7 +284,24 @@ macro_rules! parse_inline {
      crlf = $crl:ident ;
      $($tail:tt)*) => {
         $crate::parse_inline!(
-            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], $crl)
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], $crl,
+                      [], [])
+            (hard_break: )
+            finders  = []
+            sy_rules = []
+            as_rules = []
+            ch_rules = []
+            kv_rules = []
+            tail = [$($tail)*]
+        )
+    };
+    ($state:ident, $src:ident, $start:expr, $le:expr,
+     $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt,
+     max_inline = $max_inline:tt, reparse = $reparse:tt ;
+     $($tail:tt)*) => {
+        $crate::parse_inline!(
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], false,
+                      $max_inline, $reparse)
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -260,7 +315,8 @@ macro_rules! parse_inline {
      $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt ;
      $($tail:tt)*) => {
         $crate::parse_inline!(
-            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], false)
+            @collect ($state, $src, $start, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, [], false,
+                      [], [])
             (hard_break: )
             finders  = []
             sy_rules = []
@@ -277,7 +333,8 @@ macro_rules! parse_inline {
 
     // hard_break rule
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt,
+               $max_inline:tt, $reparse:tt)
      (hard_break: )
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -287,7 +344,8 @@ macro_rules! parse_inline {
      tail = [hard_break($hb_esc:literal, $sp:literal, $sp_min:literal) => $hb:ident ; $($rest:tt)*]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl,
+                      $max_inline, $reparse)
             (hard_break: $hb_esc, $sp, $sp_min => $hb)
             finders  = [$($fi)*]
             sy_rules = [$($sr)*]
@@ -300,7 +358,8 @@ macro_rules! parse_inline {
 
     // on_trigger(...) { ... }
     (@collect ($st:ident, $src:ident, $s:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt,
+               $max_inline:tt, $reparse:tt)
      (hard_break: $($hb:tt)*)
      finders  = [$($fi:tt)*]
      sy_rules = [$($sr:tt)*]
@@ -341,7 +400,8 @@ macro_rules! parse_inline {
      ]
     ) => {
         $crate::parse_inline!(
-            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl)
+            @collect ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl,
+                      $max_inline, $reparse)
             (hard_break: $($hb)*)
             finders  = [$($fi)* { $($fn_b),+ $(, $kv_end)* }]
             sy_rules = [$($sr)* $( ($sb, $pi, { $( $sn => $sf ),* }) )*]
@@ -355,7 +415,8 @@ macro_rules! parse_inline {
     // Transition: all sections consumed — flatten buckets and enter @body.
     (
         @collect ($st:ident, $src:ident, $s:expr, $le:expr,
-                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
+                  $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt,
+                  $max_inline:tt, $reparse:tt)
         (hard_break: $($hb:tt)*)
         finders  = [$($fi:tt)*]
         sy_rules = [$( ($sb:literal, $pi:tt, { $( $sn:tt => $sf:ident ),* }) )*]
@@ -367,7 +428,8 @@ macro_rules! parse_inline {
                         $kv_kf:ident, $kv_vf:ident, $kv_ty:ident, $kv_f:ident) )*]
         tail = []
     ) => {
-        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl)
+        $crate::parse_inline!(@body ($st, $src, $s, $le, $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, $ml, $holes, $crl,
+                                    $max_inline, $reparse)
             (hard_break: $($hb)*)
             finders  = [$($fi)*]
             sy_rules = [$( $sb, $pi, { $( $sn => $sf ),* } )*]
@@ -384,7 +446,8 @@ macro_rules! parse_inline {
 
     (
         @body ($state:ident, $src:ident, $start:expr, $le:expr,
-               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt)
+               $tx:ident, $merge_il:tt, $esc:literal, $sep:literal, $tab:literal, $eol:literal, $maxn:literal, $ml:tt, $holes:tt, $crl:tt,
+               $max_inline:tt, $reparse:tt)
         (hard_break: $($hb_esc:literal, $sp:literal, $sp_min:literal => $hb:ident)*)
         finders  = [$( { $($fn_b:literal),+ } )*]
         sy_rules = [$( $sb:literal, $pi:tt, { $( $sn:tt => $sf:ident ),* } )*]

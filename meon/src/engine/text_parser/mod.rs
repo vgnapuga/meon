@@ -153,11 +153,15 @@ macro_rules! parse_text {
         $src:expr ;
         sep = $sep:literal, eol = $eol:literal,
         tab = $tab:literal, escape = $esc:literal, max_nest = $maxn:literal,
-        crlf = $crlf:ident ;
+        crlf = $crlf:ident,
+        max_inline_span = $max_inline:tt,
+        max_line_span = $max_line:tt,
+        max_block_span = $max_block:tt ;
         $($sections:tt)*
     ) => {
         $crate::parse_text!(@cs
-            ctx = ($src, $sep, $eol, $tab, $esc, $maxn, $crlf)
+            ctx = ($src, $sep, $eol, $tab, $esc, $maxn, $crlf,
+                   $max_inline, $max_line, $max_block)
             il  = []
             ln  = []
             bl  = []
@@ -235,14 +239,16 @@ macro_rules! parse_text {
     };
 
     (@ci
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal, $crlf:ident)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
+             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[$merge_il:tt] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
         rem=[]
     ) => {
         $crate::parse_text!(@cb
-            ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf)
+            ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf,
+                 $max_inline, $max_line, $max_block)
             merge_il=$merge_il tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -250,14 +256,16 @@ macro_rules! parse_text {
     };
 
     (@ci
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal, $crlf:ident)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
+             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
         rem=[]
     ) => {
         $crate::parse_text!(@cb
-            ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf)
+            ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf,
+                 $max_inline, $max_line, $max_block)
             merge_il=false tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -305,7 +313,8 @@ macro_rules! parse_text {
     };
 
     (@cb
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal, $crlf:ident)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
+             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt)
         merge_il=$merge_il:tt tx=$tx:ident ilt=[$($ilt:tt)*] ln=[$($ln:tt)*]
         hb=$hb:tt finders=[$($f:literal)*]
         sr=[$($sr:tt)*] br=[$($br:tt)*] fpara=[$para:ident]
@@ -313,6 +322,7 @@ macro_rules! parse_text {
     ) => {
         $crate::parse_text!(@body
             $src, $sep, $eol, $tab, $esc, $maxn, $crlf,
+            $max_inline, $max_line, $max_block,
             $tx, $merge_il,
             [$($ilt)*], [$($ln)*],
             [$($sr)*], [$($br)*],
@@ -325,7 +335,7 @@ macro_rules! parse_text {
 
     (@body
             $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-            $crlf:ident,
+            $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt,
             $tx:ident, $merge_il:tt,
             [$($ilt:tt)*], [$($ln:tt)*],
             [$($sr:tt)*], [$($br:tt)*],
@@ -380,7 +390,8 @@ macro_rules! parse_text {
             fn scan_para_run(state: &mut ParseState, src: &[u8], _ps: usize, _pe: usize) {
                 $crate::parse_inline!(
                     state, src, _ps, _pe,
-                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true, crlf = $crlf ;
+                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true, crlf = $crlf,
+                    max_inline = $max_inline, reparse = [] ;
                     $($ilt)*
                 );
             }
@@ -398,7 +409,8 @@ macro_rules! parse_text {
                 $crate::parse_inline!(
                     state, src, _cs, _ce,
                     $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn,
-                    cont(cont_bytes, _cd), crlf = $crlf ; $($ilt)*
+                    cont(cont_bytes, _cd), crlf = $crlf,
+                    max_inline = $max_inline, reparse = [] ; $($ilt)*
                 );
             }
             macro_rules! flush_cont {
@@ -620,7 +632,8 @@ macro_rules! parse_text {
                 if pos < current_line_end {
                     let _ = $crate::parse_inline!(
                         state, src, pos, current_line_end,
-                        $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false ; $($ilt)*
+                        $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false,
+                        max_inline = $max_inline, reparse = [] ; $($ilt)*
                     );
                 }
                 pos = next_line_start;
