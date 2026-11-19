@@ -94,7 +94,7 @@ pub fn corpora() -> Vec<(&'static str, String)> {
 /// report, so every throughput figure can be read against the exact structure
 /// the parser produced. Runs once, before timing.
 pub fn report(label: &str, bytes: &[u8]) {
-    let c = JsonParser::parse(bytes);
+    let c = JsonParser::parse(bytes).unwrap();
     let t = c.type_scalars();
 
     let size = bytes.len();

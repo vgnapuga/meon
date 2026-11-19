@@ -54,7 +54,7 @@ fn bench_compare(c: &mut Criterion) {
         // meon-json: structural span table only.
         group.bench_function("meon-structural", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });
@@ -62,7 +62,7 @@ fn bench_compare(c: &mut Criterion) {
         // meon-json: structural + first-byte scalar typing.
         group.bench_function("meon-typed", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 let typed = content.type_scalars();
                 black_box(typed);
             });

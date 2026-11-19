@@ -40,7 +40,7 @@ fn bench_parse(c: &mut Criterion) {
 
         group.bench_function("full", |b| {
             b.iter(|| {
-                let content = MarkdownParser::parse(black_box(bytes));
+                let content = MarkdownParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });

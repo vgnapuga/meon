@@ -50,7 +50,7 @@ fn bench_compare(c: &mut Criterion) {
         // against a build picking up an incompatible API or a degenerate
         // corpus.)
         {
-            let _ = black_box(MarkdownParser::parse(bytes));
+            let _ = black_box(MarkdownParser::parse(bytes).unwrap());
             let _ = black_box(Parser::new(text).count());
             let arena = Arena::new();
             let _ = black_box(parse_document(&arena, text, &Options::default()));
@@ -65,7 +65,7 @@ fn bench_compare(c: &mut Criterion) {
         // meon-md: flat-span structural parse.
         group.bench_function("meon-md", |b| {
             b.iter(|| {
-                let content = MarkdownParser::parse(black_box(bytes));
+                let content = MarkdownParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });

@@ -29,14 +29,14 @@ fn bench_parse(c: &mut Criterion) {
 
         group.bench_function("structural", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });
 
         group.bench_function("typed", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 let typed = content.type_scalars();
                 black_box(typed);
             });

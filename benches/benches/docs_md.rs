@@ -326,7 +326,7 @@ fn pulldown_reference(text: &str) -> Reference {
 /// bug - it marks where the two parsers read the corpus differently.
 pub fn report(label: &str, bytes: &[u8]) {
     use meon_md::MarkdownParser;
-    let c = MarkdownParser::parse(bytes);
+    let c = MarkdownParser::parse(bytes).unwrap();
 
     // Order: block/line structure first, then inline, then text runs.
     let counts: [(&str, usize); 15] = [
