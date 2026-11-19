@@ -60,6 +60,7 @@ version = "0.0.0"
 dependencies = [
  "comrak",
  "criterion",
+ "meon",
  "meon-json",
  "meon-md",
  "pulldown-cmark",

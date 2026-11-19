@@ -140,6 +140,27 @@ pub fn corpora() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// Corpora truncated to fit `u16` offsets. Same shapes as [`corpora`].
+pub fn corpora_u16() -> Vec<(&'static str, String)> {
+    let limit = u16::MAX as usize;
+    [
+        ("plain", doc_plain()),
+        ("hot", doc_hot()),
+        ("heavy", doc_heavy()),
+    ]
+    .into_iter()
+    .map(|(label, doc)| (label, truncate_at_line(doc, limit)))
+    .collect()
+}
+
+fn truncate_at_line(mut doc: String, limit: usize) -> String {
+    if doc.len() > limit {
+        let cut = doc[..limit].rfind('\n').map_or(limit, |i| i + 1);
+        doc.truncate(cut);
+    }
+    doc
+}
+
 /// Columns of the composition table printed by [`report`].
 const COLS: usize = 3;
 

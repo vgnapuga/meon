@@ -12,6 +12,7 @@ output shapes (see [Scope & fairness](#scope--fairness)).
 | `meon-md_parse`       | `MarkdownParser::parse` — full single-pass parse.                    |
 | `meon-md_standalone`  | `find_*` iterators — one element kind, no context; plus the `context()` map build and the context-aware `find_context_*` variants (warm and cold). |
 | `meon-md_compare`     | meon-md vs `pulldown-cmark` / `comrak` — cross-parser throughput.    |
+| `meon-md_offsets`     | the same small Markdown corpora parsed with `Span<u16/u32/u64>`.     |
 | `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — structural / typed parse.   |
 | `meon-json_compare`   | meon-json vs `simd-json` / `sonic-rs` — cross-parser throughput.     |
 
@@ -105,6 +106,7 @@ Inside `nix develop`:
 cargo bench --bench meon-md_parse
 cargo bench --bench meon-md_standalone
 cargo bench --bench meon-md_compare
+cargo bench --bench meon-md_offsets
 cargo bench --bench meon-json_parse
 cargo bench --bench meon-json_compare
 

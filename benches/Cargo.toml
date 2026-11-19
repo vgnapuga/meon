@@ -10,6 +10,7 @@ small = []
 big = []
 
 [dependencies]
+meon.workspace = true
 meon-md.workspace = true
 meon-json.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -42,4 +43,8 @@ harness = false
 
 [[bench]]
 name = "meon-json_compare"
+harness = false
+
+[[bench]]
+name = "meon-md_offsets"
 harness = false
