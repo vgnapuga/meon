@@ -1369,7 +1369,7 @@ macro_rules! parse_inline {
                                         $cu: $crate::span::Span::new((ct_end + 2) as u32, cu_end as u32),
                                     });
                                 }
-                                _kv_opaque = Some((real_start, pos));
+                                _kv_opaque = Some((real_start, cu_end + 1));
                             }
                             pos = cu_end + 1;
                             text_start = pos;
@@ -1596,7 +1596,7 @@ macro_rules! parse_inline {
                             push_il!($tx, $crate::span::Span::new(cp as u32, (cp + 1) as u32));
                         } else {
                             match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
-                            _kv_opaque = Some((_o, pos));
+                            _kv_opaque = Some((_o, cp + 1));
                         }
                         pos = cp + 1;
                         text_start = pos;
@@ -1648,7 +1648,7 @@ macro_rules! parse_inline {
                             push_il!($tx, $crate::span::Span::new(cp as u32, (cp + 1) as u32));
                         } else {
                             match count { $( $an => { push_il!($af, clean); } )* _ => {} }
-                            _kv_opaque = Some((delim_start as usize, pos));
+                            _kv_opaque = Some((delim_start as usize, cp + 1));
                         }
                         pos = cp + 1;
                         text_start = pos;
