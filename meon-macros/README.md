@@ -46,10 +46,12 @@ define_parser!(MyFormat {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
     limits {
+        offset = u32;
         max_nest = 4;
         max_inline_span = 0;
         max_line_span = 0;
         max_block_span = 0;
+        max_input_bytes = 0;
     }
 
     inline {
@@ -60,13 +62,15 @@ define_parser!(MyFormat {
     }
 });
 
-let content = MyFormatParser::parse(b"hello world\n");
+let content = MyFormatParser::parse(b"hello world\n").unwrap();
 ```
 
 For the full grammar reference see
 [`meon/README.md`](https://github.com/vgnapuga/meon/blob/main/meon/README.md).
 
-`limits { ... }` is optional: `max_nest` sets the shared nesting cap, and `max_inline_span`, `max_line_span` and `max_block_span` cap emitted span lengths in bytes. `0` and `u32::MAX` mean absent, so no check or fallback code is generated; a value above `u32::MAX` is rejected.
+`limits { ... }` is optional: `offset` selects the span offset type (`u8`, `u16`, `u32`, default `u32`), `max_nest` sets the shared nesting cap, and `max_inline_span`, `max_line_span` and `max_block_span` cap emitted span lengths in bytes. `0` and the offset type's maximum mean absent, so no check or fallback code is generated; a value above the offset maximum is rejected.
+
+`max_input_bytes` caps the source length. `0` and the offset type's maximum mean that maximum; `_` or an absent key means no check and the parser reads only the prefix that fits. When no check is generated, the checked methods return `Ok` directly. A value above the offset maximum is rejected.
 
 ---
 
@@ -75,20 +79,24 @@ For the full grammar reference see
 Given `define_parser!(Name { ... })`, the macro expands into:
 
 **`NameContent<'a>`** — the output struct. One `pub` field per grammar rule,
-all borrowing from the original source slice via `u32` byte-offset spans.
+all borrowing from the original source slice via byte-offset spans whose type defaults to `u32`.
 
-**`NameParser`** — a unit struct with:
-- `parse(source: &[u8]) -> NameContent<'_>` — full parse with linear search
-  work per fixed grammar.
-- `find_<field>(source: &[u8]) -> impl Iterator` — standalone per-element
-  iterators, one per grammar rule that supports it. Context-free and faster
-  than a full parse when only one element kind is needed.
-- `context(source: &[u8]) -> ParseContext` — the opaque-region map (fences
-  plus opaque symmetric/asymmetric rules and chained rules with both
-  components opaque), built by a forward trigger scan with bounded searches.
-- `find_context_<field>(source, &ctx) -> impl Iterator` — for transparent
-  symmetric/asymmetric and non-fence line/block rules; candidates inside
-  opaque regions are skipped.
+**`NameParser`** — a unit struct with checked and unchecked methods:
+- `parse(source: &[u8]) -> Result<NameContent<'_>, InputBytesTooLarge>` — full
+  parse with linear search work per fixed grammar.
+- `parse_unchecked(source: &[u8]) -> NameContent<'_>` — the same parse without
+  the `max_input_bytes` check.
+- `find_<field>(source: &[u8]) -> Result<impl Iterator, InputBytesTooLarge>`
+  and `find_<field>_unchecked` — standalone per-element iterators, one pair per
+  grammar rule that supports it. Context-free and faster than a full parse when
+  only one element kind is needed.
+- `context(source: &[u8]) -> Result<ParseContext, InputBytesTooLarge>` and
+  `context_unchecked` — the opaque-region map (fences plus opaque
+  symmetric/asymmetric rules and chained rules with both components opaque),
+  built by a forward trigger scan with bounded searches.
+- `find_context_<field>(source, &ctx) -> Result<impl Iterator, InputBytesTooLarge>`
+  and `find_context_<field>_unchecked` — for transparent symmetric/asymmetric
+  and non-fence line/block rules; candidates inside opaque regions are skipped.
 
 **Accessor methods on `NameContent`:**
 - `str(span) -> Option<&str>` — span to UTF-8 string, `None` on invalid UTF-8.

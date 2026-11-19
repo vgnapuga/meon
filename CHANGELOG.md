@@ -16,7 +16,7 @@ every entry below is labelled with the crate(s) it applies to.
   `max_nest` is still accepted in the header for existing grammars; when both
   places are present they must agree.
 - Span caps are measured on the clean span, `end - start` without delimiters.
-  `0` and `u32::MAX` mean absent; a value above `u32::MAX` is a compile error.
+  `0` and the offset type's maximum mean absent; a value above the offset maximum is a compile error.
   When a cap is absent, no comparison, fallback or reparse code is generated
   for that level.
 - An over-limit span is not emitted: a transparent inline span keeps its text
@@ -26,8 +26,23 @@ every entry below is labelled with the crate(s) it applies to.
   paragraph runs, skipping the `cont` markers of the frames that held it.
 - `find_*` and `find_context_*` apply the caps. `ParseContext` drops an
   over-limit opaque region and rescans its interior for nested regions.
+- **`meon`, `meon-macros`** — `limits { offset = u8 | u16 | u32 | u64; }`
+  selects the span offset type (default `u32`). `Span<T>` is generic; the
+  generated content, finders and context use the selected type.
+- **`meon`, `meon-macros`** — optional `max_input_bytes` in `limits`. `0` and
+  the offset type's maximum mean that maximum; `_` or an absent key means no
+  check and the parser reads only the prefix that fits. The checked methods
+  reject an over-limit source with `InputBytesTooLarge` before allocating any
+  parser state; when no limit is set, no check code is generated.
 
 ### Changed
+
+- **`meon`** — `parse`, `find_*`, `find_context_*` and `context` now return
+  `Result<_, InputBytesTooLarge>`. `parse_unchecked`, `find_*_unchecked`,
+  `find_context_*_unchecked` and `context_unchecked` keep the previous
+  infallible behaviour.
+- **`meon-md`, `meon-json`** — their grammars leave `max_input_bytes` unset,
+  so their checked methods never fail on length.
 
 - **`meon-md`, `meon-json`** — grammars now declare `max_nest` in `limits`,
   with `max_inline_span = 0`, `max_line_span = 0` and `max_block_span = 0`.

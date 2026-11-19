@@ -41,7 +41,7 @@ meon-md = "0.6"
 use meon_md::MarkdownParser;
 
 let src = b"# Hello\n**world** and *italic* with `code`\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 
 // Access by element kind — O(1) per kind
 println!("headings:  {}", c.headings.len());
@@ -133,7 +133,7 @@ resolve spans:
 
 ```rust
 let src = b"**bold** and *italic*\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 
 // str() returns None on invalid UTF-8 instead of panicking
 if let Some(text) = c.str(c.bolds[0]) {
@@ -234,7 +234,7 @@ This grammar sets `max_nest = 4` in its `limits` section. Two independent mechan
 
 ```rust
 let src = b"> > nested quote with **bold *italic* text**\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 assert_eq!(c.blockquotes.len(), 2);
 assert_eq!(c.bolds.len(), 1);
 assert_eq!(c.italics.len(), 1);
@@ -243,6 +243,11 @@ assert_eq!(c.italics.len(), 1);
 The three span caps are written as `0` (absent): `max_inline_span = 0`,
 `max_line_span = 0`, `max_block_span = 0`. The engine treats `0` as no cap,
 so no span is dropped for its length.
+
+`max_input_bytes` is not set, so the grammar does not reject large input.
+The checked `parse`, `find_*`, `find_context_*` and `context` methods still
+return `Result`; they simply never fail on length. Use `parse_unchecked` and
+the other `_unchecked` methods to skip the `Result` wrapper.
 
 Link and image components are opaque and balanced. `[a [b] c](url)` and
 `[t](https://x/a_(b))` each produce one link; bracket/parenthesis bytes inside

@@ -123,8 +123,9 @@ multi-line fallthrough run rather than a single line (§7, §9), but it still
 streams strictly forward — a run is accumulated, never re-scanned.
 
 **Flat SoA output.** The content struct stores one `Vec` per element kind.
-All spans are `u32` byte offsets into the original source slice, which is
-borrowed for the content lifetime. This layout gives O(1) access per element
+All spans are byte offsets into the original source slice, which is
+borrowed for the content lifetime. The offset type defaults to `u32` and is
+selected by `limits { offset = ...; }`. This layout gives O(1) access per element
 kind and is cache-friendly for downstream processing.
 
 **Declarative grammar, zero hand-written scanning.** The grammar author writes
@@ -307,7 +308,23 @@ The `define_parser!` expansion emits:
 pub struct NameParser;
 
 impl NameParser {
-    pub fn parse(source: &[u8]) -> NameContent<'_> {
+    // Emitted only when `max_input_bytes` is set.
+    fn __meon_check_input(source: &[u8]) -> Result<(), InputBytesTooLarge> {
+        if source.len() > MAX as usize {
+            Err(InputBytesTooLarge { len: source.len(), max: MAX })
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn parse(
+        source: &[u8],
+    ) -> Result<NameContent<'_>, InputBytesTooLarge> {
+        Self::__meon_check_input(source)?; // omitted when no limit
+        Ok(Self::parse_unchecked(source))
+    }
+
+    pub fn parse_unchecked(source: &[u8]) -> NameContent<'_> {
         mc::parse_text!(
             source;
             sep = ..., eol = ..., tab = ..., escape = ..., max_nest = ...;
@@ -874,6 +891,9 @@ satisfy `start <= end <= source.len()`.
 on 64-bit). This matters when a document produces tens of thousands of spans —
 the vecs stay in fewer cache lines. The trade-off is the 4 GiB input limit
 (`MAX_INPUT_LEN = u32::MAX as usize`), which exceeds any realistic document.
+A grammar that sets `max_input_bytes` to `0` or the offset maximum makes the
+checked methods reject input over that limit; an absent key or `_` reads only
+the prefix that fits.
 
 Zero-length spans (`start == end`) are used for position-only markers such as
 hard-break anchors.
@@ -1080,9 +1100,11 @@ context-aware consumer.
 
 ### 4 GiB input limit
 
-Spans store byte offsets as `u32`. Inputs larger than `u32::MAX` bytes would
-produce silently truncated spans. The fuzz harness guards against this with an
-early return. In practice no text document approaches this limit.
+Spans store byte offsets in the selected `offset` type. Inputs larger than its
+maximum produce truncated spans unless a limit is set. A grammar can set
+`max_input_bytes = 0` (or the offset maximum) to make its checked methods
+reject them; an absent key or `_` reads only the prefix that fits. The fuzz harness guards against this with an early return.
+In practice no text document approaches this limit.
 
 ---
 
@@ -1131,22 +1153,33 @@ crate, not the engine. No changes to `meon` are needed.
 
 ---
 
-## 19. Span limits
+## 19. Span and input limits
 
-The optional `limits { ... }` section carries the grammar-wide nesting cap and
-three span-length caps:
+The optional `limits { ... }` section carries the offset type, the
+grammar-wide nesting cap, three span-length caps and an input-length cap:
 
 | Key               | Meaning                                                     |
 |-------------------|-------------------------------------------------------------|
+| `offset`          | Span offset type: `u8`, `u16`, `u32` or `u64`; default `u32`.|
 | `max_nest`        | Shared cap of the inline and block stacks; default `1`.     |
 | `max_inline_span` | Longest emitted inline span, in bytes; default absent.      |
 | `max_line_span`   | Longest emitted line span, in bytes; default absent.        |
 | `max_block_span`  | Longest emitted block span, in bytes; default absent.       |
+| `max_input_bytes` | Longest accepted source, in bytes; default absent.          |
 
 `max_nest` is also accepted in the header for existing grammars; if both are
 present they must agree. The span caps are measured on the clean span,
-`end - start` of the stored `Span`, without delimiters. `0` and `u32::MAX` are
-normalized to absent; a value above `u32::MAX` is a compile error.
+`end - start` of the stored `Span`, without delimiters. `0` and the offset
+type's maximum are normalized to absent; a value above the offset maximum is
+a compile error.
+
+`max_input_bytes` is not normalized to absent. `0` and the offset type's
+maximum both mean that maximum; the checked methods reject a larger source.
+`_` or an absent key means no check, and the parser reads only the prefix that
+fits. A value above the offset maximum is a compile error. The check runs at the start of every
+checked method — `parse`, `find_*`, `find_context_*`, `context` — before any
+parser state, context map or `Vec` is allocated. The unchecked variants skip
+it.
 
 The front-end emits each cap as an optional token, `[]` or `[N]`. `[]` means
 no cap: the runtime macros emit no comparison, no fallback push and no reparse

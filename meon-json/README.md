@@ -44,7 +44,7 @@ meon-json = "0.5"
 use meon_json::JsonParser;
 
 let src = br#"{"name":"Alice","age":30,"tags":["a","b"]}"#;
-let c = JsonParser::parse(src);
+let c = JsonParser::parse(src).unwrap();
 
 // Access by element kind — O(1) per kind
 println!("objects: {}", c.objects.len());   // 1
@@ -137,7 +137,7 @@ The content struct borrows the original source. Use the built-in helpers:
 
 ```rust
 let src = br#"{"a":[1,2,3]}"#;
-let c = JsonParser::parse(src);
+let c = JsonParser::parse(src).unwrap();
 
 // str() returns None on invalid UTF-8 instead of panicking
 println!("{}", c.str(c.members[0].key).unwrap());   // → "a"  (quotes included)
@@ -174,7 +174,7 @@ it only when you need it:
 use meon_json::{JsonParser, ScalarKind};
 
 let src = br#"{"a":1,"b":true,"c":[2,3],"d":null}"#;
-let c = JsonParser::parse(src);
+let c = JsonParser::parse(src).unwrap();
 
 // All four kinds in one cache-friendly pass, owned vectors out
 let typed = c.type_scalars();
@@ -280,9 +280,14 @@ deep container nesting within that cap. The three span caps are written as
 than 64 levels is parsed without panicking, but the over-cap containers are
 left untracked rather than represented as their own spans.
 
+`max_input_bytes` is not set, so the grammar does not reject large input.
+The checked `parse`, `find_*`, `find_context_*` and `context` methods still
+return `Result`; they simply never fail on length. Use `parse_unchecked` and
+the other `_unchecked` methods to skip the `Result` wrapper.
+
 ```rust
 let pretty = b"{\n  \"a\": {\n    \"b\": { \"c\": 1 }\n  }\n}";
-let c = JsonParser::parse(pretty);
+let c = JsonParser::parse(pretty).unwrap();
 assert_eq!(c.objects.len(), 3);
 assert_eq!(c.members.len(), 3);
 ```

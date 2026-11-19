@@ -96,7 +96,7 @@ MarkdownContent {
 }
 ```
 
-All spans are `u32` byte offsets — 8 bytes per span. Access to any element
+All spans are byte offsets. The type defaults to `u32` (8 bytes per span) and is selected by `limits { offset = ...; }`. Access to any element
 kind is O(1). Iterating all bold spans is a single forward scan over a
 contiguous array. The CPU prefetcher is happy.
 
@@ -104,7 +104,7 @@ contiguous array. The CPU prefetcher is happy.
 
 ## Spans — zero-copy access into the source
 
-Every element is represented as a `Span { start: u32, end: u32 }` — a
+Every element is represented as a `Span { start: u32, end: u32 }` by default — a
 half-open byte range `[start, end)` into the original source slice. Nothing
 is copied. Nothing is decoded unless you ask for it.
 
@@ -198,10 +198,12 @@ define_parser!(MyFormat {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
     limits {
+        offset = u32;
         max_nest = 4;
         max_inline_span = 0;
         max_line_span = 0;
         max_block_span = 0;
+        max_input_bytes = 0;
     }
 
     inline {
@@ -228,11 +230,15 @@ define_parser!(MyFormat {
 });
 
 // Generated:
-// MyFormatParser::parse(src) -> MyFormatContent<'_>
-// MyFormatParser::find_bolds(src) -> impl Iterator<Item = Span>
-// MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
-// MyFormatParser::context(src) -> ParseContext
-// MyFormatParser::find_context_bolds(src, &ctx) -> impl Iterator<Item = Span>
+// MyFormatParser::parse(src) -> Result<MyFormatContent<'_>, InputBytesTooLarge>
+// MyFormatParser::parse_unchecked(src) -> MyFormatContent<'_>
+// MyFormatParser::find_bolds(src) -> Result<impl Iterator<Item = Span>, InputBytesTooLarge>
+// MyFormatParser::find_bolds_unchecked(src) -> impl Iterator<Item = Span>
+// MyFormatParser::find_headings(src) -> Result<impl Iterator<Item = (Heading, Span)>, InputBytesTooLarge>
+// MyFormatParser::context(src) -> Result<ParseContext, InputBytesTooLarge>
+// MyFormatParser::context_unchecked(src) -> ParseContext
+// MyFormatParser::find_context_bolds(src, &ctx) -> Result<impl Iterator<Item = Span>, InputBytesTooLarge>
+// MyFormatParser::find_context_bolds_unchecked(src, &ctx) -> impl Iterator<Item = Span>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>
 // ... and more
@@ -242,18 +248,24 @@ Everything — the content struct, the parse method, all find_* iterators, all
 accessors — is generated at compile time. There is no runtime dispatch, no
 vtable, no grammar interpreter.
 
-### Span limits
+### Limits
 
-`limits { ... }` is optional. `max_nest` sets the shared nesting cap;
+`limits { ... }` is optional. `offset` selects the span offset type (`u8`, `u16`, `u32`, default `u32`). `max_nest` sets the shared nesting cap;
 `max_inline_span`, `max_line_span` and `max_block_span` cap the length of an
 emitted span in bytes, measured on the clean span without delimiters. `0` and
-`u32::MAX` mean absent: no check and no fallback code is generated for that
-cap. A value above `u32::MAX` is a compile error.
+the offset type's maximum mean absent: no check and no fallback code is
+generated for that cap. A value above the offset maximum is a compile error.
 
 When a span exceeds its cap it is not emitted: transparent inline elements
 keep their inner spans and text, opaque inline elements are reparsed inside,
 line and block items go to `blocks { fallback => ... }`, and an over-long
 fence is reparsed as paragraph runs.
+
+`max_input_bytes` caps the source length. `0` and the offset type's maximum
+mean that maximum; the checked methods reject input over it. `_` or an absent
+key means no check, and the parser reads only the prefix that fits. The check runs before any parser state is
+allocated. The checked methods return `Result<_, InputBytesTooLarge>`; the
+`_unchecked` variants skip the check and keep the old behaviour.
 
 ---
 
