@@ -49,7 +49,7 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
                 "merge_simple" => {
                     c.advance();
                     c.skip_eq_alone();
-                    c.advance();
+                    cf.merge_simple = Some(c.next_ident("merge_simple value")?);
                     c.skip(';');
                 }
                 "hard_break" => {
@@ -63,6 +63,7 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
                     c.advance();
                     let (f, cap) = c.arrow_field_cap("inline fallback")?;
                     c.skip(';');
+                    cf.inline_fallback = Some(f.clone());
                     cf.inline_simple.push((f, cap));
                 }
                 "on_trigger" => {

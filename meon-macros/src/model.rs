@@ -177,5 +177,7 @@ pub(crate) struct CF {
     pub(crate) line: Vec<(Ident, TS2, Literal)>,
     pub(crate) block: Vec<(Ident, TS2, Literal)>,
     pub(crate) block_simple: Vec<(Ident, Literal)>,
+    pub(crate) inline_fallback: Option<Ident>,
+    pub(crate) merge_simple: Option<Ident>,
     pub(crate) standalone: Vec<StandaloneRule>,
 }

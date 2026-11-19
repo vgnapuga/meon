@@ -156,12 +156,13 @@ macro_rules! parse_text {
         crlf = $crlf:ident,
         max_inline_span = $max_inline:tt,
         max_line_span = $max_line:tt,
-        max_block_span = $max_block:tt ;
+        max_block_span = $max_block:tt,
+        reparse = $reparse:tt ;
         $($sections:tt)*
     ) => {
         $crate::parse_text!(@cs
             ctx = ($src, $sep, $eol, $tab, $esc, $maxn, $crlf,
-                   $max_inline, $max_line, $max_block)
+                   $max_inline, $max_line, $max_block, $reparse)
             il  = []
             ln  = []
             bl  = []
@@ -240,7 +241,7 @@ macro_rules! parse_text {
 
     (@ci
         ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt)
+             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt, $reparse:tt)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[$merge_il:tt] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
@@ -248,7 +249,7 @@ macro_rules! parse_text {
     ) => {
         $crate::parse_text!(@cb
             ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf,
-                 $max_inline, $max_line, $max_block)
+                 $max_inline, $max_line, $max_block, $reparse)
             merge_il=$merge_il tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -257,7 +258,7 @@ macro_rules! parse_text {
 
     (@ci
         ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt)
+             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt, $reparse:tt)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
@@ -265,7 +266,7 @@ macro_rules! parse_text {
     ) => {
         $crate::parse_text!(@cb
             ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf,
-                 $max_inline, $max_line, $max_block)
+                 $max_inline, $max_line, $max_block, $reparse)
             merge_il=false tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -314,7 +315,7 @@ macro_rules! parse_text {
 
     (@cb
         ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt)
+             $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt, $reparse:tt)
         merge_il=$merge_il:tt tx=$tx:ident ilt=[$($ilt:tt)*] ln=[$($ln:tt)*]
         hb=$hb:tt finders=[$($f:literal)*]
         sr=[$($sr:tt)*] br=[$($br:tt)*] fpara=[$para:ident]
@@ -322,7 +323,7 @@ macro_rules! parse_text {
     ) => {
         $crate::parse_text!(@body
             $src, $sep, $eol, $tab, $esc, $maxn, $crlf,
-            $max_inline, $max_line, $max_block,
+            $max_inline, $max_line, $max_block, $reparse,
             $tx, $merge_il,
             [$($ilt)*], [$($ln)*],
             [$($sr)*], [$($br)*],
@@ -335,7 +336,7 @@ macro_rules! parse_text {
 
     (@body
             $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
-            $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt,
+            $crlf:ident, $max_inline:tt, $max_line:tt, $max_block:tt, $reparse:tt,
             $tx:ident, $merge_il:tt,
             [$($ilt:tt)*], [$($ln:tt)*],
             [$($sr:tt)*], [$($br:tt)*],
@@ -350,6 +351,7 @@ macro_rules! parse_text {
             let mut _active_stack: [(u32, u32); $maxn] = [(0u32, 0u32); $maxn];
             let mut _active_depth: usize = 0;
             let mut pos: usize = 0;
+            let _reparse_depth: usize = 0;
             let mut para_start: Option<u32> = None;
             // The open `cont` run: where its scan starts, where its last line
             // ends, and the marker bytes of the frames it runs in.
@@ -388,10 +390,11 @@ macro_rules! parse_text {
             // `scan_cont_run`.
             #[inline(never)]
             fn scan_para_run(state: &mut ParseState, src: &[u8], _ps: usize, _pe: usize) {
+                let _reparse_depth: usize = 0;
                 $crate::parse_inline!(
                     state, src, _ps, _pe,
                     $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true, crlf = $crlf,
-                    max_inline = $max_inline, reparse = [] ;
+                    max_inline = $max_inline, reparse = $reparse, depth = _reparse_depth ;
                     $($ilt)*
                 );
             }
@@ -406,11 +409,12 @@ macro_rules! parse_text {
                 (_cs, _ce, _cd): (usize, usize, usize),
                 cont_bytes: &[u8; $maxn],
             ) {
+                let _reparse_depth: usize = 0;
                 $crate::parse_inline!(
                     state, src, _cs, _ce,
                     $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn,
                     cont(cont_bytes, _cd), crlf = $crlf,
-                    max_inline = $max_inline, reparse = [] ; $($ilt)*
+                    max_inline = $max_inline, reparse = $reparse, depth = _reparse_depth ; $($ilt)*
                 );
             }
             macro_rules! flush_cont {
@@ -630,11 +634,15 @@ macro_rules! parse_text {
                 }
 
                 if pos < current_line_end {
-                    let _ = $crate::parse_inline!(
-                        state, src, pos, current_line_end,
-                        $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false,
-                        max_inline = $max_inline, reparse = [] ; $($ilt)*
-                    );
+                    {
+                        let state = &mut state;
+                        let _ = $crate::parse_inline!(
+                            state, src, pos, current_line_end,
+                            $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, false,
+                            max_inline = $max_inline, reparse = $reparse,
+                            depth = _reparse_depth ; $($ilt)*
+                        );
+                    }
                 }
                 pos = next_line_start;
             }

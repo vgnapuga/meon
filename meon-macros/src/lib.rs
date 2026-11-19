@@ -234,6 +234,33 @@ pub fn define_parser(input: TokenStream) -> TokenStream {
     }
 }
 
+/// The inline rules `parse_inline!` consumes: the canonicalised section
+/// without `merge_simple` and the fallback field, which `parse_text!` reads
+/// separately.
+fn inline_rules(tokens: &[TT]) -> TS2 {
+    let mut out = TS2::new();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if let TT::Ident(id) = &tokens[i] {
+            if id == "merge_simple" || id == "fallback" {
+                i += 1;
+                while i < tokens.len()
+                    && !matches!(&tokens[i], TT::Punct(p) if p.as_char() == ';' || p.as_char() == ',')
+                {
+                    i += 1;
+                }
+                if i < tokens.len() {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.extend([tokens[i].clone()]);
+        i += 1;
+    }
+    out
+}
+
 /// Fallible core of [`define_parser`].
 fn expand(input: TS2) -> Result<TS2> {
     let mut c = Cursor::new(flatten_invisible(input));
@@ -336,6 +363,7 @@ fn expand(input: TS2) -> Result<TS2> {
     collect_blocks(blocks_ts.clone(), &mut cf)?;
 
     let pt_inline: Vec<_> = canonicalize_inline(strip(inline_ts)).into_iter().collect();
+    let pt_inline_rules = inline_rules(&pt_inline);
     let pt_lines: Vec<_> = strip(lines_ts).into_iter().collect();
     let pt_blocks: Vec<_> = strip(blocks_ts).into_iter().collect();
 
@@ -343,12 +371,51 @@ fn expand(input: TS2) -> Result<TS2> {
     // in the expansion so it works correctly from any dependent crate.
     let mc = crate_path();
 
+    // A reparse helper is emitted only when an inline cap is configured. It
+    // scans an oversized opaque construct's interior with the same grammar.
+    let reparse_helper = Ident::new(&format!("__meon_reparse_{}", name), name.span());
+    let has_inline_limit = limits.max_inline_span.is_some();
+    let reparse_fn = if let (Some(tx), true) = (&cf.inline_fallback, has_inline_limit) {
+        let merge = cf
+            .merge_simple
+            .clone()
+            .unwrap_or_else(|| Ident::new("false", PS::call_site()));
+        quote! {
+            #[allow(dead_code, non_snake_case)]
+            fn #reparse_helper(
+                state: &mut ParseState,
+                src: &[u8],
+                start: usize,
+                end: usize,
+                _reparse_depth: usize,
+            ) {
+                if _reparse_depth > #max_nest {
+                    return;
+                }
+                #mc::parse_inline!(
+                    state, src, start, end, #tx, #merge, #esc, #sep, #tab, #eol, #max_nest,
+                    true, crlf = #crlf, max_inline = #lim_inline,
+                    reparse = [ #reparse_helper ], depth = _reparse_depth ;
+                    #pt_inline_rules
+                );
+            }
+        }
+    } else {
+        TS2::new()
+    };
+    let reparse_tt = if has_inline_limit {
+        quote! { [ #reparse_helper ] }
+    } else {
+        quote! { [] }
+    };
+
     let dc = build_define_content(&content_name, &cf, &mc);
     let cm = build_content_methods(&content_name, &cf, &sep, &eol, &tab, &esc);
     let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &crlf, &cf.standalone);
 
     Ok(quote! {
         #dc
+        #reparse_fn
 
         #[allow(missing_docs)]
         pub struct #parser_name;
@@ -362,7 +429,8 @@ fn expand(input: TS2) -> Result<TS2> {
                     max_nest = #max_nest, crlf = #crlf,
                     max_inline_span = #lim_inline,
                     max_line_span = #lim_line,
-                    max_block_span = #lim_block;
+                    max_block_span = #lim_block,
+                    reparse = #reparse_tt;
                     inline { #(#pt_inline)* }
                     lines  { #(#pt_lines)* }
                     blocks { #(#pt_blocks)* }
