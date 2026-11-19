@@ -5,7 +5,10 @@
 //! truncated to fit `u16`, so every parser sees the same bytes.
 //!
 //! This measures the offset type itself: identical rules, identical input,
-//! only the generated `Span<T>` width changes.
+//! only the generated `Span<T>` width changes. Timing is scan-dominated, so
+//! with a 64 KiB corpus the output vectors stay in cache and the time
+//! difference is small; the `output heap` line shows the memory difference
+//! directly.
 
 mod docs_md;
 
@@ -116,10 +119,73 @@ markdown_parser!(MarkdownU16, u16, LinkU16, u16);
 markdown_parser!(MarkdownU32, u32, LinkU32, u32);
 markdown_parser!(MarkdownU64, u64, LinkU64, u64);
 
+macro_rules! output_mem {
+    ($c:expr, $off:ty, $link:ty) => {{
+        let c = $c;
+        let mut heap = 0usize;
+        heap += c.headings.capacity() * std::mem::size_of::<(Heading, Span<$off>)>();
+        heap += c.thematic_breaks.capacity() * std::mem::size_of::<(ThematicBreak, Span<$off>)>();
+        heap += c.paragraphs.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.blockquotes.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.fenced_codes.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.bullet_items.capacity() * std::mem::size_of::<(BulletItem, Span<$off>)>();
+        heap += c.ordered_items.capacity() * std::mem::size_of::<(OrderedItem, Span<$off>)>();
+        heap += c.bolds.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.italics.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.bold_italics.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.codes.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.links.capacity() * std::mem::size_of::<$link>();
+        heap += c.autolinks.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.hard_breaks.capacity() * std::mem::size_of::<Span<$off>>();
+        heap += c.texts.capacity() * std::mem::size_of::<Span<$off>>();
+
+        let mut elements = 0usize;
+        elements += c.headings.len();
+        elements += c.thematic_breaks.len();
+        elements += c.paragraphs.len();
+        elements += c.blockquotes.len();
+        elements += c.fenced_codes.len();
+        elements += c.bullet_items.len();
+        elements += c.ordered_items.len();
+        elements += c.bolds.len();
+        elements += c.italics.len();
+        elements += c.bold_italics.len();
+        elements += c.codes.len();
+        elements += c.links.len();
+        elements += c.autolinks.len();
+        elements += c.hard_breaks.len();
+        elements += c.texts.len();
+        (heap, elements)
+    }};
+}
+
+fn report_output(label: &str, bytes: &[u8]) {
+    let c16 = u16::MarkdownU16Parser::parse(bytes).unwrap();
+    let c32 = u32::MarkdownU32Parser::parse(bytes).unwrap();
+    let c64 = u64::MarkdownU64Parser::parse(bytes).unwrap();
+
+    let (m16, n16) = output_mem!(&c16, u16, LinkU16);
+    let (m32, n32) = output_mem!(&c32, u32, LinkU32);
+    let (m64, n64) = output_mem!(&c64, u64, LinkU64);
+
+    let pct = |m: usize| 100.0 * m as f64 / bytes.len() as f64;
+    println!(
+        "│  output heap: u16 {} B ({:.1}%), u32 {} B ({:.1}%), u64 {} B ({:.1}%)",
+        m16,
+        pct(m16),
+        m32,
+        pct(m32),
+        m64,
+        pct(m64)
+    );
+    println!("│  output elements: u16 {n16}, u32 {n32}, u64 {n64}  ({label})");
+}
+
 fn bench_offsets(c: &mut Criterion) {
     for (label, doc) in docs_md::corpora_u16() {
         let bytes = doc.as_bytes();
 
+        report_output(label, bytes);
         docs_md::report(label, bytes);
 
         let mut group = c.benchmark_group(format!("offsets/{label}"));
