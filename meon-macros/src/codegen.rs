@@ -53,6 +53,9 @@ pub(crate) fn build_standalone_dsl(
     esc: &Literal,
     max_nest: &Literal,
     crlf: &Ident,
+    lim_inline: &TS2,
+    lim_line: &TS2,
+    lim_block: &TS2,
     rules: &[StandaloneRule],
 ) -> TS2 {
     // The context spec: the capacity divisors of every fence and opaque
@@ -204,5 +207,7 @@ pub(crate) fn build_standalone_dsl(
             quote! { block_numbered((#digits), (#ends), #ty, #num_var, #kind_var, #i) { #body } => #field; }
         }
     }).collect();
-    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest, crlf=#crlf; #ctx_hdr #(#items)* }
+    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest, crlf=#crlf,
+    max_inline=#lim_inline, max_line=#lim_line, max_block=#lim_block;
+    #ctx_hdr #(#items)* }
 }

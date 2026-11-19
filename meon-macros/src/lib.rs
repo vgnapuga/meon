@@ -411,7 +411,18 @@ fn expand(input: TS2) -> Result<TS2> {
 
     let dc = build_define_content(&content_name, &cf, &mc);
     let cm = build_content_methods(&content_name, &cf, &sep, &eol, &tab, &esc);
-    let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &crlf, &cf.standalone);
+    let dsl = build_standalone_dsl(
+        &sep,
+        &eol,
+        &tab,
+        &esc,
+        &max_nest,
+        &crlf,
+        &lim_inline,
+        &lim_line,
+        &lim_block,
+        &cf.standalone,
+    );
 
     Ok(quote! {
         #dc
