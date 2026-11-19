@@ -11,7 +11,7 @@ use crate::cursor::Cursor;
 use crate::error::{Error, Result};
 
 /// The narrowest unsigned type that holds a limit value.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum LimitTy {
     U8,
     U16,
@@ -20,7 +20,7 @@ pub(crate) enum LimitTy {
 
 /// One span-length cap. `value` is never `0` or `u32::MAX`; those normalize to
 /// "no cap" in [`Limits::parse`].
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Limit {
     pub(crate) value: u32,
     ty: LimitTy,
@@ -54,7 +54,7 @@ impl Limit {
 }
 
 /// Parsed `limits { ... }` contents.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Limits {
     pub(crate) max_nest: Option<Literal>,
     pub(crate) max_inline_span: Option<Limit>,
@@ -202,4 +202,82 @@ pub(crate) fn literal_u64(lit: &Literal) -> Option<u64> {
         return None;
     }
     digits.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    fn parse(ts: TS2) -> Limits {
+        Limits::parse(ts).unwrap()
+    }
+
+    #[test]
+    fn defaults_are_absent() {
+        let l = parse(quote! {});
+        assert!(l.max_nest.is_none());
+        assert!(l.max_inline_span.is_none());
+        assert!(l.max_line_span.is_none());
+        assert!(l.max_block_span.is_none());
+    }
+
+    #[test]
+    fn values_and_narrow_types() {
+        let l = parse(quote! {
+            max_nest = 4;
+            max_inline_span = 100;
+            max_line_span = 70_000;
+            max_block_span = 4_294_967_295u32;
+        });
+        assert!(l.max_nest.is_some());
+        assert_eq!(l.max_inline_span.unwrap().value, 100);
+        assert_eq!(l.max_line_span.unwrap().value, 70_000);
+        assert!(l.max_block_span.is_none());
+    }
+
+    #[test]
+    fn zero_and_u32_max_are_absent() {
+        let l = parse(quote! {
+            max_inline_span = 0;
+            max_line_span = 4_294_967_295;
+            max_block_span = 0;
+        });
+        assert!(l.max_inline_span.is_none());
+        assert!(l.max_line_span.is_none());
+        assert!(l.max_block_span.is_none());
+    }
+
+    #[test]
+    fn over_u32_is_an_error() {
+        let e = Limits::parse(quote! { max_inline_span = 4_294_967_296 })
+            .unwrap_err()
+            .to_compile_error()
+            .to_string();
+        assert!(e.contains("must not exceed"), "{e}");
+    }
+
+    #[test]
+    fn duplicate_key_is_an_error() {
+        let e = Limits::parse(quote! { max_inline_span = 1; max_inline_span = 2 })
+            .unwrap_err()
+            .to_compile_error()
+            .to_string();
+        assert!(e.contains("set twice"), "{e}");
+    }
+
+    #[test]
+    fn unknown_key_is_an_error() {
+        let e = Limits::parse(quote! { max_spans = 1 })
+            .unwrap_err()
+            .to_compile_error()
+            .to_string();
+        assert!(e.contains("unknown keyword"), "{e}");
+    }
+
+    #[test]
+    fn suffix_and_separators_are_read() {
+        let l = parse(quote! { max_inline_span = 1_024u16 });
+        assert_eq!(l.max_inline_span.unwrap().value, 1_024);
+    }
 }
