@@ -3,12 +3,12 @@
 A declarative flat parsing engine for text formats.
 
 You describe a grammar once with `define_parser!` and get back a fully working
-parser: a `parse` method for a full single-pass scan, and `find_*` standalone
-iterators for lazily extracting one element kind at a time.
+parser: a `parse` method for a full scan with bounded forward searches, and
+`find_*` standalone iterators for lazily extracting one element kind at a time.
 
 ```toml
 [dependencies]
-meon = "0.6"
+meon = "0.7"
 ```
 
 * **meon**    <--
@@ -60,13 +60,15 @@ assert_eq!(content.texts.len(), 1);
 - `NameContent<'a>` — the output struct. Every grammar rule produces one `pub`
   field. All fields borrow from the original source slice.
 - `NameParser` — a unit struct with:
-  - `parse(source: &[u8]) -> NameContent<'_>` — full single-pass parse, O(n).
+  - `parse(source: &[u8]) -> NameContent<'_>` — full parse with linear
+    search work per fixed grammar.
   - `find_*(source: &[u8]) -> impl Iterator` — one per rule, context-free,
     faster when you only need one element kind.
   - `context(source: &[u8]) -> ParseContext` — the opaque-region map (fences
-    plus every `parse_inside = false` rule), built in one streaming pass.
-  - `find_context_*(source, &ctx) -> impl Iterator` — one per non-opaque
-    rule; the same matcher with candidates inside opaque regions skipped.
+    plus opaque symmetric/asymmetric and fully opaque chained rules), built
+    by a forward trigger scan with bounded searches.
+  - `find_context_*(source, &ctx) -> impl Iterator` — for transparent
+    symmetric/asymmetric and non-fence line/block rules; the same matcher with candidates inside opaque regions skipped.
 - `str(span) -> Option<&str>` / `bytes(span) -> &[u8]` and `_clean` / `_raw`
   accessor methods on `NameContent` for ergonomic span-to-slice conversion.
 
@@ -84,8 +86,8 @@ define_parser!(Name {
 });
 ```
 
-Four context bytes are required and apply to every rule. A fifth,
-`max_nest`, is optional and grammar-wide:
+Four context bytes are required and apply to every rule. `max_nest` and
+`crlf` are optional grammar-wide settings:
 
 | Key        | Meaning                                                        |
 |------------|----------------------------------------------------------------|
@@ -93,23 +95,33 @@ Four context bytes are required and apply to every rule. A fifth,
 | `eol`      | Line terminator (typically `\n`)                               |
 | `tab`      | Tab character                                                  |
 | `escape`   | Escape prefix that suppresses the next byte                    |
+| `crlf`     | Optional. Recognise CR before `eol` as a line-ending byte; default `false`. |
 | `max_nest` | Optional. Bounded self-nesting depth cap, shared by            |
-|            | `balanced` symmetric/asymmetric rules and `key_value`          |
+|            | stack-based inline rules and `key_value`                      |
 |            | values (below) and by block-level `cont`/`fence` nesting.      |
 |            | Default `1`: no self-nesting, at most one block active.        |
 |            | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
 
+The optional `crlf` setting defaults to `false`. With `crlf = true`, only a
+CR immediately followed by an actual `eol` is part of the line ending. A bare CR, including at EOF, remains content.
+
 ---
+
+Byte patterns in `line_simple`, `fence`, `block (pattern)` and both arguments
+of `num` are Rust patterns, including literals, alternatives, ranges and
+constants. The same patterns reach full parsing, standalone iterators and
+context construction. A grammar emitted by `macro_rules!` may pass literal,
+pattern and expression fragments without changing their precedence.
 
 ## Rule families
 
 Rules are divided into three families based on where in the source an element
 can begin and end.
 
-### Inline rules — inside a line
+### Inline rules — within an inline run
 
-Inline elements are found by scanning for trigger bytes within the content of a
-line. Two sub-kinds:
+Inline elements are found by scanning for trigger bytes within an inline run,
+which may span paragraph or same-marker continuation lines. Two sub-kinds:
 
 **`inline_simple`** — a single `Span` with no extra metadata.
 Declared via `fallback` or inside `on_trigger` as match arms.
@@ -124,7 +136,8 @@ Field type: `Vec<T>`.
 #### `on_trigger(b1, b2, ...) { ... }`
 
 Declares a set of trigger bytes. When any of them is found on a line the
-block is entered and rules are tried in declaration order.
+block contributes to the engine's fixed kind dispatch. Declaration order is
+preserved within a kind; the dispatch is not a format-specific precedence table.
 
 ---
 
@@ -133,8 +146,7 @@ block is entered and rules are tried in declaration order.
 ```
 on_trigger(b'*') {
     symmetric b'*' {
-        parse_inside = true;   // pending match: first run opens, next closes
-        balanced     = true;   // self-nest different-count occurrences up to max_nest
+        parse_inside = true;   // transparent bounded-stack matching
         1 => italics  [40],    // count => field [capacity_divisor]
         2 => bolds    [40],
         3 => bold_italics [80],
@@ -142,29 +154,18 @@ on_trigger(b'*') {
 }
 ```
 
-- `parse_inside = true` — the scanner remembers the opening run and closes on
-  the next matching count (`pending` mode). Content between open and close is
-  itself scanned for inline elements, which is what lets a construct like
-  `**bold *italic* text**` recognise the nested italic at all.
-- `parse_inside = false` — the scanner immediately searches forward for the
-  closing run (`greedy` mode, used for code spans). Content inside is opaque
-  to every other rule.
-- `balanced`'s meaning depends on `parse_inside`:
-  - With `parse_inside = true`: `balanced = false` means a different-count
-    occurrence of the same byte, while one is already pending, overwrites
-    the pending slot — no nesting. `balanced = true` instead opens a
-    *bounded stack* of pending frames (sized by the grammar's `max_nest`), so
-    a different-count occurrence opens its own frame instead of overwriting
-    the outer one — both levels resolve and are emitted to their own fields,
-    separately. An *identical* `(byte, count)` pair still cannot self-nest,
-    since open and close look the same for a symmetric delimiter
-    (`**a **b** c**` resolves as two adjacent runs, not as nesting).
-  - With `parse_inside = false` (greedy mode): `balanced = true` instead
-    means a *doubled* run of the same delimiter found while searching forward
-    is treated as escaped/literal content rather than the close, and the
-    search continues past it — unrelated to the stack above.
+- `parse_inside = true` uses the bounded inline stack. A matching byte and
+  count on the top frame closes it; another declared count opens a nested
+  frame when the stack has room. Content remains visible to other rules.
+- `parse_inside = false` searches forward for the next unescaped run of
+  exactly the opening count. Runs of other lengths remain content, and a
+  successful match is opaque to other rules.
+- `balanced` is not accepted for `symmetric`; writing it is a compile error.
+  `parse_inside` and run counts decide matching. Identical byte/count pairs
+  close rather than self-nest.
 - Each `N => field [div]` arm captures runs of exactly N bytes → `Vec<Span>`.
-- `_ => field [div]` captures any count not matched by the explicit arms.
+- `_ => field [div]` captures other counts in the full parse; standalone
+  finders are generated for explicit numeric count arms.
 
 ---
 
@@ -180,31 +181,19 @@ on_trigger(b'{', b'}') {
 }
 ```
 
-- `balanced` and `parse_inside` are independent settings — either one alone
-  is enough to put a rule on the bounded stack, sized by the grammar's
-  `max_nest`:
-  - `balanced` sets this *type's* own effective depth cap: `max_nest` if
-    `true` (so `{ { } }` self-nests), or a hard `1` if `false` — a second
-    open of the same type while one is already pending is then simply
-    literal.
-  - `parse_inside` controls *opacity*: `false` keeps the content between
-    open and close invisible to every other rule (used for autolinks, so a
-    URL's own `(`/`)` aren't mistaken for something else); `true` makes it
-    transparent, so other rules — including different bracket types on this
-    same stack — can fire on the bytes in between.
-- The close byte is matched against the *frame's own* recorded open byte, not
-  against whichever rule happens to be checked first — so two different
-  `asymmetric` rules declared in the same `on_trigger` block may safely share
-  a close byte (e.g. `(`/`)` and `[`/`)`), as long as their open bytes
-  differ.
-- Once `balanced` or `parse_inside` is `true`, the close byte **must** be
-  listed in the same `on_trigger(...)` set as the open byte —
-  `on_trigger(b'{', b'}')`, not just `on_trigger(b'{')` — since closing is
-  found by the same scan that finds the opening, not by an internal forward
-  search.
-- Count arms work the same as in `symmetric`, except each byte of a
-  multi-byte run is its own event — `{{` is two opens, not one "count = 2"
-  event.
+- With `parse_inside = true`, the rule uses the bounded inline stack.
+  `balanced = true` permits self-nesting up to `max_nest`; with `false`,
+  another open byte of the same pending type is literal. Each opening byte
+  is an event, and the rule declares the `1` arm.
+- With `parse_inside = false`, matching is an opaque forward search. An
+  unbalanced rule selects an exact opening-run count and closes at the first
+  unescaped close byte. A balanced rule declares the `1` arm, counts every
+  unescaped open byte as another level, and closes when the depth returns to
+  zero. Its own depth does not consume the bounded inline stack.
+- A transparent rule needs its close byte in `on_trigger`; an opaque forward
+  search finds its close internally, so only its opening byte is required.
+- Different asymmetric rules may share a close byte when their opening bytes
+  differ; stack closing uses the pending frame's own opening byte.
 
 ---
 
@@ -233,6 +222,16 @@ Matches the pattern `[prefix]open1...close1 open2...close2`.
   supported.
 - The output type `T` must be defined by the grammar author with fields named
   after the `=> field` identifiers.
+- With both components opaque, a failed chain involving a balanced component
+  lazily builds a close index for the remaining inline run. Later balanced
+  queries take constant time and preserve valid inner matches. Search work
+  stays linear per rule. One reusable buffer holds the index and its working
+  stack links: four bytes per indexed byte per balanced component, up to eight
+  when both are balanced. Successful chains before a failure allocate no
+  search buffer; fully unbalanced rules use scalar memos.
+- `balanced` counts a component's own unescaped opening and closing bytes;
+  the second opener must immediately follow the first close. Of an initial
+  opening run, only its last byte opens the chain.
 - Field type: `Vec<T>`.
 
 ---
@@ -243,7 +242,7 @@ Matches the pattern `[prefix]open1...close1 open2...close2`.
 on_trigger(b'=') {
     key_value: KeyValue {
         eq        = b'=';
-        allow_sep = true;   // trim spaces around eq
+        allow_sep = true;   // skip one separator after eq; trim key padding
         end       = b'\n';  // value terminates here (or at eol)
         key   => key,
         value => value,
@@ -259,6 +258,10 @@ on_trigger(b'=') {
   pair is emitted only when its value actually closes — at `end`, at the
   close of the container the value lives in, or at the run's end — so `Vec<T>`
   stays in value-close order.
+- With `allow_sep = true`, one immediate `sep` or `tab` after `eq` is
+  skipped; further bytes remain in the value. If `sep` is also `end`, initial
+  separator padding does not end the value before its first nonseparator.
+- A refused open when the shared stack is full remains literal text.
 - The output type `T` must be defined with fields named after the `=> key` /
   `=> value` identifiers. Field type: `Vec<T>`.
 - Only one `key_value` rule per grammar is supported (see Known limitations).
@@ -273,14 +276,15 @@ Captures runs of bytes that triggered no other inline rule.
 fallback => texts [10];
 ```
 
-Adjacent spans can be merged (gap ≤ 1 byte) by setting `merge_simple = true`
-at the top of the `inline` section.
+With `merge_simple = true`, adjacent fallback spans (gap at most one byte)
+merge only within the same inline run. Separate paragraphs or block/line
+items do not merge across their boundaries.
 
-`fallback` also catches the content of a construct that never closes: when a
-run ends with an open frame still on the stack, the frame's own delimiter
-bytes are dropped but the text between them stays. With `*` as a `balanced`
-symmetric rule, `*a\nb\n` yields no italic span and one `fallback` span
-`a\nb`.
+`fallback` also keeps the literal bytes of a construct that never closes,
+including its opener. With a transparent symmetric `*` rule, `*a\nb\n`
+yields no italic and fallback `*a\nb`; the run's final `eol` is not inline
+content. Elements that close inside an unmatched outer construct survive.
+For example, ``**a `c` b`` retains the code span and fallback `**a ` and ` b`.
 
 ---
 
@@ -297,7 +301,8 @@ at least `min` consecutive `sp` bytes. Emits a zero-length `Span`.
 
 ### Line rules — whole line consumed
 
-A matching line is consumed entirely; inline scanning is skipped for it.
+A matching line consumes the line-rule decision; its content after the
+marker is scanned for inline elements. A uniform line has no content to scan.
 Both line rule kinds produce `Vec<(Type, Span)>` where `Span` covers the
 content portion after the marker.
 
@@ -316,10 +321,11 @@ line(b'#', max = 6) |n|:
 
 ---
 
-##### `line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field [div]`
+##### `line_simple(pattern, min = N) |var|: Type { ... } => field [div]`
 
-Matches lines composed entirely of one repeated delimiter byte (interleaved
-with `sep`), appearing at least `min` times. `var` receives the delimiter byte.
+Matches lines composed entirely of one repeated byte accepted by `pattern`
+(interleaved with `sep`), appearing at least `min` times. `var` receives that
+byte. A mixture of two different accepted bytes is not a match.
 
 ```
 line_simple(b'-' | b'*' | b'_', min = 3) |b|:
@@ -339,11 +345,11 @@ Block elements begin on one line and end on a later line.
 
 Field type: `Vec<Span>`.
 
-##### `fence(byte, min = N) => field [div]`
+##### `fence(pattern, min = N) => field [div]`
 
-Opens when a line starts with ≥ N consecutive `byte` bytes and contains no
-further `byte` in the info string. Closes on the next line that starts with
-at least as many `byte` bytes, followed only by `sep` or `tab`. The entire
+Opens with at least N consecutive copies of one byte accepted by `pattern`,
+with no further copy of that byte in the info string. It closes with the
+same byte and at least the opening count, followed only by `sep` or `tab`. The entire
 range (open fence through close fence) is one `Span`. **Inline scanning is
 suppressed while a fence is active.**
 
@@ -384,8 +390,11 @@ byte.
 ##### `num(digit_pat, end = end_pat) |n, k|: Type { ... } => field [div]`
 
 Matches lines where a digit run (up to 9 digits) is followed by a byte
-satisfying `end_pat` and then `sep` or `tab`. `n` receives the parsed number,
-`k` the delimiter byte.
+satisfying `end_pat` and then `sep` or `tab`. `n` receives the number accumulated as
+`n.wrapping_mul(10).wrapping_add(byte.wrapping_sub(b'0') as u32)` for
+each digit byte; this is decimal for ASCII digits and wraps for other
+patterns. `k` receives the original delimiter byte. `_raw()` uses the
+declared digit pattern to include the original number and marker.
 
 ```
 num(b'0'..=b'9', end = b'.' | b')') |n, k|:
@@ -395,7 +404,8 @@ num(b'0'..=b'9', end = b'.' | b')') |n, k|:
 
 ##### `fallback => field [div]`
 
-Lines matching no other block rule are grouped into paragraph spans.
+Lines matching no other block or line rule are grouped into paragraph spans.
+A line containing only `sep` and `tab` is blank and ends the run.
 
 ```
 fallback => paragraphs [80];
@@ -409,7 +419,7 @@ Inline scanning does not operate per physical line. A run of lines that
 match no `line`/`block`/`fence`/`cont` rule is handed to the inline scanner
 as **one** multi-line span. Inside that run an `eol` is ordinary content: an
 open `symmetric`/`asymmetric` frame or a pending `key_value` value survives
-the line break and only closes at the run's real end.
+the line break unless its own delimiter closes it sooner.
 
 A run is bounded — and the inline stack is drained — at a blank line, at a
 line where a `line`/`block` rule matches, or at end of input. A grammar with
@@ -448,15 +458,17 @@ for span in MyParser::find_italics(source) {
 Standalone iterators scan the raw source as a byte stream — one
 `memchr`-family search per candidate, so marker-free stretches are never
 walked. Inline pair matching is paragraph-bounded (a pair may span a single
-line break; an empty line aborts it), and same-type block nesting (`cont`)
+line break; an empty line or a line of `sep`/`tab` alone aborts it), and same-type block nesting (`cont`)
 matches the full parse up to the grammar's `max_nest`. They may still yield
 spans that the full parser would suppress (e.g. delimiters inside a fence);
 counts can differ from the full parse — this is by design. Standalone
-`symmetric`/`asymmetric` rules match only the exact declared count and
-ignore `balanced` entirely.
+iterators follow their rule's balancing and transparency settings. Exact
+opaque symmetric/asymmetric arms select their declared opening-run count;
+opaque balanced asymmetric rules count nested opening and closing bytes.
 
-For every rule that is not itself opaque, a context-aware variant is also
-generated:
+For transparent symmetric/asymmetric and non-fence line/block rules, a
+context-aware variant is also generated. `key_value` and `chained` have raw
+finders only:
 
 ```rust
 // One streaming pass builds the opaque-region map (fences plus every
@@ -483,11 +495,9 @@ Without either flag the crate compiles on stable Rust using a SWAR
 
 ## Known limitations
 
-- Self-nesting (blockquotes/fences at the block level, `balanced`
-  symmetric/asymmetric rules at the inline level) is bounded by the
-  grammar's `max_nest` setting — default `1`, meaning no self-nesting at
-  all. Constructs nested deeper than `max_nest` are not specially tracked;
-  see the context-bytes table above.
+- Block nesting and stack-based inline self-nesting are bounded by
+  `max_nest`, default `1`. Opaque balanced forward searches count their own
+  depth outside that stack; `max_nest` is not a span or input-size limit.
 - A `chained` rule with a transparent component (`parse_inside = true`)
   tracks only one in-progress match per grammar; two such rules with
   overlapping matches are not supported.
@@ -496,8 +506,9 @@ Without either flag the crate compiles on stable Rust using a SWAR
   `eol` bytes. A run is still bounded by a blank line, so a blank line
   *inside* an open construct closes the run and discards that construct (its
   text is kept as `fallback`) — a JSON-shaped grammar must not contain blank
-  lines mid-value. Precedence between overlapping inline rules is resolved by
-  declaration order, not a precedence table.
+  lines mid-value. Overlapping inline kinds are dispatched in the engine's fixed order;
+  declaration order is preserved within a kind. This is not a format-specific
+  precedence table.
 - Only one `key_value` rule per grammar is supported; its key-segment anchor
   is shared, so a second `key_value` rule is not tracked independently.
 

@@ -19,12 +19,12 @@ fn test_01_context_is_strings() {
 fn test_02_brace_inside_string() {
     let src = br#"{"note": "u{se} [it]"}"#;
     let ctx = JsonParser::context(src);
-    // Context-free: the close search stops at the `}` INSIDE the string,
-    // yielding one wrong span that ends mid-string.
+    // Context-free: the braces INSIDE the string are taken for an object
+    // nested in the real one.
     let cf: Vec<(u32, u32)> = JsonParser::find_objects(src)
         .map(|s| (s.start, s.end))
         .collect();
-    assert_eq!(cf, vec![(1, 14)]);
+    assert_eq!(cf, vec![(1, 21), (12, 14)]);
     // Context-aware: the in-string `}` is skipped, the object closes at the
     // real brace — byte-identical to the full parse.
     let ca: Vec<(u32, u32)> = JsonParser::find_context_objects(src, &ctx)

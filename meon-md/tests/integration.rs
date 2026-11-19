@@ -1139,24 +1139,25 @@ fn integ_unclosed_01_lone_star_multi_line() {
     assert_eq!(txt(src, c.texts[0]), "5 * 3 is fifteen\nand so on");
 }
 
-// 02. An unclosed opener at line start keeps every following line
+// 02. An unclosed opener at line start is text and keeps every following
+//     line
 #[test]
 fn integ_unclosed_02_opener_at_start() {
     let src = b"*a\nb\n";
     let c = MarkdownParser::parse(src);
     assert!(c.italics.is_empty());
     assert_eq!(c.texts.len(), 1);
-    assert_eq!(txt(src, c.texts[0]), "a\nb");
+    assert_eq!(txt(src, c.texts[0]), "*a\nb");
 }
 
-// 03. An unclosed bold with a trailing newline keeps its text
+// 03. An unclosed bold with a trailing newline keeps its opener and text
 #[test]
 fn integ_unclosed_03_bold_with_newline() {
     let src = b"**unclosed bold\n";
     let c = MarkdownParser::parse(src);
     assert!(c.bolds.is_empty());
     assert_eq!(c.texts.len(), 1);
-    assert_eq!(txt(src, c.texts[0]), "unclosed bold");
+    assert_eq!(txt(src, c.texts[0]), "**unclosed bold");
 }
 
 // 04. Emphasis that closes across a line break keeps its span and the
@@ -1268,4 +1269,290 @@ fn integ_alloc_03_output_is_unaffected() {
     assert_eq!(c.autolinks.len(), 1);
     assert_eq!(c.links.len(), 2);
     assert_eq!(c.fenced_codes.len(), 1);
+}
+
+// ================================================================
+// plain text between blocks
+// ================================================================
+
+fn texts(src: &[u8], c: &meon_md::MarkdownContent<'_>) -> Vec<String> {
+    c.texts.iter().map(|s| txt(src, *s).to_string()).collect()
+}
+
+// 01. Blank lines between two paragraphs belong to neither text run
+#[test]
+fn integ_gap_01_blank_lines_split_text() {
+    let src = b"a\n\n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+}
+
+// 02. Trailing blank lines produce no text
+#[test]
+fn integ_gap_02_trailing_blank_lines() {
+    let src = b"x\n\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["x"]);
+}
+
+// 03. A line consumed by a line rule leaves no text behind its eol
+#[test]
+fn integ_gap_03_thematic_break_line() {
+    let src = b"---\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.thematic_breaks.len(), 1);
+    assert!(c.texts.is_empty());
+}
+
+// 04. A lone eol is not text
+#[test]
+fn integ_gap_04_lone_eol() {
+    let c = MarkdownParser::parse(b"\n");
+    assert!(c.texts.is_empty());
+}
+
+// 05. Lines inside an unclosed fence are not text
+#[test]
+fn integ_gap_05_fence_content() {
+    let src = b"```a\n\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.fenced_codes.len(), 1);
+    assert!(c.texts.is_empty());
+}
+
+// 06. A marker-only blockquote line contributes no text to the next paragraph
+#[test]
+fn integ_gap_06_empty_blockquote_line() {
+    let src = b">\n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 1);
+    assert_eq!(texts(src, &c), vec!["b"]);
+}
+
+// 07. Heading content and the following paragraph stay separate across blank lines
+#[test]
+fn integ_gap_07_heading_then_paragraph() {
+    let src = b"# h\n\n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["h", "b"]);
+}
+
+// 08. Trailing spaces on a paragraph's last line are still a hard break
+#[test]
+fn integ_gap_08_space_hard_break_on_last_line() {
+    let src = b"a  \n\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+    assert_eq!(c.hard_breaks.len(), 1);
+    assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
+}
+
+// 09. A trailing backslash on a paragraph's last line is still a hard break
+#[test]
+fn integ_gap_09_backslash_hard_break_on_last_line() {
+    let src = b"a\\\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a"]);
+    assert_eq!(c.hard_breaks.len(), 1);
+    assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
+}
+
+// 10. The text of a heading and of the paragraph on the next line stay apart
+#[test]
+fn integ_gap_10_heading_text_does_not_merge_into_paragraph() {
+    let src = b"# a\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+}
+
+// 11. The text of a blockquote line and of the following paragraph stay apart
+#[test]
+fn integ_gap_11_blockquote_text_does_not_merge_into_paragraph() {
+    let src = b"> a\nb";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a", "b"]);
+}
+
+// 12. The text of a list item and of the following paragraph stay apart
+#[test]
+fn integ_gap_12_list_item_text_does_not_merge_into_paragraph() {
+    let src = b"- x\ny";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["x", "y"]);
+}
+
+// 13. Lines of one paragraph still merge into a single text across `eol`
+#[test]
+fn integ_gap_13_paragraph_lines_still_merge() {
+    let src = b"a\nb\nc";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(texts(src, &c), vec!["a\nb\nc"]);
+}
+
+// ================================================================
+// delimiter runs the grammar does not declare
+// ================================================================
+
+// 01. `<<` is not an autolink opener: the comparison stays text
+#[test]
+fn integ_undeclared_01_double_angle_is_text() {
+    let src = b"use x << 2 when y > 0\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.autolinks.is_empty());
+    assert_eq!(texts(src, &c), vec!["use x << 2 when y > 0"]);
+}
+
+// 02. A double backtick is not a code span: it stays text, and emphasis
+//     inside it is still found
+#[test]
+fn integ_undeclared_02_double_backtick_is_text() {
+    let src = b"x ``*a*`` y\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.codes.is_empty());
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(texts(src, &c), vec!["x ``", "`` y"]);
+}
+
+// ================================================================
+// emphasis left open at the end of a paragraph
+// ================================================================
+
+// 01. An unclosed italic does not take the italic closed inside the bold
+#[test]
+fn integ_unclosed_01_inner_italic_kept() {
+    let src = b"*a **b *c* d** e\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(txt(src, c.italics[0]), "c");
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "b *c* d");
+}
+
+// 02. An unclosed bold does not take the bold closed inside the italic
+#[test]
+fn integ_unclosed_02_inner_bold_kept() {
+    let src = b"**a *b **c** d* e\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "c");
+    assert_eq!(c.italics.len(), 1);
+    assert_eq!(txt(src, c.italics[0]), "b **c** d");
+}
+
+// ================================================================
+// a run of `[` before a link
+// ================================================================
+
+// 01. The `[` before the link's own opener stays text
+#[test]
+fn integ_bracket_run_01_extra_bracket_is_text() {
+    let src = b"see [[a](u) here\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert_eq!(txt(src, c.links[0].text), "a");
+    assert_eq!(texts(src, &c), vec!["see [", " here"]);
+}
+
+// 02. `![[a](u)` is a link after the text `![`, not an image
+#[test]
+fn integ_bracket_run_02_bang_before_run_is_text() {
+    let src = b"![[a](u)\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(texts(src, &c), vec!["!["]);
+}
+
+// ================================================================
+// line ends and hard breaks
+// ================================================================
+
+// 01. An escaped backslash at the end of a line is not a hard break
+#[test]
+fn integ_line_end_01_escaped_backslash() {
+    let src = b"a\\\\\nb\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.hard_breaks.is_empty());
+    assert_eq!(texts(src, &c), vec!["a\\\\\nb"]);
+}
+
+// 02. A single trailing space joins the lines like a bare line break
+#[test]
+fn integ_line_end_02_single_space() {
+    let src = b"a \nb\n";
+    let c = MarkdownParser::parse(src);
+    assert!(c.hard_breaks.is_empty());
+    assert_eq!(texts(src, &c), vec!["a \nb"]);
+}
+
+// 03. Two trailing spaces and a backslash are still hard breaks
+#[test]
+fn integ_line_end_03_markers() {
+    let src = b"a  \nb\\\nc\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.hard_breaks.len(), 2);
+    assert_eq!(texts(src, &c), vec!["a", "b", "c"]);
+}
+
+// ================================================================
+// balanced link text and url
+// ================================================================
+
+// 01. Brackets inside the text and parentheses inside the url are counted:
+//     the link takes them whole
+#[test]
+fn integ_link_bal_01_nested_brackets_and_parens() {
+    let src = b"[a [b] c](https://x.y/a_(b)) d\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert_eq!(txt(src, c.links[0].text), "a [b] c");
+    assert_eq!(txt(src, c.links[0].url), "https://x.y/a_(b)");
+}
+
+// 02. A badge — an image as the link text — is one link
+#[test]
+fn integ_link_bal_02_badge() {
+    let src = b"[![ci](https://x.y/b.svg)](https://x.y/ci)\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.links.len(), 1);
+    assert!(!c.links[0].is_image);
+    assert_eq!(txt(src, c.links[0].text), "![ci](https://x.y/b.svg)");
+    assert_eq!(txt(src, c.links[0].url), "https://x.y/ci");
+}
+
+// ================================================================
+// `\r\n` line ends
+// ================================================================
+
+// 01. A fence closes on a `\r\n` line, and text ends before the `\r`
+#[test]
+fn integ_crlf_01_fence_and_text() {
+    let src = b"```\r\ncode\r\n```\r\nafter\r\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.fenced_codes.len(), 1);
+    assert_eq!(texts(src, &c), vec!["after"]);
+}
+
+// 02. Headings and thematic breaks read the line without its `\r`
+#[test]
+fn integ_crlf_02_line_rules() {
+    let src = b"# Title\r\n---\r\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.headings.len(), 1);
+    assert_eq!(txt(src, c.headings[0].1), "Title");
+    assert_eq!(c.thematic_breaks.len(), 1);
+}
+
+// ================================================================
+// blockquote lines are one inline run
+// ================================================================
+
+// 01. Emphasis spans two lines of one blockquote
+#[test]
+fn integ_quote_run_01_bold_across_lines() {
+    let src = b"> **a\n> b**\n";
+    let c = MarkdownParser::parse(src);
+    assert_eq!(c.blockquotes.len(), 1);
+    assert_eq!(c.bolds.len(), 1);
+    assert_eq!(txt(src, c.bolds[0]), "a\n> b");
 }

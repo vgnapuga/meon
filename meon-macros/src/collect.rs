@@ -15,7 +15,7 @@
 //! This front-end is the only parser of the DSL that reports errors. The
 //! runtime `parse_*!` macros pattern-match the same tokens again, but they
 //! only ever see a stream that passed here and was then canonicalised by
-//! [`crate::normalize`]. Two rules follow from that:
+//! [`crate::normalize`]. Three rules follow from that:
 //!
 //! - **Unknown keywords are errors.** An identifier in statement position that
 //!   this module does not recognise (a typo, a keyword from the wrong section)
@@ -26,6 +26,9 @@
 //!   and its `prefix`; a `key_value` rule needs `eq`, `allow_sep`, `end`,
 //!   `key` and `value`. A missing one is a located error, not a silently
 //!   skipped standalone rule.
+//! - **No arm that can never match.** An `asymmetric` rule with `balanced`
+//!   or `parse_inside` set opens one frame per open byte, so its only arm is
+//!   `1 => field`; any other arm, a second one included, is a located error.
 //!
 //! Order and separators, on the other hand, are *not* enforced here: settings
 //! and sub-rules may come in any order, with or without `;` / `,`, and the
@@ -35,7 +38,7 @@ use proc_macro2::{Delimiter, Ident, Literal, Span as PS, TokenStream as TS2, Tok
 
 use crate::cursor::Cursor;
 use crate::error::{Error, Result};
-use crate::model::{CF, StandaloneRule};
+use crate::model::{CF, ChainedFlags, StandaloneRule};
 
 /// Walk the `inline { ... }` section.
 pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
@@ -115,10 +118,16 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     c.advance();
                     let byte_lit = c.expect_lit("symmetric byte")?;
                     let body = c.next_group(Delimiter::Brace, "symmetric body")?;
-                    collect_match_arms(body.stream(), &["parse_inside", "balanced"], cf)?;
+                    if let Some(span) = setting_span(body.stream(), "balanced") {
+                        return Err(Error::new(
+                            span,
+                            "`symmetric` takes no `balanced`: it opens and closes with one \
+                             byte, so a run never nests in a run of its own count",
+                        ));
+                    }
+                    collect_match_arms(body.stream(), &["parse_inside"], cf)?;
                     let parse_inside =
                         require_flag(body.stream(), "parse_inside", body.span(), "symmetric")?;
-                    require_flag(body.stream(), "balanced", body.span(), "symmetric")?;
                     collect_symmetric_standalone(body.stream(), byte_lit, !parse_inside, cf)?;
                 }
                 "asymmetric" => {
@@ -130,12 +139,14 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     collect_match_arms(body.stream(), &["balanced", "parse_inside"], cf)?;
                     let parse_inside =
                         require_flag(body.stream(), "parse_inside", body.span(), "asymmetric")?;
-                    require_flag(body.stream(), "balanced", body.span(), "asymmetric")?;
+                    let balanced =
+                        require_flag(body.stream(), "balanced", body.span(), "asymmetric")?;
                     collect_asymmetric_standalone(
                         body.stream(),
                         open_lit,
                         close_lit,
                         !parse_inside,
+                        balanced,
                         cf,
                     )?;
                 }
@@ -145,8 +156,8 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
                     let ty = c.collect_until_brace();
                     let inner = c.next_group(Delimiter::Brace, "chained inner")?;
                     let (f, cap) = c.arrow_field_cap("chained")?;
-                    cf.inline.push((f.clone(), ty.clone(), cap));
-                    collect_chained_standalone(inner.stream(), ty, f, cf)?;
+                    cf.inline.push((f.clone(), ty.clone(), cap.clone()));
+                    collect_chained_standalone(inner.stream(), ty, f, cap, cf)?;
                 }
                 "key_value" => {
                     c.advance();
@@ -174,6 +185,14 @@ fn collect_on_trigger(ts: TS2, cf: &mut CF) -> Result<()> {
 
 /// Read the boolean value of a `name = true|false;` flag inside a rule body.
 /// Returns `None` when the flag is absent or its value is not `true` / `false`.
+/// The span of a `name = ...` setting in a rule body, if the body has one.
+fn setting_span(ts: TS2, name: &str) -> Option<PS> {
+    ts.into_iter().find_map(|tt| match tt {
+        TT::Ident(id) if id == name => Some(id.span()),
+        _ => None,
+    })
+}
+
 fn flag_value(ts: TS2, name: &str) -> Option<bool> {
     let mut c = Cursor::new(ts);
     while let Some(tt) = c.peek().cloned() {
@@ -240,14 +259,28 @@ fn collect_symmetric_standalone(ts: TS2, byte: Literal, opaque: bool, cf: &mut C
     Ok(())
 }
 
-/// Extract the `N => field` exact-count arm of an `asymmetric` block.
+/// Extract the `N => field` exact-count arms of an `asymmetric` block.
+///
+/// A rule with `balanced` or `parse_inside` set reads each opening byte
+/// separately, in a depth-counting forward search or on the bounded stack.
+/// Only a `1 =>` arm can match, and any other arm is an error.
 fn collect_asymmetric_standalone(
     ts: TS2,
     open: Literal,
     close: Literal,
     opaque: bool,
+    balanced: bool,
     cf: &mut CF,
 ) -> Result<()> {
+    let stack = balanced || !opaque;
+    let mut arms = 0usize;
+    let one_arm = |span| {
+        Error::new(
+            span,
+            "an `asymmetric` rule with `balanced = true` or `parse_inside = true` opens one \
+             frame per open byte, so its only arm is `1 => field`",
+        )
+    };
     let mut c = Cursor::new(ts);
     while c.peek().is_some() {
         match c.peek().cloned() {
@@ -260,6 +293,9 @@ fn collect_asymmetric_standalone(
                 c.skip(';');
             }
             Some(TT::Ident(id)) if id == "_" => {
+                if stack {
+                    return Err(one_arm(id.span()));
+                }
                 c.advance();
                 if c.is_fat_arrow() {
                     c.pos += 2;
@@ -271,6 +307,10 @@ fn collect_asymmetric_standalone(
             Some(TT::Literal(count)) => {
                 c.advance();
                 if c.is_fat_arrow() {
+                    arms += 1;
+                    if stack && (arms > 1 || int_value(&count) != Some(1)) {
+                        return Err(one_arm(count.span()));
+                    }
                     let (f, cap) = c.arrow_field_cap("asym exact")?;
                     c.skip(',');
                     cf.standalone.push(StandaloneRule::AsymmetricExact {
@@ -279,6 +319,7 @@ fn collect_asymmetric_standalone(
                         close: close.clone(),
                         count,
                         opaque,
+                        balanced,
                         cap,
                     });
                 }
@@ -294,13 +335,45 @@ fn collect_asymmetric_standalone(
     Ok(())
 }
 
-/// Extract the two delimiter pairs and prefix of a `chained` block.
-fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF) -> Result<()> {
+/// The value of an integer literal token, as the compiler reads it: `1`,
+/// `1u32`, `1_u32`, `0x1`, `0o1`, `0b1`. `None` for any other literal.
+fn int_value(lit: &Literal) -> Option<u128> {
+    let s = lit.to_string().replace('_', "");
+    let (digits, radix) = match s.get(..2) {
+        Some("0x") => (&s[2..], 16),
+        Some("0o") => (&s[2..], 8),
+        Some("0b") => (&s[2..], 2),
+        _ => (s.as_str(), 10),
+    };
+    let end = digits
+        .find(|ch: char| !ch.is_digit(radix))
+        .unwrap_or(digits.len());
+    let (num, suffix) = digits.split_at(end);
+    let suffixes = [
+        "", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+    ];
+    if num.is_empty() || !suffixes.contains(&suffix) {
+        return None;
+    }
+    u128::from_str_radix(num, radix).ok()
+}
+
+/// Extract the two delimiter pairs, their settings and the prefix of a
+/// `chained` block.
+fn collect_chained_standalone(
+    ts: TS2,
+    ty: TS2,
+    outer_field: Ident,
+    cap: Literal,
+    cf: &mut CF,
+) -> Result<()> {
     let mut c = Cursor::new(ts);
     let mut open1: Option<Literal> = None;
     let mut close1: Option<Literal> = None;
     let mut open2: Option<Literal> = None;
     let mut close2: Option<Literal> = None;
+    let mut flags1: Option<ChainedFlags> = None;
+    let mut flags2: Option<ChainedFlags> = None;
     let mut prefix_lit: Option<Literal> = None;
     let mut ff: Option<Ident> = None;
     let mut sf: Option<Ident> = None;
@@ -319,18 +392,20 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                     }
                 }
                 let settings = c.next_group(Delimiter::Brace, "chained settings")?;
-                require_flag(
-                    settings.stream(),
-                    "parse_inside",
-                    settings.span(),
-                    "chained component",
-                )?;
-                require_flag(
-                    settings.stream(),
-                    "balanced",
-                    settings.span(),
-                    "chained component",
-                )?;
+                let flags = ChainedFlags {
+                    parse_inside: require_flag(
+                        settings.stream(),
+                        "parse_inside",
+                        settings.span(),
+                        "chained component",
+                    )?,
+                    balanced: require_flag(
+                        settings.stream(),
+                        "balanced",
+                        settings.span(),
+                        "chained component",
+                    )?,
+                };
                 if c.is_fat_arrow() {
                     c.pos += 2;
                     let fi = c.next_ident("chained field")?;
@@ -338,10 +413,12 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                     if open1.is_none() {
                         open1 = Some(o);
                         close1 = Some(cl);
+                        flags1 = Some(flags);
                         ff = Some(fi);
                     } else {
                         open2 = Some(o);
                         close2 = Some(cl);
+                        flags2 = Some(flags);
                         sf = Some(fi);
                     }
                 }
@@ -373,8 +450,22 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
         }
     }
 
-    match (open1, close1, open2, close2, prefix_lit, pf, ff, sf) {
-        (Some(o1), Some(c1), Some(o2), Some(c2), Some(p), Some(pfi), Some(ffi), Some(sfi)) => {
+    match (
+        (open1, close1, flags1),
+        (open2, close2, flags2),
+        prefix_lit,
+        pf,
+        ff,
+        sf,
+    ) {
+        (
+            (Some(o1), Some(c1), Some(f1)),
+            (Some(o2), Some(c2), Some(f2)),
+            Some(p),
+            Some(pfi),
+            Some(ffi),
+            Some(sfi),
+        ) => {
             cf.standalone.push(StandaloneRule::Chained {
                 field: outer_field,
                 open1: o1,
@@ -386,6 +477,9 @@ fn collect_chained_standalone(ts: TS2, ty: TS2, outer_field: Ident, cf: &mut CF)
                 pf: pfi,
                 ff: ffi,
                 sf: sfi,
+                first_flags: f1,
+                second_flags: f2,
+                cap,
             });
             Ok(())
         }
@@ -538,10 +632,10 @@ pub(crate) fn collect_lines(ts: TS2, cf: &mut CF) -> Result<()> {
                 .unwrap_or_else(|| Ident::new("_v", PS::call_site()));
             let body = body_group.stream();
             if is_simple {
-                let (bytes, min) = parse_line_simple_args(args.stream())?;
+                let (pat, min) = parse_min_args(args.stream(), args.span(), "line_simple")?;
                 cf.standalone.push(StandaloneRule::LineUniform {
                     field: f,
-                    bytes,
+                    pat,
                     min,
                     ty,
                     var,
@@ -616,10 +710,10 @@ fn collect_block_simple(ts: TS2, cf: &mut CF) -> Result<()> {
                 c.skip(';');
                 cf.block_simple.push((f.clone(), cap.clone()));
                 if kind == "fence" {
-                    let (byte, min) = parse_fence_args(args.stream())?;
+                    let (pat, min) = parse_min_args(args.stream(), args.span(), "fence")?;
                     cf.standalone.push(StandaloneRule::Fence {
                         field: f,
-                        byte,
+                        pat,
                         min,
                         cap,
                     });
@@ -652,14 +746,14 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                 let (f, cap) = c.arrow_field_cap("block field")?;
                 c.skip(';');
                 cf.block.push((f.clone(), ty.clone(), cap));
-                let bytes = Cursor::new(pat_stream).collect_lit_alternation();
+                let pat = Cursor::new(pat_stream).collect_pattern("block marker")?;
                 let var = vars
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| Ident::new("_b", PS::call_site()));
                 cf.standalone.push(StandaloneRule::BlockMarker {
                     field: f,
-                    bytes,
+                    pat,
                     ty,
                     var,
                     body: body_group.stream(),
@@ -675,7 +769,7 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                 let (f, cap) = c.arrow_field_cap("num field")?;
                 c.skip(';');
                 cf.block.push((f.clone(), ty.clone(), cap));
-                let end_bytes = parse_num_end_bytes(num_args.stream());
+                let (digits, ends) = parse_num_args(num_args.stream(), num_args.span())?;
                 let mut vi = vars.into_iter();
                 let num_var = vi
                     .next()
@@ -685,7 +779,8 @@ fn collect_block(ts: TS2, cf: &mut CF) -> Result<()> {
                     .unwrap_or_else(|| Ident::new("_k", PS::call_site()));
                 cf.standalone.push(StandaloneRule::BlockNumbered {
                     field: f,
-                    end_bytes,
+                    digits,
+                    ends,
                     ty,
                     num_var,
                     kind_var,
@@ -716,44 +811,35 @@ fn parse_line_marker_args(ts: TS2) -> Result<(Literal, Literal)> {
     Ok((byte, c.expect_lit("line marker max")?))
 }
 
-fn parse_line_simple_args(ts: TS2) -> Result<(Vec<Literal>, Literal)> {
+/// The byte pattern and minimum run of `line_simple(pat, min = N)` and
+/// `fence(pat, min = N)`.
+fn parse_min_args(ts: TS2, span: PS, rule: &str) -> Result<(TS2, Literal)> {
     let mut c = Cursor::new(ts);
-    let bytes = c.collect_lit_alternation();
+    let pat = c.collect_pattern(&format!("{rule} bytes"))?;
     c.skip(',');
+    if c.peek_str().as_deref() != Some("min") {
+        return Err(Error::new(span, format!("`{rule}` rule needs `min = N`")));
+    }
     c.advance();
     c.skip_eq_alone();
-    Ok((bytes, c.expect_lit("line_simple min")?))
-}
-
-fn parse_fence_args(ts: TS2) -> Result<(Literal, Literal)> {
-    let mut c = Cursor::new(ts);
-    let byte = c.expect_lit("fence byte")?;
-    c.skip(',');
-    c.advance();
-    c.skip_eq_alone();
-    Ok((byte, c.expect_lit("fence min")?))
+    Ok((pat, c.expect_lit(&format!("{rule} min"))?))
 }
 
 fn parse_cont_args(ts: TS2) -> Result<Literal> {
     Cursor::new(ts).expect_lit("cont byte")
 }
 
-fn parse_num_end_bytes(ts: TS2) -> Vec<Literal> {
+/// The digit and end patterns of `num(digits, end = ends)`.
+fn parse_num_args(ts: TS2, span: PS) -> Result<(TS2, TS2)> {
     let mut c = Cursor::new(ts);
-    while let Some(tt) = c.peek() {
-        if let TT::Ident(id) = tt {
-            if id == "end" {
-                break;
-            }
-        }
-        c.advance();
-    }
-    if c.peek().is_none() {
-        return vec![];
+    let digits = c.collect_pattern("num digits")?;
+    c.skip(',');
+    if c.peek_str().as_deref() != Some("end") {
+        return Err(Error::new(span, "`num` rule needs `end = pattern`"));
     }
     c.advance();
     c.skip_eq_alone();
-    c.collect_lit_alternation()
+    Ok((digits, c.collect_pattern("num end")?))
 }
 
 #[cfg(test)]
@@ -791,7 +877,7 @@ mod tests {
     fn test_02_on_trigger_symmetric_exact() {
         let cf = ci(quote! {
             on_trigger(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], }
+                symmetric b'*' { parse_inside = true; 1 => italics [40], }
             }
         });
         assert_eq!(cf.standalone.len(), 1);
@@ -804,7 +890,7 @@ mod tests {
         let cf = ci(quote! {
             on_trigger(b'*') {
                 symmetric b'*' {
-                    parse_inside = true; balanced = false;
+                    parse_inside = true;
                     1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
                 }
             }
@@ -839,6 +925,42 @@ mod tests {
         assert_eq!(cf.inline.len(), 1);
         assert_eq!(cf.inline[0].0.to_string(), "links");
         assert_eq!(standalone_field(&cf.standalone[0]).to_string(), "links");
+        let StandaloneRule::Chained {
+            first_flags,
+            second_flags,
+            cap,
+            ..
+        } = &cf.standalone[0]
+        else {
+            panic!("expected a Chained rule");
+        };
+        assert!(!first_flags.parse_inside && !first_flags.balanced);
+        assert!(!second_flags.parse_inside && !second_flags.balanced);
+        assert_eq!(cap.to_string(), "100");
+    }
+
+    // 05b. The settings of each chained component are kept apart
+    #[test]
+    fn test_05b_chained_component_flags() {
+        let cf = ci(quote! {
+            on_trigger(b'[') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = true; } => text,
+                    | b'(', b')' | { balanced = false; parse_inside = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links [50]
+            }
+        });
+        let StandaloneRule::Chained {
+            first_flags,
+            second_flags,
+            ..
+        } = &cf.standalone[0]
+        else {
+            panic!("expected a Chained rule");
+        };
+        assert!(first_flags.parse_inside && first_flags.balanced);
+        assert!(!second_flags.parse_inside && !second_flags.balanced);
     }
 
     // 06. on_trigger: key_value block produces a typed inline field and a KeyValue rule
@@ -871,7 +993,7 @@ mod tests {
     fn test_08_memchr_is_unknown_keyword() {
         let e = err_inline(quote! {
             memchr(b'*') {
-                symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], }
+                symmetric b'*' { parse_inside = true; 1 => italics [40], }
             }
         });
         assert!(e.contains("unknown keyword `memchr` in `inline`"), "{e}");
@@ -941,16 +1063,19 @@ mod tests {
         assert!(e.contains("unknown keyword `number` in `block`"), "{e}");
     }
 
-    // 17. A symmetric / asymmetric body must state both flags, as true|false
+    // 17. A symmetric body must state `parse_inside`, and takes no
+    //     `balanced`; an asymmetric body must state both, as true|false
     #[test]
     fn test_17_missing_or_invalid_flags() {
-        let e = err_inline(
-            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } },
-        );
+        let e = err_inline(quote! { on_trigger(b'*') { symmetric b'*' { 1 => italics [40], } } });
         assert!(
-            e.contains("`symmetric` body is missing `balanced = true|false;`"),
+            e.contains("`symmetric` body is missing `parse_inside = true|false;`"),
             "{e}"
         );
+        let e = err_inline(quote! {
+            on_trigger(b'*') { symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], } }
+        });
+        assert!(e.contains("`symmetric` takes no `balanced`"), "{e}");
 
         let e = err_inline(
             quote! { on_trigger(b'<') { asymmetric b'<', b'>' { balanced = false; 1 => autolinks [100], } } },
@@ -961,7 +1086,7 @@ mod tests {
         );
 
         let e = err_inline(
-            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = maybe; balanced = false; 1 => italics [40], } } },
+            quote! { on_trigger(b'*') { symmetric b'*' { parse_inside = maybe; 1 => italics [40], } } },
         );
         assert!(e.contains("missing `parse_inside = true|false;`"), "{e}");
     }
@@ -971,7 +1096,7 @@ mod tests {
     fn test_18_flags_any_order() {
         let cf = ci(quote! {
             on_trigger(b'`') {
-                symmetric b'`' { balanced = false; parse_inside = false; 1 => codes [80], }
+                symmetric b'`' { parse_inside = false; 1 => codes [80], }
             }
         });
         assert!(matches!(
@@ -1014,6 +1139,80 @@ mod tests {
             e.contains("`chained component` body is missing `balanced"),
             "{e}"
         );
+    }
+
+    // 20. An asymmetric rule kept on the stack has only a `1 =>` arm and
+    //     carries its `balanced` flag; a forward-searched one may have others
+    #[test]
+    fn test_20_asymmetric_stack_arms() {
+        for flags in [
+            quote! { balanced = true; parse_inside = false; },
+            quote! { balanced = false; parse_inside = true; },
+        ] {
+            for arm in [
+                quote! { 2 => pairs [40], },
+                quote! { _ => pairs [40], },
+                quote! { 1 => pairs [40], },
+            ] {
+                let e = err_inline(quote! {
+                    on_trigger(b'{', b'}') { asymmetric b'{', b'}' { #flags 1 => objs [40], #arm } }
+                });
+                assert!(e.contains("so its only arm is `1 => field`"), "{e}");
+            }
+        }
+        let cf = ci(quote! {
+            on_trigger(b'{', b'}') {
+                asymmetric b'{', b'}' { parse_inside = true; balanced = true; 1 => objs [40], }
+            }
+        });
+        assert!(matches!(
+            cf.standalone[..],
+            [StandaloneRule::AsymmetricExact {
+                balanced: true,
+                opaque: false,
+                ..
+            }]
+        ));
+        let cf = ci(quote! {
+            on_trigger(b'<') {
+                asymmetric b'<', b'>' { balanced = false; parse_inside = false; 1 => one [40], 2 => two [40], }
+            }
+        });
+        assert_eq!(cf.standalone.len(), 2);
+        // Any spelling of the value 1 is that arm.
+        for arm in [
+            quote! { 1u32 },
+            quote! { 1_u32 },
+            quote! { 0x1 },
+            quote! { 01 },
+        ] {
+            let cf = ci(quote! {
+                on_trigger(b'{', b'}') {
+                    asymmetric b'{', b'}' { balanced = true; parse_inside = true; #arm => objs [40], }
+                }
+            });
+            assert_eq!(cf.standalone.len(), 1);
+        }
+    }
+
+    // 21. An integer literal's value, as the compiler reads it
+    #[test]
+    fn test_21_int_value() {
+        let v = |s: &str| int_value(&s.parse::<Literal>().unwrap());
+        for (s, n) in [
+            ("1", 1),
+            ("1u32", 1),
+            ("1_000", 1000),
+            ("0x1f", 31),
+            ("0o17", 15),
+            ("0b101", 5),
+            ("7usize", 7),
+        ] {
+            assert_eq!(v(s), Some(n), "{s}");
+        }
+        for s in ["1.0", "b'1'", "\"1\"", "1f32"] {
+            assert_eq!(v(s), None, "{s}");
+        }
     }
 
     // 09. A line marker produces a LineMarker rule and a cf.line entry
@@ -1094,5 +1293,65 @@ mod tests {
     fn test_15_inline_missing_cap_err() {
         let mut cf = CF::default();
         assert!(collect_inline(quote! { fallback => texts; }, &mut cf).is_err());
+    }
+
+    // 22. Block and line byte patterns are passed on as written: several
+    //     fence bytes, digit and end ranges, a range marker, a range run
+    #[test]
+    fn test_22_patterns_passed_as_written() {
+        let cf = cb(quote! {
+            block_simple { fence(b'`' | b'~', min = 3) => codes [40]; }
+            block {
+                (b'x'..=b'z' | b'+') |b|: Item { kind: b } => items [40];
+                num(b'1'..=b'9', end = b'.' | b'a'..=b'c') |n, k|: Num { num: n, kind: k } => nums [40];
+            }
+        });
+        let pats: Vec<String> = cf
+            .standalone
+            .iter()
+            .map(|r| match r {
+                StandaloneRule::Fence { pat, min, .. } => format!("{pat} / {min}"),
+                StandaloneRule::BlockMarker { pat, .. } => pat.to_string(),
+                StandaloneRule::BlockNumbered { digits, ends, .. } => format!("{digits} / {ends}"),
+                _ => unreachable!(),
+            })
+            .collect();
+        let want = [
+            quote! { b'`' | b'~' }.to_string() + " / 3",
+            quote! { b'x'..=b'z' | b'+' }.to_string(),
+            quote! { b'1'..=b'9' }.to_string() + " / " + &quote! { b'.' | b'a'..=b'c' }.to_string(),
+        ];
+        assert_eq!(pats, want);
+
+        let cf = cl(quote! {
+            line_simple(b'0'..=b'9' | b'=', min = 3) |b|: Rule { kind: b } => rules [40];
+        });
+        let StandaloneRule::LineUniform { pat, .. } = &cf.standalone[0] else {
+            unreachable!()
+        };
+        assert_eq!(pat.to_string(), quote! { b'0'..=b'9' | b'=' }.to_string());
+    }
+
+    // 23. A minimum given under any other key, or bare, is an error, as is a
+    //     `num` without `end`
+    #[test]
+    fn test_23_min_and_end_keys_required() {
+        let err = |r: Result<()>| r.unwrap_err().to_compile_error().to_string();
+        let mut cf = CF::default();
+        let e = err(collect_blocks(
+            quote! { block_simple { fence(b'`', max = 3) => codes [40]; } },
+            &mut cf,
+        ));
+        assert!(e.contains("`fence` rule needs `min = N`"), "{e}");
+        let e = err(collect_lines(
+            quote! { line_simple(b'-', 3) |b|: Rule { kind: b } => rules [40]; },
+            &mut cf,
+        ));
+        assert!(e.contains("`line_simple` rule needs `min = N`"), "{e}");
+        let e = err(collect_blocks(
+            quote! { block { num(b'0'..=b'9', b'.') |n, k|: Num { num: n, kind: k } => nums [40]; } },
+            &mut cf,
+        ));
+        assert!(e.contains("`num` rule needs `end = pattern`"), "{e}");
     }
 }

@@ -46,7 +46,10 @@ pub use crate::parse_block;
 /// # Per-line dispatch
 ///
 /// ```text
-/// 1. Blank line          → flush the run, close open `cont` frames, advance.
+/// 1. Blank line          → flush the run, close every open frame — unless a
+///                          fence is the innermost one: the line is then fence
+///                          content and every frame stays open — advance. A
+///                          line of `sep` and `tab` bytes alone is blank.
 /// 2. parse_block! peel   → continue or close the frames already open.
 /// 3. parse_block! open   → open new fence / cont / block items.
 /// 4. parse_line!         → match a whole-line rule.
@@ -68,10 +71,23 @@ pub use crate::parse_block;
 /// at a blank line, at a line where a line or block rule matches, or at the
 /// end of input. Inside the run every `eol` is ordinary content, so the
 /// inline stack survives it: a grammar with empty `lines {}` / `blocks {}`
-/// sections (JSON) gets one run over the whole input, blank lines aside.
+/// sections (JSON) gets one run over the whole input, blank lines aside. The
+/// `eol` that ends the run's last line is not part of the scanned run, the
+/// same as for a single-line call; the paragraph span still includes it.
 ///
-/// Trailing content after a matched line or block marker is scanned by a
-/// single-line `parse_inline!` call; it cannot continue onto another line.
+/// Lines of `cont` frames alone run the same way: a line whose content
+/// follows the markers of the open frames, all of them `cont` frames, starts
+/// a run, and the next lines of the same frames alone — the same depth, no
+/// frame or item opened, content that is not `sep` and `tab` bytes alone —
+/// go on with it. The markers of every line after the first are no content
+/// of the run: the inline scan steps past them at each `eol`, and its forward
+/// searches skip the bytes among them. An element can still span them, as
+/// a pair across two lines of the frames does. The run is flushed at the
+/// first line that does not go on with it, or at the end of input.
+///
+/// Trailing content after any other matched line or block marker is scanned
+/// by a single-line `parse_inline!` call; it cannot continue onto another
+/// line.
 ///
 /// # Standalone iterators
 ///
@@ -83,7 +99,7 @@ pub use crate::parse_block;
 /// # Expansion
 ///
 /// ```text
-/// parse_text!(src; sep=…, eol=…, tab=…, escape=…, max_nest=…; <sections>)
+/// parse_text!(src; sep=…, eol=…, tab=…, escape=…, max_nest=…, crlf=…; <sections>)
 ///    ├─ @cs   — split the sections into [inline], [lines], [blocks]
 ///    ├─ @ci   — inline settings: merge_simple, fallback, hard_break, the
 ///    │          on_trigger byte sets
@@ -94,14 +110,15 @@ pub use crate::parse_block;
 /// # Loop state
 ///
 /// - `pos` always advances; the loop is O(n) in the source length.
-/// - `_active_stack: [(u8, u8, u8, u32); max_nest]` and `_active_depth` —
+/// - `_active_stack: [(u32, u32); max_nest]` and `_active_depth` —
 ///   the open block frames (see [`crate::parse_block!`] for the encoding).
 /// - `para_start` — start of the current fallthrough run, `None` when no run
 ///   is open. Also the run's inline-scan start.
-/// - `text_start` — start of pending plain text for the single-line inline
-///   calls. Kept equal to `pos` while a run is deferred, so the flushes at the
-///   run's close points are no-ops; the run's text is emitted by its own
-///   `parse_inline!` call.
+///
+/// Plain text is emitted only by `parse_inline!`: by the run's own call for a
+/// deferred run, by the single-line call for content after a matched marker.
+/// Bytes outside both — `eol` bytes between runs, lines consumed by a `line`
+/// rule or a fence — belong to no fallback span.
 ///
 /// # Context bytes
 ///
@@ -112,15 +129,17 @@ pub use crate::parse_block;
 /// | `tab`      | Tab character                                    | `b'\t'`       |
 /// | `escape`   | Escape prefix                                    | `b'\\'`       |
 /// | `max_nest` | Nesting cap shared by the inline and block stacks | `1`           |
+/// | `crlf`     | A `\r` right before `eol` is part of the line end | `false`       |
 ///
 /// `max_nest` is always supplied by `define_parser!`. It bounds the unified
-/// inline stack of [`crate::parse_inline!`] (symmetric with `balanced = true`,
-/// asymmetric with `balanced = true` or `parse_inside = true`, key_value) and
-/// the block stack of [`crate::parse_block!`] (how deep `cont` / `fence`
-/// frames nest, and whether a `block` item opens inside an open block). At
-/// `max_nest = 1` nothing self-nests and at most one block is open at a time.
-/// Rules whose `balanced` and `parse_inside` flags are both `false` never
-/// touch the stack.
+/// inline stack of [`crate::parse_inline!`] (symmetric and asymmetric with
+/// `parse_inside = true`, key_value) and the block stack of
+/// [`crate::parse_block!`] (how deep `cont` / `fence` frames nest, and
+/// whether a `block` item opens inside an open block). At `max_nest = 1`
+/// nothing self-nests and at most one block is open at a time. A `symmetric`
+/// or `asymmetric` rule with `parse_inside = false` never touches the stack:
+/// it is a forward search, and an `asymmetric` one with `balanced = true`
+/// counts its own nesting without bound.
 ///
 /// # Known limitations
 ///
@@ -128,16 +147,17 @@ pub use crate::parse_block;
 ///   there is no precedence table.
 #[macro_export]
 macro_rules! parse_text {
-    // `max_nest` is always present: `define_parser!` defaults it to `1`
-    // before emitting this call.
+    // `max_nest` and `crlf` are always present: `define_parser!` defaults
+    // them to `1` and `false` before emitting this call.
     (
         $src:expr ;
         sep = $sep:literal, eol = $eol:literal,
-        tab = $tab:literal, escape = $esc:literal, max_nest = $maxn:literal ;
+        tab = $tab:literal, escape = $esc:literal, max_nest = $maxn:literal,
+        crlf = $crlf:ident ;
         $($sections:tt)*
     ) => {
         $crate::parse_text!(@cs
-            ctx = ($src, $sep, $eol, $tab, $esc, $maxn)
+            ctx = ($src, $sep, $eol, $tab, $esc, $maxn, $crlf)
             il  = []
             ln  = []
             bl  = []
@@ -215,14 +235,14 @@ macro_rules! parse_text {
     };
 
     (@ci
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal, $crlf:ident)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[$merge_il:tt] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
         rem=[]
     ) => {
         $crate::parse_text!(@cb
-            ctx=($src, $sep, $eol, $tab, $esc, $maxn)
+            ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf)
             merge_il=$merge_il tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -230,14 +250,14 @@ macro_rules! parse_text {
     };
 
     (@ci
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal, $crlf:ident)
         ln=[$($ln:tt)*] bl=[$($bl:tt)*]
         ms=[] ftx=[$tx:ident] ilt=[$($ilt:tt)*]
         hb=$hb:tt finders=$finders:tt
         rem=[]
     ) => {
         $crate::parse_text!(@cb
-            ctx=($src, $sep, $eol, $tab, $esc, $maxn)
+            ctx=($src, $sep, $eol, $tab, $esc, $maxn, $crlf)
             merge_il=false tx=$tx ilt=[$($ilt)*] ln=[$($ln)*]
             hb=$hb finders=$finders
             sr=[] br=[] fpara=[]
@@ -285,14 +305,14 @@ macro_rules! parse_text {
     };
 
     (@cb
-        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal)
+        ctx=($src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal, $crlf:ident)
         merge_il=$merge_il:tt tx=$tx:ident ilt=[$($ilt:tt)*] ln=[$($ln:tt)*]
         hb=$hb:tt finders=[$($f:literal)*]
         sr=[$($sr:tt)*] br=[$($br:tt)*] fpara=[$para:ident]
         rem=[]
     ) => {
         $crate::parse_text!(@body
-            $src, $sep, $eol, $tab, $esc, $maxn,
+            $src, $sep, $eol, $tab, $esc, $maxn, $crlf,
             $tx, $merge_il,
             [$($ilt)*], [$($ln)*],
             [$($sr)*], [$($br)*],
@@ -305,6 +325,7 @@ macro_rules! parse_text {
 
     (@body
             $src:expr, $sep:literal, $eol:literal, $tab:literal, $esc:literal, $maxn:literal,
+            $crlf:ident,
             $tx:ident, $merge_il:tt,
             [$($ilt:tt)*], [$($ln:tt)*],
             [$($sr:tt)*], [$($br:tt)*],
@@ -316,22 +337,14 @@ macro_rules! parse_text {
             let len: usize = src.len();
             let mut state = ParseState::new(len);
 
-            let mut _active_stack: [(u8, u8, u8, u32); $maxn] =
-                [(0u8, 0u8, 0u8, 0u32); $maxn];
+            let mut _active_stack: [(u32, u32); $maxn] = [(0u32, 0u32); $maxn];
             let mut _active_depth: usize = 0;
             let mut pos: usize = 0;
             let mut para_start: Option<u32> = None;
-            let mut text_start: u32 = 0;
-
-            macro_rules! flush_text {
-                ($end:expr) => {
-                    let _end = $end as u32;
-                    if text_start < _end {
-                        $crate::parse_text!(@dispatch state, $tx,
-                            $crate::span::Span::new(text_start, _end), $merge_il);
-                    }
-                };
-            }
+            // The open `cont` run: where its scan starts, where its last line
+            // ends, and the marker bytes of the frames it runs in.
+            let mut cont_run: Option<(usize, usize, usize)> = None;
+            let mut cont_bytes: [u8; $maxn] = [0u8; $maxn];
 
             macro_rules! close_para {
                 () => {
@@ -347,14 +360,59 @@ macro_rules! parse_text {
                 ($end:expr) => {
                     if let Some(s) = para_start {
                         let _ps = s as usize;
-                        let _pe = $end as usize;
+                        let mut _pe = $end as usize;
+                        if _pe > _ps && src[_pe - 1] == $eol {
+                            _pe -= 1;
+                            if $crlf && _pe > _ps && src[_pe - 1] == b'\r' {
+                                _pe -= 1;
+                            }
+                        }
                         if _ps < _pe {
-                            $crate::parse_inline!(
-                                state, src, _ps, _pe,
-                                $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true ; $($ilt)*
-                            );
+                            scan_para_run(&mut state, src, _ps, _pe);
                         }
                     }
+                };
+            }
+
+            // The scan of a paragraph run, out of line for the same reason as
+            // `scan_cont_run`.
+            #[inline(never)]
+            fn scan_para_run(state: &mut ParseState, src: &[u8], _ps: usize, _pe: usize) {
+                $crate::parse_inline!(
+                    state, src, _ps, _pe,
+                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn, true, crlf = $crlf ;
+                    $($ilt)*
+                );
+            }
+
+            // The scan of a `cont` run, out of line: the loop flushes a run
+            // from several places, and one copy of the inline engine serves
+            // them all.
+            #[inline(never)]
+            fn scan_cont_run(
+                state: &mut ParseState,
+                src: &[u8],
+                (_cs, _ce, _cd): (usize, usize, usize),
+                cont_bytes: &[u8; $maxn],
+            ) {
+                $crate::parse_inline!(
+                    state, src, _cs, _ce,
+                    $tx, $merge_il, $esc, $sep, $tab, $eol, $maxn,
+                    cont(cont_bytes, _cd), crlf = $crlf ; $($ilt)*
+                );
+            }
+            macro_rules! flush_cont {
+                () => {
+                    if let Some(_run) = cont_run.take() {
+                        scan_cont_run(&mut state, src, _run, &cont_bytes);
+                    }
+                };
+            }
+
+            // Is `src[$from..$to]` `sep` and `tab` bytes alone?
+            macro_rules! blank {
+                ($from:expr, $to:expr) => {
+                    src[$from..$to].iter().all(|&b| b == $sep || b == $tab)
                 };
             }
 
@@ -364,33 +422,71 @@ macro_rules! parse_text {
                     None => break,
                 };
 
-                if current_byte == $eol {
+                // The line's `eol`, and where its content ends: before the
+                // `\r` that comes right before that `eol` when `crlf` is set.
+                let line_eol = if current_byte == $eol {
+                    pos
+                } else {
+                    $crate::memchr::memchr($eol, &src[pos..]).map_or(len, |i| pos + i)
+                };
+                let current_line_end = if $crlf && line_eol < len && line_eol > pos && src[line_eol - 1] == b'\r' {
+                    line_eol - 1
+                } else {
+                    line_eol
+                };
+                let next_line_start = if line_eol < len { line_eol + 1 } else { len };
+
+                // A line of `sep` and `tab` bytes alone is as blank as an empty
+                // one. Most lines begin with neither, which tells them apart at
+                // once.
+                if pos == current_line_end
+                    || ((current_byte == $sep || current_byte == $tab)
+                        && blank!(pos, current_line_end))
+                {
+                    flush_cont!();
                     flush_para_inline!(pos);
-                    flush_text!(pos);
                     close_para!();
 
                     let is_fence = if $maxn == 1 {
-                        _active_depth > 0 && _active_stack[0].0 == 0u8
+                        _active_depth > 0 && _active_stack[0].0 != 0
                     } else {
-                        _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
+                        _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 != 0)
                     };
 
                     if !is_fence {
                         $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, pos ;
                             block_simple { $($sr)* } block { $($br)* });
                     }
-                    pos += 1;
+                    pos = next_line_start;
                     continue;
                 }
 
-                let current_line_end = $crate::memchr::memchr($eol, &src[pos..])
-                    .map(|i| pos + i)
-                    .unwrap_or(len);
-                let next_line_start = if current_line_end < len { current_line_end + 1 } else { len };
+                // With no block open, a line whose first byte begins no block
+                // or line rule goes on the paragraph run as the dispatch below
+                // would leave it. A `sep` or `tab` byte may stand before a
+                // marker, and takes the dispatch.
+                if _active_depth == 0
+                    && current_byte != $sep
+                    && current_byte != $tab
+                    && !$crate::parse_text!(@starts current_byte ;
+                        sr=[$($sr)*] br=[$($br)*] ln=[$($ln)*])
+                {
+                    flush_cont!();
+                    if para_start.is_none() {
+                        para_start = Some(pos as u32);
+                    }
+                    pos = next_line_start;
+                    continue;
+                }
+
+                let line_start = pos;
 
                 let mut line_consumed = false;
                 let mut line_start_progress = true;
                 let mut loop_continue_signal = false;
+                // What the block stack made of the line: whether it opened a
+                // block, and where the content starts.
+                let mut block_hit: Option<(bool, usize)> = None;
 
                 while line_start_progress {
                     line_start_progress = false;
@@ -398,20 +494,20 @@ macro_rules! parse_text {
 
                     match $crate::parse_block!(
                         _active_stack, _active_depth, state, src, pos, current_line_end,
+                        nl = next_line_start,
                         sep = $sep, tab = $tab, max_nest = $maxn ;
                         block_simple { $($sr)* } block { $($br)* }
                     ) {
                         Some((opened, cs)) => {
                             if opened {
                                 flush_para_inline!(pos);
-                                flush_text!(pos);
                                 close_para!();
                             }
-                            text_start = cs as u32;
+                            block_hit = Some((opened, cs));
                             pos = cs;
 
                             if cs >= current_line_end {
-                                if cs == current_line_end && cs < len { pos += 1; }
+                                pos = next_line_start;
                                 loop_continue_signal = true;
                             }
                             line_consumed = true;
@@ -430,13 +526,11 @@ macro_rules! parse_text {
                     ) {
                         Some(cs) => {
                             flush_para_inline!(pos);
-                            flush_text!(pos);
                             close_para!();
-                            text_start = cs as u32;
                             pos = cs;
 
                             if cs >= current_line_end {
-                                if cs == current_line_end && cs < len { pos += 1; }
+                                pos = next_line_start;
                                 loop_continue_signal = true;
                             }
                             line_consumed = true;
@@ -446,21 +540,76 @@ macro_rules! parse_text {
                     }
                 }
 
-                if loop_continue_signal { continue; }
+                if loop_continue_signal {
+                    // Nothing of the line is inline content: a `cont` run ends.
+                    flush_cont!();
+                    continue;
+                }
+
+                // A line of `cont` frames alone — the content right after
+                // their markers — goes on with the open `cont` run when it
+                // opened none of them, and starts one otherwise. Content of
+                // `sep` and `tab` bytes alone ends the run, as a blank line
+                // ends a paragraph run.
+                if let Some((opened, cs)) = block_hit {
+                    let mut _c = line_start;
+                    let mut _k = 0usize;
+                    while _k < _active_depth && _active_stack[_k].0 == 0 {
+                        let _b = src[_active_stack[_k].1 as usize];
+                        if _c < current_line_end && src[_c] == _b {
+                            _c = if _c + 1 < current_line_end
+                                && (src[_c + 1] == $sep || src[_c + 1] == $tab)
+                            { _c + 2 } else { _c + 1 };
+                        } else {
+                            break;
+                        }
+                        _k += 1;
+                    }
+                    if _k == _active_depth && _active_depth > 0 && cs == _c {
+                        if blank!(cs, current_line_end) {
+                            flush_cont!();
+                            pos = next_line_start;
+                            continue;
+                        }
+                        match cont_run {
+                            Some((_s, _, _d)) if !opened && _d == _active_depth => {
+                                cont_run = Some((_s, current_line_end, _d));
+                                pos = next_line_start;
+                                continue;
+                            }
+                            _ => flush_cont!(),
+                        }
+                        // A next line without the outer marker closes the
+                        // frames: the run is this line alone, and the line
+                        // scan below reads it as the run scan would.
+                        if next_line_start < len
+                            && _active_stack
+                                .first()
+                                .is_some_and(|_f| src[next_line_start] == src[_f.1 as usize])
+                        {
+                            for _j in 0.._active_depth {
+                                cont_bytes[_j] = src[_active_stack[_j].1 as usize];
+                            }
+                            cont_run = Some((cs, current_line_end, _active_depth));
+                            pos = next_line_start;
+                            continue;
+                        }
+                    }
+                }
+                flush_cont!();
 
                 if !line_consumed && _active_depth == 0 {
                     if para_start.is_none() {
                         para_start = Some(pos as u32);
                     }
                     pos = next_line_start;
-                    text_start = pos as u32;
                     continue;
                 }
 
                 let skip_inline = if $maxn == 1 {
-                    _active_depth > 0 && _active_stack[0].0 == 0u8
+                    _active_depth > 0 && _active_stack[0].0 != 0
                 } else {
-                    _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 == 0u8)
+                    _active_depth > 0 && _active_stack.get(_active_depth - 1).map_or(false, |stack| stack.0 != 0)
                 };
 
                 if skip_inline {
@@ -475,11 +624,10 @@ macro_rules! parse_text {
                     );
                 }
                 pos = next_line_start;
-                text_start = pos as u32;
             }
 
+            flush_cont!();
             flush_para_inline!(len);
-            flush_text!(len);
             if let Some(s) = para_start {
                 $crate::paste::paste! {
                     state.[<push_ $para>]($crate::span::Span::new(s, len as u32));
@@ -510,6 +658,56 @@ macro_rules! parse_text {
         (_le, _hb)
     }};
 
+    // Can a line beginning with the byte `$b` open a block or line rule?
+    // Each rule reads its marker first; a `sep` or `tab` byte before a
+    // marker is the caller's to rule out.
+    (@starts $b:ident ; sr=[fence($pat:pat, min = $min:literal) => $f:ident $($rest:tt)*]
+        br=$br:tt ln=$ln:tt) => {
+        matches!($b, $pat) || $crate::parse_text!(@starts $b ; sr=[$($rest)*] br=$br ln=$ln)
+    };
+    (@starts $b:ident ; sr=[cont($byte:literal) => $f:ident $($rest:tt)*]
+        br=$br:tt ln=$ln:tt) => {
+        $b == $byte || $crate::parse_text!(@starts $b ; sr=[$($rest)*] br=$br ln=$ln)
+    };
+    (@starts $b:ident ; sr=[; $($rest:tt)*] br=$br:tt ln=$ln:tt) => {
+        $crate::parse_text!(@starts $b ; sr=[$($rest)*] br=$br ln=$ln)
+    };
+    (@starts $b:ident ; sr=[, $($rest:tt)*] br=$br:tt ln=$ln:tt) => {
+        $crate::parse_text!(@starts $b ; sr=[$($rest)*] br=$br ln=$ln)
+    };
+    (@starts $b:ident ; sr=[]
+        br=[($pat:pat) |$v:ident|: $meta:expr => $f:ident $($rest:tt)*] ln=$ln:tt) => {
+        matches!($b, $pat) || $crate::parse_text!(@starts $b ; sr=[] br=[$($rest)*] ln=$ln)
+    };
+    (@starts $b:ident ; sr=[]
+        br=[num($dp:pat, end = $ep:pat) |$n:ident, $k:ident|: $meta:expr => $f:ident $($rest:tt)*]
+        ln=$ln:tt) => {
+        matches!($b, $dp) || $crate::parse_text!(@starts $b ; sr=[] br=[$($rest)*] ln=$ln)
+    };
+    (@starts $b:ident ; sr=[] br=[; $($rest:tt)*] ln=$ln:tt) => {
+        $crate::parse_text!(@starts $b ; sr=[] br=[$($rest)*] ln=$ln)
+    };
+    (@starts $b:ident ; sr=[] br=[, $($rest:tt)*] ln=$ln:tt) => {
+        $crate::parse_text!(@starts $b ; sr=[] br=[$($rest)*] ln=$ln)
+    };
+    (@starts $b:ident ; sr=[] br=[]
+        ln=[line($byte:literal, max = $max:literal) |$n:ident|: $meta:expr => $f:ident $($rest:tt)*]) => {
+        $b == $byte || $crate::parse_text!(@starts $b ; sr=[] br=[] ln=[$($rest)*])
+    };
+    (@starts $b:ident ; sr=[] br=[]
+        ln=[line_simple($pat:pat, min = $min:literal) |$v:ident|: $meta:expr => $f:ident $($rest:tt)*]) => {
+        matches!($b, $pat) || $crate::parse_text!(@starts $b ; sr=[] br=[] ln=[$($rest)*])
+    };
+    (@starts $b:ident ; sr=[] br=[] ln=[; $($rest:tt)*]) => {
+        $crate::parse_text!(@starts $b ; sr=[] br=[] ln=[$($rest)*])
+    };
+    (@starts $b:ident ; sr=[] br=[] ln=[, $($rest:tt)*]) => {
+        $crate::parse_text!(@starts $b ; sr=[] br=[] ln=[$($rest)*])
+    };
+    (@starts $b:ident ; sr=[] br=[] ln=[]) => {
+        false
+    };
+
     (@hb_check $p:ident, $ts:expr, $src:ident ; []) => {
         ($p, false)
     };
@@ -526,25 +724,25 @@ macro_rules! parse_text {
 
     (@hb_push $st:ident, $le:ident, $hb:ident ; []) => {};
 
-    (@dispatch $st:ident, $field:ident, $span:expr, true) => {
-        $crate::paste::paste! { $st.[<push_merge_ $field>]($span); }
+    (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, true) => {
+        $crate::paste::paste! { $st.[<push_merge_ $field>]($span, $floor); }
     };
-    (@dispatch $st:ident, $field:ident, $span:expr, false) => {
+    (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, false) => {
         $crate::paste::paste! { $st.[<push_ $field>]($span); }
     };
 
     // Close every still-open block frame at end of input (or, gated by the
     // caller, on a blank line), top → down. Each frame's span is dispatched to
-    // the right field by `parse_block!`'s `@close_frame` arm, matching the
-    // stored byte against each `cont` / `fence` rule.
+    // the field of the rule that opened it by `parse_block!`'s `@close_frame`
+    // arm.
     (@close_stack $stack:ident, $depth:ident, $st:ident, $src:ident, $pos:expr ;
         block_simple { $($sr:tt)* } block { $($br:tt)* }
     ) => {
         while $depth > 0 {
             $depth -= 1;
-            let (_d2, _b2, _c2, _s2) = $stack[$depth];
+            let (_c2, _s2) = $stack[$depth];
             $crate::parse_block!(@close_frame
-                $st, $src, $pos as u32, _d2, _b2, _s2 ; $($sr)*);
+                $st, $src, $pos as u32, _c2, _s2 ; $($sr)*);
         }
     };
 }

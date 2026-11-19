@@ -1,7 +1,7 @@
 //! Hand-rolled cursor over a `TokenStream`.
 //!
 //! A thin reader with peek/advance and a handful of grammar-aware helpers
-//! (`next_group`, `arrow_field_cap`, `collect_lit_alternation`, ...) shared by the
+//! (`next_group`, `arrow_field_cap`, `collect_pattern`, ...) shared by the
 //! front-end.
 //!
 //! The structural methods (`next_ident`, `next_group`, `named_lit`,
@@ -110,21 +110,24 @@ impl Cursor {
             .ok_or_else(|| Error::new(span, format!("expected literal ({ctx})")))
     }
 
-    /// Consume a `lit | lit | ...` alternation of literals.
-    pub(crate) fn collect_lit_alternation(&mut self) -> Vec<Literal> {
-        let mut lits = Vec::new();
-        while let Some(TT::Literal(l)) = self.peek().cloned() {
-            self.advance();
-            lits.push(l);
-            if let Some(TT::Punct(p)) = self.peek() {
-                if p.as_char() == '|' {
-                    self.advance();
-                    continue;
-                }
+    /// Consume a byte pattern: every token up to a `,` outside any group, or
+    /// to the end. The pattern is passed on as written — literals,
+    /// alternations, ranges, wildcards — for the runtime macros to `matches!`
+    /// against; an empty one is an error with `ctx` at the current span.
+    pub(crate) fn collect_pattern(&mut self, ctx: &str) -> Result<TS2> {
+        let span = self.span();
+        let mut pat = TS2::new();
+        while let Some(tt) = self.peek().cloned() {
+            if matches!(&tt, TT::Punct(p) if p.as_char() == ',') {
+                break;
             }
-            break;
+            self.advance();
+            pat.extend([tt]);
         }
-        lits
+        if pat.is_empty() {
+            return Err(Error::new(span, format!("expected a byte pattern ({ctx})")));
+        }
+        Ok(pat)
     }
 
     /// Consume a `|a, b, ...|` capture list, returning the bound identifiers.
@@ -204,6 +207,29 @@ impl Cursor {
             other => Err(Error::new(
                 span,
                 format!("expected literal after `{name} =`, got {other:?}"),
+            )),
+        }
+    }
+
+    /// Consume `name = true | false` and return the flag.
+    pub(crate) fn named_flag(&mut self, name: &str) -> Result<Ident> {
+        let span = self.span();
+        match self.next_tt() {
+            Some(TT::Ident(i)) if i == name => {}
+            other => {
+                return Err(Error::new(
+                    span,
+                    format!("expected `{name}`, got {other:?}"),
+                ));
+            }
+        }
+        self.skip_eq_alone();
+        let span = self.span();
+        match self.next_tt() {
+            Some(TT::Ident(i)) if i == "true" || i == "false" => Ok(i),
+            other => Err(Error::new(
+                span,
+                format!("expected `true` or `false` after `{name} =`, got {other:?}"),
             )),
         }
     }
@@ -344,19 +370,32 @@ mod tests {
         assert!(err_msg(e).contains("expected literal"));
     }
 
-    // 10. collect_lit_alternation gathers a `a | b | c` run of literals
+    // 10. collect_pattern takes a pattern as written: alternations, ranges
+    //     and groups
     #[test]
-    fn test_10_lit_alternation() {
-        let mut c = Cursor::new(ts("b'-' | b'*' | b'_'"));
-        assert_eq!(c.collect_lit_alternation().len(), 3);
+    fn test_10_pattern() {
+        for p in [
+            "b'-' | b'*' | b'_'",
+            "b'0'..=b'9'",
+            "(b'a' | b'b') | b'c'..=b'e'",
+            "_",
+        ] {
+            let got = Cursor::new(ts(p)).collect_pattern("byte").unwrap();
+            assert_eq!(got.to_string(), ts(p).to_string());
+        }
     }
 
-    // 11. collect_lit_alternation stops at the first non-`|` token, leaving it
+    // 11. collect_pattern stops at a top-level `,`, leaving it, and needs at
+    //     least one token
     #[test]
-    fn test_11_lit_alternation_stops() {
+    fn test_11_pattern_stops() {
         let mut c = Cursor::new(ts("b'-' | b'*' , rest"));
-        assert_eq!(c.collect_lit_alternation().len(), 2);
+        assert_eq!(c.collect_pattern("byte").unwrap().into_iter().count(), 3);
         assert!(matches!(c.peek(), Some(TT::Punct(_))));
+        let e = Cursor::new(ts(", rest"))
+            .collect_pattern("fence byte")
+            .unwrap_err();
+        assert!(err_msg(e).contains("expected a byte pattern (fence byte)"));
     }
 
     // 12. skip_pipe_vars_returning extracts the identifiers of a `|a, b|` list

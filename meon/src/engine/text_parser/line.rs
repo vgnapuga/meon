@@ -3,19 +3,19 @@
 //! # Overview
 //!
 //! `parse_line!` scans a single logical line (already delimited by `parse_text!`)
-//! and tries to match it against a set of *line rules*. Unlike inline parsing,
-//! line rules are **whole-line**: if a rule matches, it consumes the entire line
-//! and returns a continuation skip; no other rule is tried.
+//! and tries to match it against a set of *line rules*, which are matched at
+//! the line start; the first rule that matches wins and no other is tried.
 //!
-//! It is called by `parse_text!` at the start of each new line, before inline
-//! scanning begins, and is not meant to be called by users directly.
+//! It is called by `parse_text!` at the start of each line no block rule
+//! claims, and is not meant to be called by users directly.
 //!
 //! # Return value
 //!
-//! Returns `Some(cs)` where `cs` is the byte offset of the first byte after the
-//! matched line (i.e. the start of the next line), or `None` if no rule matched.
-//! The caller (`parse_text!`) uses `None` to fall through to block and inline
-//! processing.
+//! Returns `Some(cs)` where `cs` is where the line's content starts: past a
+//! `line` rule's marker run and its separator, for `parse_text!` to scan
+//! inline up to the line end; the line end for a `line_simple` rule, which
+//! consumes the line whole. `None` if no rule matched; the caller
+//! (`parse_text!`) then treats the line as paragraph text.
 //!
 //! # Grammar integration
 //!
@@ -25,13 +25,14 @@
 //!
 //! - `line(byte, max = N) |var|: Type { ... } => field;`
 //!   Matches lines that start with 1–N consecutive occurrences of `byte`
-//!   followed by the separator byte. The count is bound to `var` and passed
-//!   to the type constructor. Example: ATX headings (`# ... ######`).
+//!   followed by the separator byte or the line end. The count is bound to
+//!   `var` and passed to the type constructor; the span is the rest of the
+//!   line. Example: ATX headings (`# ... ######`).
 //!
-//! - `line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field;`
-//!   Matches lines composed entirely of one repeated delimiter byte (interleaved
-//!   with the separator), with at least `N` occurrences. The delimiter byte is
-//!   bound to `var`. Example: thematic breaks (`---`, `***`, `___`).
+//! - `line_simple(pattern, min = N) |var|: Type { ... } => field;`
+//!   Matches lines composed entirely of one repeated byte `pattern` matches
+//!   (interleaved with the separator), with at least `N` occurrences. That
+//!   byte is bound to `var`. Example: thematic breaks (`---`, `***`, `___`).
 //!
 //! Rules are tried in declaration order; the first match wins.
 #[doc(hidden)]

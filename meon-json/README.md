@@ -37,7 +37,7 @@ hot loop — a caller that never types pays nothing.
 
 ```toml
 [dependencies]
-meon-json = "0.4"
+meon-json = "0.5"
 ```
 
 ```rust
@@ -162,6 +162,11 @@ let whole = c.arrays_raw().next().unwrap();          // → b"[1,2,3]"
 
 ## Scalar typing
 
+The crate forbids unsafe code. Typing uses checked source slices and trims
+space, tab, CR and LF before classification. Parser-produced spans are valid;
+if a caller mutates public spans into invalid ranges, slice-based access and
+typing may panic rather than read outside the source.
+
 Typing lives entirely outside the engine, as methods on `JsonContent`. Ask for
 it only when you need it:
 
@@ -224,12 +229,16 @@ for span in JsonParser::find_strings(src) {
 }
 ```
 
-Standalone iterators are context-free: they match their one element kind with
-no knowledge of nesting or surrounding structure. For JSON this matters more
-than for a flat format — `find_objects` / `find_arrays` match only the exact
-declared delimiter and do **not** track nesting the way a full `parse` does.
-Prefer the full parse when you need correct containment; reach for `find_*`
-only for a single, nesting-insensitive sweep (such as `find_strings`).
+Standalone iterators read one rule independently: they respect its escape,
+balancing and nesting settings, including `max_nest`, but do not see other
+rules. `find_objects` and `find_arrays` therefore track their own nested
+containers; a bracket inside a string may still be seen because strings are
+another rule. Use the full parse or context-aware finders when that interaction
+matters. Divergent counts are not a substitute for validating JSON syntax.
+
+`find_members` does not see surrounding containers: an `eq` inside a pending
+value is content rather than a new nested member. There is no
+`find_context_members`; use the full parse to extract nested members.
 
 Strings are the grammar's opaque rule, so `JsonParser::context(src)` builds
 a map of every string region in one streaming pass, and the

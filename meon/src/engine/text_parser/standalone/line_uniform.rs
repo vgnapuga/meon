@@ -23,6 +23,7 @@ where
 {
     src: &'a [u8],
     min: u32,
+    breaks: LineBreaks,
     eol: u8,
     sep: u8,
     matches: M,
@@ -46,14 +47,22 @@ where
     /// - `src` — source byte slice to scan.
     /// - `min` — minimum number of delimiter byte occurrences required on a
     ///   matching line.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte; allowed between delimiter occurrences on a
     ///   matching line.
     /// - `matches` — predicate that returns `true` for valid delimiter bytes;
     ///   all delimiter occurrences on a line must be the same byte.
     /// - `make` — closure that receives the delimiter byte and constructs the
     ///   metadata value `T`.
-    pub fn new(src: &'a [u8], min: u32, eol: u8, sep: u8, matches: M, make: F) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        min: u32,
+        breaks: impl Into<LineBreaks>,
+        sep: u8,
+        matches: M,
+        make: F,
+    ) -> Self {
+        let breaks: LineBreaks = breaks.into();
         let mut needles = [0u8; 3];
         let (nn, streaming) = match probe_matcher(&matches, &mut needles) {
             Some(n) => (n, true),
@@ -62,7 +71,8 @@ where
         Self {
             src,
             min,
-            eol,
+            breaks,
+            eol: breaks.eol,
             sep,
             matches,
             make,
@@ -105,7 +115,9 @@ where
             let mut valid = true;
             while i < len {
                 let b = src[i];
-                if b == self.eol {
+                if b == self.eol
+                    || (self.breaks.crlf && b == b'\r' && i + 1 < len && src[i + 1] == self.eol)
+                {
                     break;
                 }
                 if b == delim {
@@ -120,7 +132,8 @@ where
             if valid && count >= self.min {
                 let meta = (self.make)(delim);
                 let span = Span::new(p as u32, i as u32);
-                self.pos = if i < len { i + 1 } else { len };
+                let le = find_line_end(src, i, self.eol);
+                self.pos = if le < len { le + 1 } else { len };
                 return Some((meta, span));
             }
 
@@ -149,13 +162,14 @@ where
                 return None;
             }
             let le = find_line_end(src, self.pos, self.eol);
+            let ce = self.breaks.content_end(src, self.pos, le);
 
-            if self.pos < le {
+            if self.pos < ce {
                 let delim = src[self.pos];
                 if (self.matches)(delim) {
                     let mut count = 0u32;
                     let mut valid = true;
-                    for &b in &src[self.pos..le] {
+                    for &b in &src[self.pos..ce] {
                         if b == delim {
                             count += 1;
                         } else if b != self.sep {
@@ -165,7 +179,7 @@ where
                     }
                     if valid && count >= self.min {
                         let meta = (self.make)(delim);
-                        let span = Span::new(self.pos as u32, le as u32);
+                        let span = Span::new(self.pos as u32, ce as u32);
                         self.pos = if le < len { le + 1 } else { len };
                         return Some((meta, span));
                     }
@@ -371,5 +385,41 @@ mod tests {
     fn test_18_fallback_empty() {
         let mut iter = LineUniformIter::new(b"\n\n", 3, b'\n', b' ', wide_matches, stab_make);
         assert_eq!(iter.next(), None);
+    }
+
+    #[allow(unused)]
+    mod generated {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub struct Rule {
+            pub kind: u8,
+        }
+
+        crate::define_parser!(Rules {
+            sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+            inline { fallback => texts [10]; }
+            lines {
+                line_simple(b'0'..=b'9' | b'=', min = 3) |b|: Rule { kind: b } => rules [40];
+            }
+            blocks { fallback => paragraphs [80]; }
+        });
+
+        fn items(it: impl IntoIterator<Item = (Rule, crate::span::Span)>) -> Vec<(u8, u32, u32)> {
+            it.into_iter()
+                .map(|(m, s)| (m.kind, s.start, s.end))
+                .collect()
+        }
+
+        // 19. A range pattern reaches the finders as written: any byte of it
+        //     opens a line, which then takes only that byte and `sep`
+        #[test]
+        fn test_19_generated_range_pattern() {
+            let src: &[u8] = b"===\n555\n5 5 5\n565\n44\n7777 x";
+            let full = RulesParser::parse(src);
+            let want = vec![(b'=', 0, 3), (b'5', 4, 7), (b'5', 8, 13)];
+            assert_eq!(items(full.rules.iter().copied()), want);
+            assert_eq!(items(RulesParser::find_rules(src)), want);
+            let ctx = RulesParser::context(src);
+            assert_eq!(items(RulesParser::find_context_rules(src, &ctx)), want);
+        }
     }
 }

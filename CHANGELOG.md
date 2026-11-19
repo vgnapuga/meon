@@ -7,6 +7,132 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [0.7.0] - 2026-11-19
+
+### Fixed
+
+- **`meon`, `meon-md`** — **unmatched inline delimiters stay in the text.**
+  With `*` as a transparent symmetric rule, `*a\nb\n` now leaves `*a\nb`
+  in fallback, including the opener. Refused opens and runs of undeclared
+  length stay literal. Removing an unclosed placeholder preserves completed
+  inner elements, so ``**a `c` b`` keeps the code span and the two surrounding
+  text runs. Successful chained and key/value matches roll back the fallback
+  bytes they cover, including across intervening frame closes.
+- **`meon`** — **inline runs keep their own boundaries.** Fallback merging
+  stays within one run and skips bytes consumed by block and line rules.
+  The final line terminator stays outside the inline scan. A hard break
+  removes its marker only. With CRLF enabled, a bare CR at EOF remains
+  content in the full parse, standalone iterators and context builder.
+- **`meon`** — **chained and key/value delimiters are read at the byte that
+  closes them.** The rest of a delimiter run can still be read by the
+  scanner. A transparent chain keeps its own phases, and a failed chain
+  leaves literal text available. Keys stop at line and opaque-span
+  boundaries, a rejected pair at full stack depth remains text, and
+  separator padding before a value does not prematurely close it when the
+  separator is also the terminator.
+- **`meon`** — **opaque balanced close searches reuse their work.**
+  Balanced asymmetric searches remember which openers cannot be closed.
+  For an opaque chain, a failure involving a balanced component builds an
+  index of the remaining inline run. Later balanced queries take constant
+  time, including when nested first components move second starts backwards.
+  The full parse, `find_*` and the context builder share the chain search.
+  The index uses one lazy reusable buffer, four bytes per indexed byte per
+  balanced component. Successful chains before a failure need no search
+  buffer. Unbalanced searches reuse known closes or absent suffixes.
+- **`meon`** — **selective scans use the grammar's rule and line semantics.**
+  Standalone iterators honour escapes, delimiter runs, balancing and
+  nesting for the rule they scan. Context construction follows paragraph,
+  block-line and same-marker continuation boundaries, including fences in
+  continuations. It picks opaque symmetric and exact asymmetric arms by
+  opening byte and count, and adds fully opaque chained matches to the map.
+  Raw finders can still see delimiters inside another rule's opaque regions.
+- **`meon-macros`** — numbered-block `_raw()` uses the declared digit
+  pattern. A grammar that accepts `AB: x` now returns the whole fragment
+  instead of starting at `:`. The clean span and number are unchanged.
+- **`meon-json`** — scalar typing uses checked slices for member values,
+  array elements and top-level scalars. The crate forbids unsafe code.
+  Out-of-bounds spans supplied by a caller can panic through checked
+  indexing.
+
+### Changed
+
+- **`meon`** — `0.6.0` → `0.7.0`. **Line and block rules use the declared
+  byte patterns.** Uniform lines, fences, marker blocks and both arguments
+  of `num` preserve Rust byte patterns through the full parse, standalone
+  generation and context classification. A fence closes with its opening
+  byte, even when its pattern accepts several bytes. The optional `crlf`
+  setting recognises CR before the declared `eol`. Lines made only of
+  `sep` and `tab` are blank.
+- **`meon-macros`** — `0.4.0` → `0.5.0`. Transparent symmetric rules use
+  the shared bounded stack and take `parse_inside` and count arms. An
+  asymmetric rule with `balanced = true` or `parse_inside = true` has one
+  `1 => field` arm. Forwarded literal and pattern fragments from
+  `macro_rules!` reach the runtime grammar, and metadata expressions keep
+  their original grouping.
+- **`meon-md`** — `0.5.0` → `0.6.0`. Enables CRLF and balances the
+  opaque components of links and images. `[a [b] c](url)` and
+  `[t](https://x.y/a_(b))` each produce one link. Inline matches can cross
+  same-marker blockquote lines without counting continuation markers as
+  delimiters.
+- **`meon-json`** — `0.4.0` → `0.5.0`. Recompiled against the `0.7.0`
+  engine. The standalone object and array finders now nest their own
+  brackets. Their context-aware variants also skip brackets inside strings.
+  Nested members still require the full parse to see the surrounding
+  containers.
+
+### Removed
+
+- **`meon-macros`** — the `balanced` setting on `symmetric`. Remove it
+  from existing symmetric declarations. Asymmetric rules and chained
+  components still take the setting.
+
+### Documentation
+
+- `ARCHITECTURE.md` and crate `README.md` files describe the grammar changes,
+  inline-run boundaries, opaque close searches and context-aware extraction.
+  The grammar examples use the current DSL.
+- The Markdown benchmark report checks composition against pulldown-cmark
+  outside the timed loop. The synthetic corpora use URL autolinks and
+  backtick fences, and separate the ordered list from following prose.
+
+### Benchmarks
+
+Median full-parse throughput from the comparison runs, `small → big`:
+
+| Corpus                     | Stable            | Nightly + AVX2          |
+|----------------------------|-------------------|-------------------------|
+| Markdown `plain`           | 2.86 → 2.70 GiB/s | 4.76 → 4.24 GiB/s       |
+| Markdown `hot`             | 946 → 925 MiB/s   | 1.217 → 1.214 GiB/s     |
+| Markdown `heavy`           | 817 → 827 MiB/s   | 948 → 949 MiB/s         |
+| JSON `numbers`, structural | 845 → 914 MiB/s   | 926 MiB/s → 1.006 GiB/s |
+| JSON `objects`, structural | 404 → 298 MiB/s   | 432 → 302 MiB/s         |
+| JSON `nested`, structural  | 262 → 192 MiB/s   | 273 → 199 MiB/s         |
+
+The Markdown composition report agrees with pulldown-cmark on the three
+generated corpora under its mapping of element counts and plain-text byte
+coverage. On the large JSON `nested` corpus, the structural pass reaches
+192 MiB/s on stable and the parse with scalar typing reaches 151 MiB/s.
+The corresponding nightly + AVX2 figures are 199 and 163 MiB/s. On the
+small stable corpora, Markdown `find_links` reaches 5.56 GiB/s on `heavy`,
+and JSON `find_objects` reaches 1.55 GiB/s on `nested`. The JSON
+`find_context_objects` pass reaches 1.25 GiB/s with a prebuilt context and
+395 MiB/s when building the context is included.
+
+### Testing
+
+- **Fuzzing (`v0.7.0` campaign, 2026-11-17).** The `parse_text` target ran
+  ~30M executions on nightly-2026-05-22 at ~5k exec/s and 639 MB RSS. The
+  campaign log reports `cov` 4497 → 4980, `ft` 28312 → 30787 and corpus
+  7282/1793 KB → 6775/2134 KB compared with the `v0.6.0` entry.
+- New engine regressions cover fallback rollback and unclosed frames,
+  continuation markers, CRLF and bare CR at EOF, opaque arm selection and
+  numbered raw spans. Balanced chained cases count bytes scanned across
+  failed candidates and compare indexed results with a forward oracle.
+- Standalone and context tests cover rule isolation, balanced and
+  transparent matching, and line/block classification. `trybuild` checks
+  forwarded macro fragments and the diagnostics for symmetric `balanced`
+  and unsupported asymmetric arms.
+
 ## [0.6.0] - 2026-10-04
 
 ### Fixed

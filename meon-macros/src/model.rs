@@ -48,6 +48,13 @@ pub(crate) fn standalone_field(rule: &StandaloneRule) -> &Ident {
     }
 }
 
+/// The settings of one `chained` component.
+#[derive(Clone, Copy)]
+pub(crate) struct ChainedFlags {
+    pub(crate) parse_inside: bool,
+    pub(crate) balanced: bool,
+}
+
 /// One standalone finder to generate.
 ///
 /// Each variant mirrors a grammar construct and carries exactly the literals,
@@ -72,6 +79,11 @@ pub(crate) enum StandaloneRule {
         count: Literal,
         /// See [`StandaloneRule::SymmetricExact::opaque`].
         opaque: bool,
+        /// The rule's `balanced` flag. With it or `parse_inside = true` each
+        /// open byte is an open of its own, and `count` is `1`: on the full
+        /// parse's stack when transparent, in one forward search that counts
+        /// the rule's bytes when opaque.
+        balanced: bool,
         /// See [`StandaloneRule::SymmetricExact::cap`].
         cap: Literal,
     },
@@ -86,6 +98,14 @@ pub(crate) enum StandaloneRule {
         pf: Ident,
         ff: Ident,
         sf: Ident,
+        /// The `parse_inside` and `balanced` flags of the first component.
+        /// With both components `parse_inside = false` the rule is a context
+        /// source.
+        first_flags: ChainedFlags,
+        /// The `parse_inside` and `balanced` flags of the second component.
+        second_flags: ChainedFlags,
+        /// See [`StandaloneRule::SymmetricExact::cap`].
+        cap: Literal,
     },
     KeyValue {
         field: Ident,
@@ -106,7 +126,8 @@ pub(crate) enum StandaloneRule {
     },
     LineUniform {
         field: Ident,
-        bytes: Vec<Literal>,
+        /// The byte pattern as written, e.g. `b'-' | b'*'`.
+        pat: TS2,
         min: Literal,
         ty: TS2,
         var: Ident,
@@ -114,7 +135,9 @@ pub(crate) enum StandaloneRule {
     },
     Fence {
         field: Ident,
-        byte: Literal,
+        /// The byte pattern as written; a fence closes with the byte it
+        /// opened with.
+        pat: TS2,
         min: Literal,
         /// See [`StandaloneRule::SymmetricExact::cap`].
         cap: Literal,
@@ -125,14 +148,17 @@ pub(crate) enum StandaloneRule {
     },
     BlockMarker {
         field: Ident,
-        bytes: Vec<Literal>,
+        /// The marker byte pattern as written.
+        pat: TS2,
         ty: TS2,
         var: Ident,
         body: TS2,
     },
     BlockNumbered {
         field: Ident,
-        end_bytes: Vec<Literal>,
+        /// The digit and end byte patterns as written.
+        digits: TS2,
+        ends: TS2,
         ty: TS2,
         num_var: Ident,
         kind_var: Ident,

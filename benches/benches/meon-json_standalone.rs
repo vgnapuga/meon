@@ -3,19 +3,23 @@
 //!
 //! Each **context-free** standalone iterator scans the raw source for a
 //! single element kind with no cross-element context, so it can — by
-//! design — yield a different count than the full parse. For JSON this gap
-//! is *wider* than for the flat markdown grammar: `find_objects` /
-//! `find_arrays` match only their exact declared delimiter and do **not**
-//! track nesting the way `JsonParser::parse` does, and are additionally
-//! vulnerable to a bracket that lives inside a string's content — the
-//! context-free close search cannot tell it apart from a real one.
+//! design — yield a different count than the full parse. For
+//! `find_objects` / `find_arrays` the gap is strings: they nest their
+//! brackets the way `JsonParser::parse` does, but take a bracket that lives
+//! inside a string's content for a real one. `find_members` does not see the
+//! containers either: in the full parse a container's open starts a key and
+//! its close ends the value inside it, while to the finder a `:` inside an
+//! open value is content, so the members of a nested object are not found.
 //!
 //! Each **context-aware** iterator additionally consults a
 //! [`meon::ParseContext`] — built by `JsonParser::context` from the
 //! grammar's only opaque rule, `strings` — and skips any candidate whose
-//! position falls inside a string. This closes the string-collision gap
-//! but not the nesting gap: `find_context_objects` / `find_context_arrays`
-//! still match only the exact delimiter and remain nesting-insensitive.
+//! position falls inside a string. This closes the gap:
+//! `find_context_objects` / `find_context_arrays` yield the full parse's
+//! spans on well-formed JSON whose containers, and the members holding
+//! them, nest at most `max_nest` (64) deep. Deeper than that the full parse
+//! itself refuses containers, and the finders, which count their own
+//! brackets only, do not.
 //! Only `objects` and `arrays` get a `find_context_*` method at all —
 //! `strings` is itself the source of the context, and `members`
 //! (`key_value`) is not covered — see `meon::define_parser!`'s docs.

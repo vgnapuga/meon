@@ -1,5 +1,5 @@
-error: expected literal (fence min)
- --> tests/ui/fail/fence_missing_min.rs:5:35
+error: `fence` rule needs `min = N`
+ --> tests/ui/fail/fence_missing_min.rs:5:34
   |
 5 |     blocks { block_simple { fence(b'`') => fenced_codes [400]; } }
-  |                                   ^^^^
+  |                                  ^^^^^^

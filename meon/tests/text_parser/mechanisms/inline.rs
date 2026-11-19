@@ -1,4 +1,5 @@
 use super::common::*;
+use meon::span::Span;
 
 // ================================================================
 // texts
@@ -184,9 +185,9 @@ fn text_21_no_text_when_fully_code() {
     assert!(st.texts.is_empty());
 }
 
-// 22. A pending symmetric open closes on matching count from the left
+// 22. An open symmetric frame closes on the next run of its count
 #[test]
-fn text_22_star_closes_pending_with_same_count() {
+fn text_22_star_closes_open_frame_with_same_count() {
     let src = b"*a *b";
     let (st, _) = run_inline!(src);
     assert_eq!(st.italics.len(), 1);
@@ -318,9 +319,9 @@ fn bold_11_start_le_end() {
     assert!(st.bolds[0].start <= st.bolds[0].end);
 }
 
-// 12. A pending bold open closes on the first matching count from the left
+// 12. An open bold closes on the next run of its count
 #[test]
-fn bold_12_pending_closes_on_same_count() {
+fn bold_12_open_closes_on_same_count() {
     let src = b"**a **b**";
     let (st, _) = run_inline!(src);
     assert_eq!(st.bolds.len(), 1);
@@ -444,9 +445,9 @@ fn italic_08_mismatched_two_stars_close_no_italic() {
     assert!(st.italics.is_empty());
 }
 
-// 09. A pending italic open closes on the first matching count from the left
+// 09. An open italic closes on the next run of its count
 #[test]
-fn italic_09_pending_closes_on_same_count() {
+fn italic_09_open_closes_on_same_count() {
     let src = b"*a *b*";
     let (st, _) = run_inline!(src);
     assert_eq!(st.italics.len(), 1);
@@ -559,9 +560,9 @@ fn bold_italic_06_two_on_same_input() {
     assert_eq!(txt(src, st.bold_italics[1]), "b");
 }
 
-// 07. A pending bold-italic open closes on the first matching count
+// 07. An open bold-italic closes on the next run of its count
 #[test]
-fn bold_italic_07_pending_closes_on_same_count() {
+fn bold_italic_07_open_closes_on_same_count() {
     let src = b"***a ***b***";
     let (st, _) = run_inline!(src);
     assert_eq!(st.bold_italics.len(), 1);
@@ -1404,9 +1405,43 @@ fn kv_10_only_key_and_eq() {
     assert_eq!(txt(src, st.key_values[0].value), "");
 }
 
+// 11. The key does not reach back across a line break of the same run
+#[test]
+fn kv_11_key_stops_at_eol() {
+    let src = b"title\nkey=value";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "key");
+    assert_eq!(txt(src, st.key_values[0].value), "value");
+}
+
+// 12. A code span right before `eq` is the key, its inner space included
+#[test]
+fn kv_12_opaque_span_is_whole_key() {
+    let src = b"`a b`=value";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "`a b`");
+    assert_eq!(txt(src, st.key_values[0].value), "value");
+}
+
+// 13. A word after a code span does not extend into the span
+#[test]
+fn kv_13_key_stops_at_opaque_span_end() {
+    let src = b"`c`key=value";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "key");
+    assert_eq!(st.codes.len(), 1);
+}
+
 // ================================================================
-// balanced asymmetric (objects)
+// opaque balanced asymmetric (objects): the outer ring
 // ================================================================
+//
+// `run_inline_balanced!` declares `{`/`}` with `balanced = true` and
+// `parse_inside = false`: one forward search per open byte that counts the
+// rule's own bytes, and one element per outer ring.
 
 // 01. A simple brace pair produces one object span
 #[test]
@@ -1495,33 +1530,136 @@ fn balanced_09_span_bounds() {
     assert_eq!(st.objects[0].end, 5);
 }
 
+// 10. An outer ring that never closes is text, and the next open byte tries:
+//     an inner pair that balances is the element
+#[test]
+fn balanced_10_unclosed_ring_next_open_tries() {
+    let src = b"{a {b} c";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["{a ", " c"]);
+}
+
+// 11. Each byte of an open run is an open of its own: the first one opens the
+//     ring, the rest nest in it or try next
+#[test]
+fn balanced_11_open_run_bytes() {
+    let src = b"<{{a}}> {{b}";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["{a}", "b"]);
+    assert_eq!(all(src, &st.texts), vec!["<", "> {"]);
+}
+
+// 12. A close byte with no ring open is text
+#[test]
+fn balanced_12_stray_close_is_text() {
+    let src = b"{a} b} c";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["a"]);
+    assert_eq!(all(src, &st.texts), vec![" b} c"]);
+}
+
+// 13. Escaped bytes of the rule inside the ring are content and count for
+//     nothing
+#[test]
+fn balanced_13_escaped_bytes_inside_ring() {
+    let src = b"{a \\} b} {c \\{ d}";
+    let (st, _) = run_inline_balanced!(src);
+    assert_eq!(all(src, &st.objects), vec!["a \\} b", "c \\{ d"]);
+}
+
+macro_rules! run_balanced_opaque_with_stack {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
+            on_trigger(b'{', b'*') {
+                symmetric b'*' { parse_inside = true; 1 => italics }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = false; 1 => objects }
+            }
+        );
+        st
+    }};
+}
+
+// 14. No other rule acts inside a ring that closes; one that never closes is
+//     text, where they do
+#[test]
+fn balanced_14_ring_is_opaque() {
+    let src = b"{a *b* c} *d*";
+    let st = run_balanced_opaque_with_stack!(src, 4);
+    assert_eq!(all(src, &st.objects), vec!["a *b* c"]);
+    assert_eq!(all(src, &st.italics), vec!["d"]);
+    let src = b"{a *b* c";
+    let st = run_balanced_opaque_with_stack!(src, 4);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.italics), vec!["b"]);
+}
+
+// 15. The ring is no stack frame: `max_nest` bounds neither its depth nor
+//     whether it opens, and it opens inside a frame of another rule
+#[test]
+fn balanced_15_ring_ignores_max_nest() {
+    let src = b"{a {b {c} d} e}";
+    let st = run_balanced_opaque_with_stack!(src, 0);
+    assert_eq!(all(src, &st.objects), vec!["a {b {c} d} e"]);
+    let src = b"*x {a {b} c} y*";
+    let st = run_balanced_opaque_with_stack!(src, 1);
+    assert_eq!(all(src, &st.italics), vec!["x {a {b} c} y"]);
+    assert_eq!(all(src, &st.objects), vec!["a {b} c"]);
+}
+
+// 16. Open bytes no close balances cost no search of their own: the scan
+//     stays linear however many there are
+#[test]
+fn balanced_16_unbalanced_opens_linear() {
+    let started = std::time::Instant::now();
+    let mut src = vec![b'{'; 100_000];
+    src.extend(std::iter::repeat_n(b'}', 50_000));
+    let (st, _) = run_inline_balanced!(&src);
+    assert_eq!(st.objects.len(), 1);
+    assert_eq!(st.objects[0].end - st.objects[0].start, 99_998);
+    let mut src = b"{".to_vec();
+    for _ in 0..50_000 {
+        src.extend_from_slice(b"{{x}");
+    }
+    let (st, _) = run_inline_balanced!(&src);
+    assert_eq!(st.objects.len(), 50_000);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "unbalanced-open scan is not linear"
+    );
+}
+
 // ================================================================
-// symmetric balanced
+// symmetric opaque (forward search)
 // ================================================================
 
 // 01. A basic double-quote pair produces one code span
 #[test]
-fn sym_bal_01_basic() {
+fn sym_opaque_01_basic() {
     let src = b"\"hello\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "hello");
 }
 
 // 02. A doubled inner quote is treated as balanced content, not a closer
 #[test]
-fn sym_bal_02_doubled_is_escape() {
+fn sym_opaque_02_doubled_is_escape() {
     let src = b"\"hello \"\"world\"\" end\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "hello \"\"world\"\" end");
 }
 
 // 03. Two independent quoted spans are captured separately
 #[test]
-fn sym_bal_03_two_spans() {
+fn sym_opaque_03_two_spans() {
     let src = b"\"a\" \"b\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 2);
     assert_eq!(txt(src, st.codes[0]), "a");
     assert_eq!(txt(src, st.codes[1]), "b");
@@ -1529,34 +1667,34 @@ fn sym_bal_03_two_spans() {
 
 // 04. An unclosed quote produces no code span
 #[test]
-fn sym_bal_04_unclosed_no_span() {
+fn sym_opaque_04_unclosed_no_span() {
     let src = b"\"unclosed";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert!(st.codes.is_empty());
 }
 
 // 05. A double-quote pair inside a triple-quote is captured as the inner content
 #[test]
-fn sym_bal_05_double_quote_paired_independently() {
+fn sym_opaque_05_double_quote_paired_independently() {
     let src = b"\"hello \"\"world\"\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "world");
 }
 
 // 06. Two adjacent double-quotes form a count-2 opener that finds no closer
 #[test]
-fn sym_bal_06_adjacent_quotes_is_count2_opener() {
+fn sym_opaque_06_adjacent_quotes_is_count2_opener() {
     let src = b"\"\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 0);
 }
 
 // 07. Text before and after a quoted span is captured as separate text spans
 #[test]
-fn sym_bal_07_text_before_and_after() {
+fn sym_opaque_07_text_before_and_after() {
     let src = b"before \"inside\" after";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "inside");
     assert_eq!(st.texts.len(), 2);
@@ -1564,9 +1702,9 @@ fn sym_bal_07_text_before_and_after() {
 
 // 08. A count-2 opener matches a count-2 closer to capture the inner content
 #[test]
-fn sym_bal_08_count2_opener_and_closer() {
+fn sym_opaque_08_count2_opener_and_closer() {
     let src = b"\"\"hello\"\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "hello");
 }
@@ -1710,10 +1848,11 @@ fn chained_tbal_12_multiple_links_sequence() {
 // balanced asymmetric - multi-level (max_nest > 1)
 // ================================================================
 //
-// All of these use `run_inline_balanced_nested!`, the same grammar as
-// `run_inline_balanced!` above with a caller-supplied `max_nest`. The
-// `balanced_*` tests above already cover `max_nest = 1` (the collapsing
-// behaviour) - these specifically exercise depth > 1.
+// All of these use `run_inline_balanced_nested!`, the `{`/`}` rule of
+// `run_inline_balanced!` above with `parse_inside = true`, which keeps its
+// frames on the stack, and a caller-supplied `max_nest`. The `balanced_*`
+// tests above cover the opaque rule, one element per outer ring - these
+// exercise frames that nest.
 
 // 01. At depth 2, a single level of nesting is split into two spans,
 // sorted by start: outer first, inner second.
@@ -1763,9 +1902,8 @@ fn balanced_nested_04_cap_below_actual_depth() {
     assert_eq!(txt(src, st.objects[1]), "b {c} d");
 }
 
-// 05. A cap of 1 on a multi-level input reproduces the exact collapsing
-// behaviour of `run_inline_balanced!` - the explicit depth-1 boundary,
-// not just its default.
+// 05. A cap of 1 on a multi-level input gives the one span the opaque rule of
+// `run_inline_balanced!` gives - the explicit depth-1 boundary.
 #[test]
 fn balanced_nested_05_depth1_collapses() {
     let src = b"{a {b} c}";
@@ -1819,13 +1957,12 @@ fn balanced_nested_09_independent_pairs_unaffected_by_depth() {
 }
 
 // ================================================================
-// symmetric balanced (parse_inside = true) - different-key nesting fix
+// symmetric on the stack (parse_inside = true) - different-count nesting
 // ================================================================
 //
 // All of these use `run_inline_sym_nested!`, a `symmetric { parse_inside =
-// true; balanced = true; ... }` fixture with its own `n_italics` / `n_bolds`
-// fields, separate from the `italics` / `bolds` fixtures above, which use
-// `balanced = false` and the single pending slot.
+// true; ... }` fixture with its own `n_italics` / `n_bolds` fields and a
+// caller-supplied `max_nest`.
 
 // 01. With the bounded stack (depth >= 2) a different-count occurrence of the
 // same byte opens an inner frame instead of replacing the outer one, so both
@@ -1864,7 +2001,7 @@ fn sym_nested_03_identical_key_toggles_not_nests() {
     assert_eq!(txt(src, st.n_bolds[1]), " c");
 }
 
-// 04. A frame still pending at line end is discarded - neither delimiter
+// 04. A frame still open at line end is discarded - neither delimiter
 // closes within the line, so neither produces a span.
 #[test]
 fn sym_nested_04_unclosed_both_discarded() {
@@ -2203,19 +2340,17 @@ fn shared_close_06_both_rules_independent_on_same_line() {
     assert_eq!(txt(src, st.n_italics[0]), "b");
 }
 
-// 07. A `(` opened while a `[` frame is already on top of the stack nests
-//     correctly using each frame's own recorded close byte: the inner `(`
-//     closes on the first `)`, and because the outer `[`'s recorded close
-//     byte is also `)`, the *second* `)` correctly closes the outer frame
-//     rather than being mistaken for stray input.
+// 07. Both rules are opaque (`parse_inside = false`), so inside the `[`
+//     frame no other rule fires: the `(` is content, and the first `)`
+//     closes the `[` frame by that frame's own recorded close byte. The
+//     second `)` meets an empty stack and stays text.
 #[test]
 fn shared_close_07_nested_different_open_bytes_shared_close() {
     let src = b"[a (b) c)";
     let (st, _) = run_inline_shared_close_nested!(src, 2);
-    assert_eq!(st.objects.len(), 1);
-    assert_eq!(txt(src, st.objects[0]), "b");
+    assert!(st.objects.is_empty());
     assert_eq!(st.n_italics.len(), 1);
-    assert_eq!(txt(src, st.n_italics[0]), "a (b) c");
+    assert_eq!(txt(src, st.n_italics[0]), "a (b");
 }
 
 // ================================================================
@@ -2237,7 +2372,7 @@ fn shared_close_07_nested_different_open_bytes_shared_close() {
 // these rules scan their own content for other rules' triggers, before or
 // after this fix. What changed is purely whether the *closing* delimiter
 // itself is correctly distinguished from a literal, backslash-escaped
-// occurrence of the same byte. The existing `sym_bal_02_doubled_is_escape`
+// occurrence of the same byte. The existing `sym_opaque_02_doubled_is_escape`
 // test (unescaped doubled-quote content) already covers the regression
 // case that this fix must not disturb - content with no backslash involved
 // at all - so it isn't duplicated here.
@@ -2283,7 +2418,7 @@ fn escape_close_03_code_span_escaped_then_immediate_close() {
 #[test]
 fn escape_close_04_balanced_symmetric_escaped_quote() {
     let src = b"\"a\\\"b\"";
-    let st = run_sym_balanced!(src);
+    let st = run_sym_opaque!(src);
     assert_eq!(st.codes.len(), 1);
     assert_eq!(txt(src, st.codes[0]), "a\\\"b");
 }
@@ -2492,15 +2627,53 @@ fn kvn_12_two_objects() {
     assert_eq!(st.objects.len(), 2);
 }
 
+// 13. a quoted key containing `sep` is kept whole
+#[test]
+fn kvn_13_quoted_key_with_sep() {
+    let src = br#"{"first name":1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""first name""#);
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+}
+
+// 14. `sep` between a quoted key and `eq` is trimmed; the key stays whole
+#[test]
+fn kvn_14_quoted_key_with_sep_before_eq() {
+    let src = br#"{"a b" : 1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a b""#);
+}
+
+// 15. a key at the start of a line does not absorb the preceding eol
+#[test]
+fn kvn_15_key_after_eol() {
+    let src = b"{\n\"a\":1,\n\"b\":2}";
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[1].key), r#""b""#);
+}
+
+// 16. with CRLF line ends the key carries no `\r` or `\n`
+#[test]
+fn kvn_16_key_after_crlf() {
+    let src = b"{\r\n\"a\":1,\r\n\"b\":2\r\n}";
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 2);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[1].key), r#""b""#);
+}
+
 // ================================================================
-// held text: stack-mode frames (`balanced = true`) that never close
+// held text: stack frames that never close
 // ================================================================
 //
-// `run_inline!` declares `*` with `balanced = false` (the off-stack `pending`
-// slot). The cases below use the stack path instead - `balanced = true` plus a
-// declared `hard_break`, exactly meon-md's configuration - where plain text
-// flushed while a frame is open is *held* in the fallback vector and either
-// rolled back when the frame closes or kept when the frame is discarded.
+// `run_inline_stack!` keeps `*` and `<`/`>` on the stack, with a declared
+// `hard_break`. Plain text flushed while a frame is open, its open run
+// included, is *held* in the fallback vector and either rolled back when the
+// frame closes or kept when the frame is discarded.
 
 macro_rules! run_inline_stack {
     ($src:expr, $merge:tt) => {{
@@ -2513,12 +2686,10 @@ macro_rules! run_inline_stack {
             on_trigger(b'*', b'`', b'<', b'>') {
                 symmetric b'`' {
                     parse_inside = false;
-                    balanced     = false;
                     _ => codes
                 }
                 symmetric b'*' {
                     parse_inside = true;
-                    balanced     = true;
                     1 => italics, 2 => bolds, _ => bold_italics
                 }
                 asymmetric b'<', b'>' {
@@ -2541,7 +2712,7 @@ fn all(src: &[u8], v: &[meon::span::Span]) -> Vec<String> {
 fn held_01_unclosed_star_with_newline_keeps_text() {
     let src = b"*no close\n";
     let st = run_inline_stack!(src, false);
-    assert_eq!(all(src, &st.texts), vec!["no close"]);
+    assert_eq!(all(src, &st.texts), vec!["*no close"]);
     assert!(st.italics.is_empty());
 }
 
@@ -2550,7 +2721,7 @@ fn held_01_unclosed_star_with_newline_keeps_text() {
 fn held_02_unclosed_star_multi_line_keeps_all_lines() {
     let src = b"*a\nb\nc\n";
     let st = run_inline_stack!(src, false);
-    assert_eq!(all(src, &st.texts), vec!["a", "b", "c"]);
+    assert_eq!(all(src, &st.texts), vec!["*a", "b", "c"]);
     assert!(st.italics.is_empty());
 }
 
@@ -2559,7 +2730,7 @@ fn held_02_unclosed_star_multi_line_keeps_all_lines() {
 fn held_03_unclosed_star_multi_line_merged() {
     let src = b"*a\nb\n";
     let st = run_inline_stack!(src, true);
-    assert_eq!(all(src, &st.texts), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["*a\nb"]);
 }
 
 // 04. Text inside a frame that does close is not emitted as text
@@ -2582,14 +2753,14 @@ fn held_05_rollback_restores_merged_previous_span() {
 }
 
 // 06. Unclosed outer frame, closed inner frame: the inner span is kept, the
-//     outer's text is released as plain text around it
+//     outer's open run and text are released as plain text around it
 #[test]
 fn held_06_unclosed_outer_closed_inner() {
     let src = b"**a *b* c\n";
     let st = run_inline_stack!(src, false);
     assert!(st.bolds.is_empty());
     assert_eq!(all(src, &st.italics), vec!["b"]);
-    assert_eq!(all(src, &st.texts), vec!["a ", " c"]);
+    assert_eq!(all(src, &st.texts), vec!["**a ", " c"]);
 }
 
 // 07. A closed opaque span inside an unclosed frame: text around it survives
@@ -2598,7 +2769,7 @@ fn held_07_unclosed_frame_with_inner_code_span() {
     let src = b"*a `c` b\n";
     let st = run_inline_stack!(src, false);
     assert_eq!(all(src, &st.codes), vec!["c"]);
-    assert_eq!(all(src, &st.texts), vec!["a ", " b"]);
+    assert_eq!(all(src, &st.texts), vec!["*a ", " b"]);
 }
 
 // 08. Same rule for a stack-mode asymmetric frame left unclosed
@@ -2607,7 +2778,7 @@ fn held_08_unclosed_asymmetric_keeps_text() {
     let src = b"<a\nb\n";
     let st = run_inline_stack!(src, false);
     assert!(st.autolinks.is_empty());
-    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+    assert_eq!(all(src, &st.texts), vec!["<a", "b"]);
 }
 
 // 09. A closed asymmetric frame rolls its held text back
@@ -2626,7 +2797,7 @@ fn held_10_unclosed_frame_with_hard_break() {
     let src = b"*a  \nb\n";
     let st = run_inline_stack!(src, false);
     assert_eq!(st.hard_breaks.len(), 1);
-    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+    assert_eq!(all(src, &st.texts), vec!["*a", "b"]);
 }
 
 // 11. A run without any newline: the final flush alone releases the text
@@ -2634,7 +2805,7 @@ fn held_10_unclosed_frame_with_hard_break() {
 fn held_11_single_line_without_newline() {
     let src = b"*no close";
     let st = run_inline_stack!(src, false);
-    assert_eq!(all(src, &st.texts), vec!["no close"]);
+    assert_eq!(all(src, &st.texts), vec!["*no close"]);
 }
 
 // ================================================================
@@ -2726,30 +2897,31 @@ fn dead_07_many_unclosed_openers_linear() {
 }
 
 // ================================================================
-// pending slot (`parse_inside = true`, `balanced = false`): contract
+// symmetric frames on the stack: contract
 // ================================================================
 //
-// The off-stack pending slot tracks one symmetric opener at a time and never
-// nests. These pin that contract directly, since the slot's own code path is
-// the one the `run_inline!` grammar exercises for `*`.
+// A symmetric rule with `parse_inside = true` keeps its frames on the stack:
+// a run of another count of the same byte opens a frame above the open one.
+// 01-06 pin the open/close contract and the rollback of text flushed inside a
+// frame with the `run_inline!` grammar (`*`); 07-11 add an asymmetric stack
+// rule (`run_sym_with_stack!`), 12 a key, 13 a chained match, 14-15 check the
+// snapshot itself, and 16-17 a run whose count has no declared arm.
 
-// 01. A different-count opener while one is pending replaces the slot:
-//     `**a *b* c**` yields the inner italic only, never the outer bold
+// 01. A run of another count opens a frame above the open one when the stack
+//     has room (see `sym_nested_01`); with `max_nest = 1` it is content of the
+//     open frame
 #[test]
-fn pending_01_different_count_replaces_slot() {
+fn sym_stack_01_different_count_is_content_at_cap() {
     let src = b"**a *b* c**";
     let (st, _) = run_inline!(src);
-    assert!(st.bolds.is_empty());
-    assert_eq!(st.italics.len(), 1);
-    assert_eq!(txt(src, st.italics[0]), "b");
-    assert_eq!(st.texts.len(), 2);
-    assert_eq!(txt(src, st.texts[0]), "**a ");
-    assert_eq!(txt(src, st.texts[1]), " c**");
+    assert_eq!(all(src, &st.bolds), vec!["a *b* c"]);
+    assert!(st.italics.is_empty());
+    assert!(st.texts.is_empty());
 }
 
-// 02. A same-count occurrence closes the slot; the next one opens afresh
+// 02. A run of the open frame's count closes it; the next one opens afresh
 #[test]
-fn pending_02_same_count_closes_then_reopens() {
+fn sym_stack_02_same_count_closes_then_reopens() {
     let src = b"*a* *b*";
     let (st, _) = run_inline!(src);
     assert_eq!(st.italics.len(), 2);
@@ -2757,6 +2929,277 @@ fn pending_02_same_count_closes_then_reopens() {
     assert_eq!(txt(src, st.italics[1]), "b");
 }
 
+// 03. Text flushed by a code span inside the frame belongs to the frame: the
+//     opener and the content are not also emitted as fallback text
+#[test]
+fn sym_stack_03_inner_code_span_text_is_not_fallback() {
+    let src = b"x *a `c` b* y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a `c` b"]);
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 04. The same for the text flushed at an internal eol of a multi-line run
+#[test]
+fn sym_stack_04_internal_eol_text_is_not_fallback() {
+    let src = b"x *a\nb* y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 05. A hard break inside the frame keeps its own span
+#[test]
+fn sym_stack_05_hard_break_inside_frame_is_kept() {
+    let src = b"*a  \nb*";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a  \nb"]);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!((st.hard_breaks[0].start, st.hard_breaks[0].end), (2, 2));
+    assert!(st.texts.is_empty());
+}
+
+// 06. A frame that never closes leaves its opener and content as text, also
+//     when another rule fired inside it
+#[test]
+fn sym_stack_06_unclosed_frame_keeps_its_text() {
+    let src = b"x *a `c` b";
+    let (st, _) = run_inline!(src);
+    assert!(st.italics.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", "*a ", " b"]);
+}
+
+macro_rules! run_sym_with_stack {
+    ($src:expr, $maxn:literal) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
+            on_trigger(b'~', b'{', b'}') {
+                symmetric b'~' { parse_inside = true; 1 => italics }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+            }
+        );
+        st
+    }};
+}
+
+// 07. A frame of another rule that opens and closes inside the frame: the
+//     text flushed at its open belongs to the outer frame
+#[test]
+fn sym_stack_07_frame_inside_frame_text_is_not_fallback() {
+    let src = b"~a {b} c~";
+    let st = run_sym_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a {b} c"]);
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+    assert!(st.texts.is_empty());
+}
+
+// 08. With the stack full a run opens nothing: it is literal content of the
+//     frame on top, kept with the rest of its text when that frame never
+//     closes
+#[test]
+fn sym_stack_08_full_stack_run_is_content() {
+    let src = b"{a ~b~ c}";
+    let st = run_sym_with_stack!(src, 1);
+    assert_eq!(all(src, &st.objects), vec!["a ~b~ c"]);
+    assert!(st.italics.is_empty());
+    assert!(st.texts.is_empty());
+    let src = b"{a ~b~ c";
+    let st = run_sym_with_stack!(src, 1);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["{a ~b~ c"]);
+}
+
+/// Fails when a span is inverted, or when a fallback span overlaps one of
+/// `spans` - elements the checked frame does not own.
+fn assert_text_clear_of(texts: &[meon::span::Span], spans: &[meon::span::Span]) {
+    for t in texts {
+        assert!(t.start <= t.end, "inverted text span {t:?}");
+        for e in spans {
+            assert!(t.end <= e.start || e.end <= t.start, "{t:?} overlaps {e:?}");
+        }
+    }
+}
+
+// 09. A frame that opens and closes inside the frame, nested in a frame that
+//     encloses it all: the rollback leaves the outer frame's snapshot intact
+#[test]
+fn sym_stack_09_frame_inside_frame_with_inner_frame() {
+    let src = b"{x ~a {b} c~ y}";
+    let st = run_sym_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a {b} c"]);
+    assert_eq!(all(src, &st.objects), vec!["x ~a {b} c~ y", "b"]);
+    assert!(st.texts.is_empty());
+}
+
+// 10. Frames that cross do not close: a close byte with another rule's frame
+//     on top is content of that frame, and the frame below it is discarded
+//     with its open byte as text
+#[test]
+fn sym_stack_10_crossing_close_is_content() {
+    let src = b"{a~b}c~";
+    let st = run_sym_with_stack!(src, 4);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.italics), vec!["b}c"]);
+    assert_eq!(all(src, &st.texts), vec!["{a"]);
+    assert_text_clear_of(&st.texts, &st.italics);
+}
+
+// 11. A run of the rule opens again above another rule's frame, so a frame
+//     still open there takes the run, not the frame below: nothing closes
+//     but the innermost frame, and every byte of the others is text
+#[test]
+fn sym_stack_11_run_above_other_frame_opens_again() {
+    let src = b"~a {b~ {c} d}";
+    let st = run_sym_with_stack!(src, 4);
+    assert!(st.italics.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["~a ", "{b", "~ ", " d}"]);
+}
+
+// 12. A key begins after the opener of an open frame: it never takes the
+//     bytes before it
+#[test]
+fn sym_stack_12_key_begins_after_opener() {
+    let src: &[u8] = b"x a*k=v\nb* y";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 2, true;
+        on_trigger(b'=', b'*') {
+            symmetric b'*' { parse_inside = true; 1 => italics }
+            key_value: KeyValue {
+                eq = b'='; allow_sep = true; end = b'\n';
+                key => key, value => value,
+            } => key_values
+        }
+    );
+    let keys: Vec<meon::span::Span> = st.key_values.iter().map(|kv| kv.key).collect();
+    assert_eq!(all(src, &keys), vec!["k"]);
+    assert_eq!(all(src, &st.italics), vec!["k=v\nb"]);
+    assert_text_clear_of(&st.texts, &keys);
+    assert_eq!(all(src, &st.texts), vec!["x a", " y"]);
+}
+
+macro_rules! run_sym_with_chained {
+    ($src:expr, $tpi:tt, $upi:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'*', b'[', b']', b'(', b')') {
+                symmetric b'*' { parse_inside = true; 1 => italics }
+                chained: Link {
+                    | b'[', b']' | { parse_inside = $tpi; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+            }
+        );
+        st
+    }};
+}
+
+// 13. A frame crossing a chained match: the text before the frame's opener is
+//     emitted once, and no text lands inside the frame or the match
+#[test]
+fn sym_stack_13_frame_crossing_chained_match() {
+    // Closed inside the text phase.
+    let src = b"x *a [b* c](u)";
+    let st = run_sym_with_chained!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(all(src, &st.italics), vec!["a [b"]);
+    assert_eq!(all(src, &st.texts), vec!["x "]);
+    // Closed inside the url phase.
+    let src = b"x *a [b](c* d)";
+    let st = run_sym_with_chained!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(all(src, &st.italics), vec!["a [b](c"]);
+    assert_eq!(all(src, &st.texts), vec!["x "]);
+    // Opened inside the text phase, closed after the match.
+    let src = b"[x *a](u) b*";
+    let st = run_sym_with_chained!(src, true, false);
+    let link_text: Vec<meon::span::Span> = st.links.iter().map(|l| l.text).collect();
+    assert_eq!(all(src, &st.italics), vec!["a](u) b"]);
+    assert_text_clear_of(&st.texts, &link_text);
+    assert!(st.texts.is_empty());
+}
+
+// 14. The rollback keeps the text flushed before the frame opened
+#[test]
+fn sym_stack_14_rollback_keeps_earlier_text() {
+    let src = b"p `c` x *a `c` b* y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.italics), vec!["a `c` b"]);
+    assert_eq!(all(src, &st.texts), vec!["p ", " x ", " y"]);
+}
+
+// 15. With merge_simple the rollback also restores the end of a span the
+//     frame's text was merged into
+#[test]
+fn sym_stack_15_rollback_restores_merged_span() {
+    let src: &[u8] = b"p\nx *a\nb* y";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, true, b'\\', b' ', b'\t', b'\n', 1, true;
+        hard_break(b'\\', b' ', 2) => hard_breaks;
+        on_trigger(b'*') {
+            symmetric b'*' { parse_inside = true; 1 => italics }
+        }
+    );
+    assert_eq!(all(src, &st.italics), vec!["a\nb"]);
+    assert_eq!(all(src, &st.texts), vec!["p\nx ", " y"]);
+}
+
+// 16. A run whose count has no declared arm is literal text: it opens no
+//     frame, and the text around it stays
+#[test]
+fn sym_stack_16_run_without_arm_is_literal() {
+    let src = b"~~a {b} c~~ d";
+    let st = run_sym_with_stack!(src, 4);
+    assert!(st.italics.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["~~a ", " c~~ d"]);
+}
+
+// 17. Such a run inside an open frame neither closes it nor opens another
+#[test]
+fn sym_stack_17_run_without_arm_leaves_the_frame_alone() {
+    let src = b"~a ~~ b~";
+    let st = run_sym_with_stack!(src, 4);
+    assert_eq!(all(src, &st.italics), vec!["a ~~ b"]);
+    assert!(st.texts.is_empty());
+}
+
+// 18. A key begins after the close of an element before it, symmetric or
+//     asymmetric: it never takes the element's bytes
+#[test]
+fn sym_stack_18_key_begins_after_closed_element() {
+    let src: &[u8] = b"~a~k=v\n{b}j=w\n";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 2, true;
+        on_trigger(b'=', b'~', b'{', b'}') {
+            symmetric b'~' { parse_inside = true; 1 => italics }
+            asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+            key_value: KeyValue {
+                eq = b'='; allow_sep = true; end = b'\n';
+                key => key, value => value,
+            } => key_values
+        }
+    );
+    let keys: Vec<meon::span::Span> = st.key_values.iter().map(|kv| kv.key).collect();
+    assert_eq!(all(src, &keys), vec!["k", "j"]);
+    assert_eq!(all(src, &st.italics), vec!["a"]);
+    assert_eq!(all(src, &st.objects), vec!["b"]);
+}
 // ================================================================
 // output vectors allocate on first push, not up front
 // ================================================================
@@ -2857,13 +3300,13 @@ fn alloc_07_merge_into_a_full_vector_extends_in_place() {
     let mut st = ParseState::new(20); // texts [10] -> hint 2
     let mut at = 0u32;
     while st.texts.is_empty() || st.texts.len() < st.texts.capacity() {
-        st.push_merge_texts(Span::new(at, at + 1));
+        st.push_merge_texts(Span::new(at, at + 1), 0);
         at += 4;
     }
     let full = st.texts.len();
     let last_start = st.texts[full - 1].start;
 
-    st.push_merge_texts(Span::new(at - 3, at + 2));
+    st.push_merge_texts(Span::new(at - 3, at + 2), 0);
     assert_eq!(st.texts.len(), full);
     assert_eq!(st.texts.capacity(), full);
     assert_eq!(
@@ -2871,10 +3314,1307 @@ fn alloc_07_merge_into_a_full_vector_extends_in_place() {
         (last_start, at + 2)
     );
 
-    st.push_merge_texts(Span::new(at + 10, at + 11));
+    st.push_merge_texts(Span::new(at + 10, at + 11), 0);
     assert_eq!(st.texts.len(), full + 1);
     assert_eq!(
         (st.texts[full].start, st.texts[full].end),
         (at + 10, at + 11)
     );
+}
+
+// ================================================================
+// merge boundaries: `push_merge_*` and the run floor
+// ================================================================
+
+// 01. A span within one byte of the last one merges when the last span ends
+//     inside the current run
+#[test]
+fn merge_01_adjacent_span_of_same_run_merges() {
+    use meon::span::Span;
+    let mut st = ParseState::new(10);
+    st.push_merge_texts(Span::new(0, 1), 0);
+    st.push_merge_texts(Span::new(2, 3), 0);
+    assert_eq!(st.texts.len(), 1);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (0, 3));
+}
+
+// 02. The same pair does not merge when the last span ends before the run
+//     the new one belongs to
+#[test]
+fn merge_02_span_of_previous_run_is_not_extended() {
+    use meon::span::Span;
+    let mut st = ParseState::new(10);
+    st.push_merge_texts(Span::new(0, 1), 0);
+    st.push_merge_texts(Span::new(2, 3), 2);
+    assert_eq!(st.texts.len(), 2);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (0, 1));
+}
+
+// 03. A span starting before the last one ends is pushed as is and does not
+//     shorten the last span
+#[test]
+fn merge_03_overlapping_span_does_not_shrink_the_last() {
+    use meon::span::Span;
+    let mut st = ParseState::new(20);
+    st.push_merge_texts(Span::new(0, 10), 0);
+    st.push_merge_texts(Span::new(3, 5), 0);
+    assert_eq!(st.texts.len(), 2);
+    assert_eq!((st.texts[0].start, st.texts[0].end), (0, 10));
+    assert_eq!((st.texts[1].start, st.texts[1].end), (3, 5));
+}
+
+// 04. Two inline runs scanned one after the other keep their text apart,
+//     though only the run-separating `eol` lies between them
+#[test]
+fn merge_04_consecutive_runs_keep_text_apart() {
+    let src: &[u8] = b"a\nb";
+    let mut st = ParseState::new(src.len());
+    for (s, e) in [(0usize, 1usize), (2, 3)] {
+        meon::parse_inline!(
+            st, src, s, e, texts, true, b'\\', b' ', b'\t', b'\n', 1, false;
+            on_trigger(b'*') {
+                symmetric b'*' { parse_inside = true; 1 => italics }
+            }
+        );
+    }
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// ================================================================
+// asymmetric open refused by the stack
+// ================================================================
+
+// 01. An open byte refused because the stack is full under another rule's
+//     frame stays literal text, and the text before it is emitted once
+#[test]
+fn asym_refused_01_full_stack_keeps_text_once() {
+    let src = b"[a{b";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert_eq!(all(src, &st.texts), vec!["[a", "{b"]);
+}
+
+// 02. A second open of a `balanced = false` rule, refused by its cap of one,
+//     stays literal text, and the text before it is emitted once
+#[test]
+fn asym_refused_02_unbalanced_cap_keeps_text_once() {
+    let src: &[u8] = b"(a(b";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'(', b')') {
+            asymmetric b'(', b')' { balanced = false; parse_inside = true; 1 => objects }
+        }
+    );
+    assert_eq!(all(src, &st.texts), vec!["(a", "(b"]);
+    assert!(st.objects.is_empty());
+}
+
+// 03. Inside a transparent chained match that never closes, the text around
+//     a refused open is the text the same run gives without the match
+#[test]
+fn asym_refused_03_inside_open_chained_match_keeps_text() {
+    let src: &[u8] = b"see [x<y<z";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'<', b'>', b'[', b']', b'(', b')') {
+            asymmetric b'<', b'>' { balanced = false; parse_inside = true; 1 => autolinks }
+            chained: Link {
+                | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["see [x", "<y", "<z"]);
+}
+
+// ================================================================
+// overflow pairs: an open absorbed past the cap and the close it pairs with
+// ================================================================
+//
+// `run_inline_balanced_nested!` declares `{`/`}` as a frame with no other rule
+// next to it; 03 and 04 add another one.
+
+// 01. In a frame that never closes, an overflow open, its close and the text
+//     between them stay fallback text, like the rest of the frame
+#[test]
+fn overflow_01_text_between_pair_kept_in_unclosed_frame() {
+    let src = b"{a{b}c";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert_eq!(all(src, &st.texts), vec!["{a", "{b}c"]);
+    assert!(st.objects.is_empty());
+}
+
+// 02. When the tracked frame closes, that text is rolled back with the rest
+//     of its content
+#[test]
+fn overflow_02_text_between_pair_rolled_back_when_frame_closes() {
+    let src = b"{a{b}c}";
+    let (st, _) = run_inline_balanced_nested!(src, 1);
+    assert!(st.texts.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["a{b}c"]);
+}
+
+// 03. The same with other rules in the grammar
+#[test]
+fn overflow_03_transparent_frame_keeps_text_between_pair() {
+    let src = b"[a[b]c";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert_eq!(all(src, &st.texts), vec!["[a", "[b]c"]);
+}
+
+// 04. Inside a chained match that closes, the overflow pair belongs to the
+//     link and is not emitted as fallback; the unclosed frame's text before
+//     the match is
+#[test]
+fn overflow_04_inside_closed_chained_match_text_stays_in_link() {
+    let src: &[u8] = b"{a[b{c}d](u)";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
+        on_trigger(b'{', b'}', b'[', b']', b'(', b')') {
+            asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+            chained: Link {
+                | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert_eq!(all(src, &st.texts), vec!["{a"]);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b{c}d");
+    assert_eq!(txt(src, st.links[0].url), "u");
+}
+
+// ================================================================
+// runs whose count has no declared arm
+// ================================================================
+//
+// Such a run is literal text for the off-stack forward searches: no close is
+// searched for, so nothing after it is skipped.
+
+// 01. An opaque symmetric rule declaring only `1`: a doubled run is text, and
+//     the rules after it still fire
+#[test]
+fn undeclared_01_opaque_symmetric_run_is_text() {
+    let src: &[u8] = b"x ``*a*`` `c` y";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
+        on_trigger(b'`', b'*') {
+            symmetric b'`' { parse_inside = false; 1 => codes }
+            symmetric b'*' { parse_inside = true; 1 => italics }
+        }
+    );
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.italics), vec!["a"]);
+    assert_eq!(all(src, &st.texts), vec!["x ``", "`` ", " y"]);
+}
+
+// 02. An off-stack asymmetric rule declaring only `1`: a doubled opener is
+//     text, and the close byte it would have reached is text too
+#[test]
+fn undeclared_02_asymmetric_run_is_text() {
+    let src = b"a <<b>> c";
+    let (st, _) = run_inline!(src);
+    assert!(st.autolinks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a <<b>> c"]);
+}
+
+// 03. The same rule still matches a single opener after such a run
+#[test]
+fn undeclared_03_asymmetric_single_open_after_run() {
+    let src = b"x << 2 <u> y";
+    let (st, _) = run_inline!(src);
+    assert_eq!(all(src, &st.autolinks), vec!["u"]);
+    assert_eq!(all(src, &st.texts), vec!["x << 2 ", " y"]);
+}
+
+// ================================================================
+// end-of-run drain of symmetric stack frames
+// ================================================================
+//
+// `run_inline_stack!` declares `*` on the stack. A frame still open at the
+// end of the run is discarded and its open run is text; elements of the same
+// field that closed above it stay.
+
+// 01. An unclosed italic around a bold that holds a closed italic: the inner
+//     italic stays
+#[test]
+fn drain_01_closed_inner_italic_survives_unclosed_outer() {
+    let src = b"*a **b *c* d** e";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["c"]);
+    assert_eq!(all(src, &st.bolds), vec!["b *c* d"]);
+    assert_eq!(all(src, &st.texts), vec!["*a ", " e"]);
+}
+
+// 02. The same with the counts swapped
+#[test]
+fn drain_02_closed_inner_bold_survives_unclosed_outer() {
+    let src = b"**a *b **c** d* e";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.bolds), vec!["c"]);
+    assert_eq!(all(src, &st.italics), vec!["b **c** d"]);
+    assert_eq!(all(src, &st.texts), vec!["**a ", " e"]);
+}
+
+// 03. Several unclosed frames of the same field drain without touching the
+//     element that closed between them
+#[test]
+fn drain_03_several_unclosed_frames() {
+    let src = b"*a **b *c* d";
+    let st = run_inline_stack!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["c"]);
+    assert!(st.bolds.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["*a ", "**b ", " d"]);
+}
+
+// ================================================================
+// key_value `eq` with the stack full
+// ================================================================
+//
+// `run_inline_kv_json!` declares `:` as `eq`, `,` as `end` and `{`/`}` as an
+// object with `parse_inside = true`. At `max_nest = 1` an open object fills
+// the stack, so no pair inside it can be tracked.
+
+// 01. In an object that never closes, the untracked pair stays text with its
+//     key and `eq`
+#[test]
+fn kv_cap_01_word_key_kept_in_unclosed_object() {
+    let src = b"{a b:1";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert!(st.key_values.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["{a b:1"]);
+}
+
+// 02. A quoted key stays its own span; `eq` and the value stay text
+#[test]
+fn kv_cap_02_quoted_key_kept_in_unclosed_object() {
+    let src = br#"{"k":1"#;
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert!(st.key_values.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["k"]);
+    assert_eq!(all(src, &st.texts), vec!["{", ":1"]);
+}
+
+// 03. An `end` byte after an untracked pair is text as well
+#[test]
+fn kv_cap_03_end_after_untracked_pair_is_text() {
+    let src = b"{a:1,b:2";
+    let (st, _) = run_inline_kv_json!(src, 1);
+    assert!(st.key_values.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["{a:1,b:2"]);
+}
+
+// 04. With room for one more frame the same pair is tracked
+#[test]
+fn kv_cap_04_pair_tracked_below_cap() {
+    let src = b"{a b:1";
+    let (st, _) = run_inline_kv_json!(src, 2);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), "b");
+    assert_eq!(txt(src, st.key_values[0].value), "1");
+    assert_eq!(all(src, &st.texts), vec!["{a "]);
+}
+
+// ================================================================
+// runs of the chained open byte
+// ================================================================
+//
+// Only the last byte of the run opens the match; the bytes before it are
+// text, and the prefix is the byte before that last byte.
+
+// 01. Opaque components: the first `[` of `[[` stays text
+#[test]
+fn chained_run_01_opaque_double_open() {
+    let src = b"see [[a](u) here";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.texts), vec!["see [", " here"]);
+}
+
+// 02. A longer run keeps all bytes but the last
+#[test]
+fn chained_run_02_opaque_triple_open() {
+    let src = b"[[[a](u)";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(all(src, &st.texts), vec!["[["]);
+}
+
+// 03. A prefix before the run is not the prefix of the match
+#[test]
+fn chained_run_03_opaque_prefix_before_run() {
+    let src = b"![[a](u)";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert!(!st.links[0].is_image);
+    assert_eq!(all(src, &st.texts), vec!["!["]);
+}
+
+// 04. A transparent text component: the same split
+#[test]
+fn chained_run_04_transparent_double_open() {
+    let src = b"see [[a](u) here";
+    let st = run_sym_with_chained!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(all(src, &st.texts), vec!["see [", " here"]);
+}
+
+// 05. A transparent text component with a prefix before the run
+#[test]
+fn chained_run_05_transparent_prefix_before_run() {
+    let src = b"![[a](u)";
+    let st = run_sym_with_chained!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert!(!st.links[0].is_image);
+    assert_eq!(all(src, &st.texts), vec!["!["]);
+}
+
+// 06. With `balanced = true` the bytes before the last one are text too
+#[test]
+fn chained_run_06_balanced_text_component() {
+    let src = b"[[a](u)";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a");
+    assert_eq!(all(src, &st.texts), vec!["["]);
+}
+
+// ================================================================
+// transparent chained match: the text inside it
+// ================================================================
+//
+// `run_chained_held!` declares a chained rule with a transparent text
+// component and `(`/`)` among the triggers, so the match can complete; `$upi`
+// sets the url component's opacity. `~` is a stack rule (into `codes`), `*`
+// another one (into `italics`) and `{`/`}` a transparent frame (into
+// `objects`). Text inside a match is held like text in an open frame: rolled
+// back when the match completes, kept when it fails.
+
+macro_rules! run_chained_held {
+    ($src:expr, $upi:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'{', b'}', b'~', b'*', b'[', b']', b'(', b')') {
+                symmetric b'~' { parse_inside = true; 1 => codes }
+                symmetric b'*' { parse_inside = true; 1 => italics }
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+            }
+        );
+        st
+    }};
+}
+
+// 01. A frame opened inside a failed match and closed after it does not take
+//     the opener with its rollback
+#[test]
+fn chained_held_01_failed_match_frame_closed_after() {
+    let src = b"x [{a]b} y";
+    let st = run_chained_held!(src, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.objects), vec!["a]b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [", " y"]);
+}
+
+// 02. The same with a stack-symmetric frame
+#[test]
+fn chained_held_02_failed_match_symmetric_closed_after() {
+    let src = b"x [~a]b~ y";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.codes), vec!["a]b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [", " y"]);
+}
+
+// 03. A failed match writes no text over an element closed inside it
+#[test]
+fn chained_held_03_failed_match_element_inside() {
+    let src = b"x [a ~b~ c] d";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [a ", " c] d"]);
+}
+
+// 04. A match still open at the end of the run keeps the text before its
+//     inner elements
+#[test]
+fn chained_held_04_match_open_at_run_end() {
+    let src = b"x [a ~b~ c";
+    let st = run_chained_held!(src, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x [a ", " c"]);
+}
+
+// 05. A failed match gives the spans the same run gives without its opener
+#[test]
+fn chained_held_05_failed_match_is_no_match() {
+    for src in [
+        &b"x [a {b} c] d"[..],
+        b"x [a *b] c* d",
+        b"x [a *b] ~c~ d* e",
+        b"x [{a]b} y",
+        b"[~a]b~",
+        b"x [a ~b~ c",
+        b"x [a *b ~c~ d* e] f",
+    ] {
+        let plain: Vec<u8> = src
+            .iter()
+            .map(|&b| if b == b'[' { b'q' } else { b })
+            .collect();
+        let (a, b) = (
+            run_chained_held!(src, false),
+            run_chained_held!(&plain, false),
+        );
+        let spans = |v: &[meon::span::Span]| v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>();
+        assert!(a.links.is_empty());
+        assert_eq!(
+            spans(&a.texts),
+            spans(&b.texts),
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+        assert_eq!(spans(&a.codes), spans(&b.codes));
+        assert_eq!(spans(&a.italics), spans(&b.italics));
+        assert_eq!(spans(&a.objects), spans(&b.objects));
+    }
+}
+
+// 06. A completed match covers the text inside it; an element inside stays
+#[test]
+fn chained_held_06_completed_match_element_inside() {
+    let src = b"x [a ~b~ c](u) d";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a ~b~ c");
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d"]);
+}
+
+// 07. A frame opened inside a completed match and closed after it rolls back
+//     only the text after the match
+#[test]
+fn chained_held_07_frame_opened_inside_closed_after() {
+    let src = b"x [{a](u) b} c";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "{a");
+    assert_eq!(all(src, &st.objects), vec!["a](u) b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " c"]);
+}
+
+// 08. A frame open before the match and closed inside it owns the text
+//     before the opener
+#[test]
+fn chained_held_08_frame_opened_before_closed_inside() {
+    let src = b"x {a [b} c](u) d";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b} c");
+    assert_eq!(all(src, &st.objects), vec!["a [b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d"]);
+}
+
+// 09. A transparent url component holds its text the same way
+#[test]
+fn chained_held_09_transparent_url() {
+    let src = b"x [a](b ~c~ d) e";
+    let st = run_chained_held!(src, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "b ~c~ d");
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " e"]);
+}
+
+// 10. A pair inside one component of a match nests in it
+#[test]
+fn chained_held_10_pair_inside_match() {
+    let src = b"x [a *b ~c~ d* e] f";
+    let st = run_chained_held!(src, false);
+    assert_eq!(all(src, &st.italics), vec!["b ~c~ d"]);
+    assert_eq!(all(src, &st.codes), vec!["c"]);
+    assert_eq!(all(src, &st.texts), vec!["x [a ", " e] f"]);
+}
+
+// 11. A frame open before the match and closed inside it, with text flushed
+//     on both sides of its close: the match's rollback follows the frame's
+#[test]
+fn chained_held_11_crossing_frame_lowers_snapshot() {
+    let src = b"{x ~y~ [a} b ~c~ d](u) e";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a} b ~c~ d");
+    assert_eq!(all(src, &st.objects), vec!["x ~y~ [a"]);
+    assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
+}
+
+// 12. A pair opened before a match and closed inside it: the match's text
+//     before its opener is the pair's
+#[test]
+fn chained_held_12_pair_closed_inside_match() {
+    let src = b"x *a ~b~ c [d* e](u) f";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "d* e");
+    assert_eq!(all(src, &st.italics), vec!["a ~b~ c [d"]);
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " f"]);
+}
+
+// 13. A pair opened inside a match that completes before the pair closes:
+//     the text before the pair's opener is the match's
+#[test]
+fn chained_held_13_pair_opened_inside_match() {
+    let src = b"[x ~y~ *a](u) b ~c~ d* e";
+    let st = run_chained_held!(src, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "x ~y~ *a");
+    assert_eq!(all(src, &st.italics), vec!["a](u) b ~c~ d"]);
+    assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
+}
+
+// 14. A pair whose ends lie in the two components of one match
+#[test]
+fn chained_held_14_pair_across_components() {
+    let src = b"[a *b](c* d) e";
+    let st = run_chained_held!(src, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(all(src, &st.italics), vec!["b](c"]);
+    assert_eq!(all(src, &st.texts), vec![" e"]);
+}
+
+// 15. A pair opened inside a frame takes that frame's close byte as content:
+//     the pair closes, and the frame is discarded with its open byte as text
+#[test]
+fn chained_held_15_pair_inside_frame_takes_its_close() {
+    let src = b"{x ~y~ a *b} ~c~ d* e";
+    let st = run_chained_held!(src, false);
+    assert!(st.objects.is_empty());
+    assert_eq!(all(src, &st.codes), vec!["y", "c"]);
+    assert_eq!(all(src, &st.italics), vec!["b} ~c~ d"]);
+    assert_eq!(all(src, &st.texts), vec!["{x ", " a ", " e"]);
+}
+
+// ================================================================
+// runs of a delimiter byte that a rule reads byte by byte
+// ================================================================
+//
+// `run_chained_runs!` declares a chained rule with both components
+// transparent; `$tbal` and `$ubal` set their `balanced`. Inside a match the
+// bytes of a close run act one by one, and with `balanced = true` each open
+// byte nests one level. `run_inline_kv_json!` declares `:` as `eq` and `,` as
+// `end`.
+
+macro_rules! run_chained_runs {
+    ($src:expr, $tbal:tt, $ubal:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'[', b']', b'(', b')') {
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = $tbal; } => text,
+                    | b'(', b')' | { parse_inside = true; balanced = $ubal; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+            }
+        );
+        st
+    }};
+}
+
+// 01. The url component must open right after the byte that closes the text
+//     component, not after the whole close run
+#[test]
+fn byte_runs_01_text_close_run_without_url() {
+    let src = b"x [a]](u) y";
+    let st = run_chained_runs!(src, false, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["x [a]](u) y"]);
+}
+
+// 02. The bytes of a url close run after the closing one stay text
+#[test]
+fn byte_runs_02_url_close_run_rest_is_text() {
+    let src = b"x [a](u)) y";
+    let st = run_chained_runs!(src, false, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.texts), vec!["x ", ") y"]);
+}
+
+// 03. In a balanced text component each byte of an open run nests one level
+#[test]
+fn byte_runs_03_balanced_text_open_run() {
+    let src = b"x [a [[b] c] d](u) y";
+    let st = run_chained_runs!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a [[b] c] d");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 04. A close run leaves the nested level and closes the component in one go
+#[test]
+fn byte_runs_04_balanced_text_close_run() {
+    let src = b"x [a [b]](u) y";
+    let st = run_chained_runs!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "a [b]");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 05. The same for a balanced url component
+#[test]
+fn byte_runs_05_balanced_url_runs() {
+    let src = b"x [a](b ((c) d) e) y";
+    let st = run_chained_runs!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "b ((c) d) e");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+    let src = b"x [a](b (c)) y";
+    let st = run_chained_runs!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].url), "b (c)");
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 06. The rest of an `eq` run is value content
+#[test]
+fn byte_runs_06_eq_run_rest_is_value() {
+    let src = br#"{"a"::1}"#;
+    let (st, _) = run_inline_kv_json!(src, 8);
+    assert_eq!(st.key_values.len(), 1);
+    assert_eq!(txt(src, st.key_values[0].key), r#""a""#);
+    assert_eq!(txt(src, st.key_values[0].value), ":1");
+}
+
+// 07. The rest of an `end` run is text, and the next key starts after it
+#[test]
+fn byte_runs_07_end_run_rest_is_text() {
+    for (src, keys) in [
+        (&br#""a":1,,"b":2"#[..], [r#""a""#, r#""b""#]),
+        (b"a:1,,b:2", ["a", "b"]),
+    ] {
+        let (st, _) = run_inline_kv_json!(src, 8);
+        let kvs: Vec<(&str, &str)> = st
+            .key_values
+            .iter()
+            .map(|kv| (txt(src, kv.key), txt(src, kv.value)))
+            .collect();
+        assert_eq!(kvs, vec![(keys[0], "1"), (keys[1], "2")]);
+        assert_eq!(all(src, &st.texts), vec![","]);
+    }
+}
+
+// 08. After a failed match the rest of the close run is read again: here the
+//     text component opens and closes on the same byte, so the second byte
+//     opens a new match
+#[test]
+fn byte_runs_08_failed_match_rereads_close_run() {
+    let src = br#"x "a""b"(u) y"#;
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'"', b'(', b')') {
+            chained: Link {
+                | b'"', b'"' | { parse_inside = true; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = true; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "u");
+    assert_eq!(all(src, &st.texts), vec![r#"x "a""#, " y"]);
+}
+
+// ================================================================
+// close bytes a failed search did not find
+// ================================================================
+//
+// A failed forward search records its close byte, so later searches skip
+// the part of the run it covered. The url component's search starts past
+// the text component, ahead of the scan: a later search starting before it
+// still scans up to that point.
+
+// 01. A failed url search does not hide the `)` of a match nested in the
+//     failed match's text
+#[test]
+fn dead_close_01_url_search_ahead_of_scan() {
+    let src = b"[a [b](c) d](e";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+    assert_eq!(all(src, &st.texts), vec!["[a ", " d](e"]);
+}
+
+// 02. Nor the same byte for another rule's search
+#[test]
+fn dead_close_02_shared_close_byte() {
+    let src = b"[a {b) ](c";
+    let le = src.len();
+    let mut st = ParseState::new(le);
+    meon::parse_inline!(
+        st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+        on_trigger(b'[', b'{') {
+            asymmetric b'{', b')' { balanced = false; parse_inside = false; 1 => autolinks }
+            chained: Link {
+                | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                prefix | b'!' | => is_image,
+            } => links
+        }
+    );
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.autolinks), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["[a ", " ](c"]);
+}
+
+// ================================================================
+// key_value with `end` equal to `sep`
+// ================================================================
+//
+// `run_kv_sep_end!` declares `:` as `eq` and the `sep` byte ` ` as `end`;
+// `$allow` sets `allow_sep`. The `sep` bytes skipped before a value do not
+// close it.
+
+macro_rules! run_kv_sep_end {
+    ($src:expr, $allow:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b':', b'{', b'}') {
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
+                key_value: KeyValue {
+                    eq = b':'; allow_sep = $allow; end = b' ';
+                    key => key, value => value,
+                } => key_values
+            }
+        );
+        st
+    }};
+}
+
+fn sep_end_pairs<'a>(src: &'a [u8], st: &ParseState) -> Vec<(&'a str, &'a str)> {
+    st.key_values
+        .iter()
+        .map(|kv| {
+            assert!(
+                kv.value.start <= kv.value.end,
+                "inverted value {:?}",
+                kv.value
+            );
+            (txt(src, kv.key), txt(src, kv.value))
+        })
+        .collect()
+}
+
+// 01. The space after `eq` is skipped, not taken as the end of the value
+#[test]
+fn sep_end_01_space_after_eq_is_skipped() {
+    let src = b"a: 1";
+    let st = run_kv_sep_end!(src, true);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "1")]);
+    assert!(st.texts.is_empty());
+}
+
+// 02. A space after the value ends it
+#[test]
+fn sep_end_02_space_after_value_ends_it() {
+    let src = b"a: 1 b:  2";
+    let st = run_kv_sep_end!(src, true);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "1"), ("b", "2")]);
+    assert!(st.texts.is_empty());
+}
+
+// 03. The same inside a container
+#[test]
+fn sep_end_03_inside_container() {
+    let src = b"{a: 1}";
+    let st = run_kv_sep_end!(src, true);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "1")]);
+    assert_eq!(all(src, &st.objects), vec!["a: 1"]);
+}
+
+// 04. Without `allow_sep` the space right after `eq` ends an empty value
+#[test]
+fn sep_end_04_without_allow_sep() {
+    let src = b"a: 1";
+    let st = run_kv_sep_end!(src, false);
+    assert_eq!(sep_end_pairs(src, &st), vec![("a", "")]);
+    assert_eq!(all(src, &st.texts), vec!["1"]);
+}
+
+// 03. Openers before a far text close with no url component after it all
+//     fail, and their text stays
+#[test]
+fn dead_close_03_openers_before_found_close() {
+    let src = b"[a [b [c ]] d";
+    let (st, _) = run_inline!(src);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["[a [b [c ]] d"]);
+}
+
+// 04. An opener past the remembered close searches again
+#[test]
+fn dead_close_04_opener_past_found_close() {
+    let src = b"[a] [b](c)";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+    assert_eq!(all(src, &st.texts), vec!["[a] "]);
+}
+
+// 05. A balanced component's search that meets no close byte records it:
+//     the later openers fail without a rescan, and their text stays
+#[test]
+fn dead_close_05_balanced_search_without_close() {
+    let src = b"[a [b [c";
+    let st = run_chained_balanced!(src, true, false);
+    assert!(st.links.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["[a [b [c"]);
+}
+
+// 06. Meeting close bytes without balancing does not disqualify a later
+//     opener inside the failed match: that opener may still balance
+#[test]
+fn dead_close_06_balanced_text_search_meets_close() {
+    let src = b"[a [b](c) d";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "b");
+    assert_eq!(txt(src, st.links[0].url), "c");
+    assert_eq!(all(src, &st.texts), vec!["[a ", " d"]);
+}
+
+// 07. The same for a balanced url component
+#[test]
+fn dead_close_07_balanced_url_search_meets_close() {
+    let src = b"[a](b [c](d)";
+    let st = run_chained_balanced!(src, false, true);
+    assert_eq!(st.links.len(), 1);
+    assert_eq!(txt(src, st.links[0].text), "c");
+    assert_eq!(txt(src, st.links[0].url), "d");
+    assert_eq!(all(src, &st.texts), vec!["[a](b "]);
+}
+
+// 08. Repeated balanced text openers may meet a close without any complete
+//     pair. Every byte remains text, including the final close.
+#[test]
+fn dead_close_08_repeated_balanced_text_with_close() {
+    const N: usize = 1_024;
+    let mut src = [b' '; N * 3 + 1];
+    for chunk in src[..N * 3].chunks_exact_mut(3) {
+        chunk.copy_from_slice(b"[x ");
+    }
+    src[N * 3] = b']';
+
+    let st = run_chained_balanced!(&src, true, false);
+    assert!(st.links.is_empty());
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, src.len() as u32)]);
+}
+
+// 09. Repeated balanced url openers do not hide the last pair, whose url
+//     is empty and closes on the only closing byte.
+#[test]
+fn dead_close_09_repeated_balanced_url_with_close() {
+    const N: usize = 1_024;
+    let mut src = [b' '; N * 4 + 1];
+    for chunk in src[..N * 4].chunks_exact_mut(4) {
+        chunk.copy_from_slice(b"[x](");
+    }
+    src[N * 4] = b')';
+
+    let st = run_chained_balanced!(&src, false, true);
+    let end = src.len() as u32;
+    assert_eq!(
+        st.links.as_slice(),
+        &[Link {
+            is_image: false,
+            text: Span::new(end - 4, end - 3),
+            url: Span::new(end - 1, end - 1),
+        }]
+    );
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, end - 5)]);
+}
+
+// 10. A failed balanced text search still permits an inner pair whose
+//     text contains an escaped close.
+#[test]
+fn dead_close_10_balanced_text_recovers_escaped_inner() {
+    let src = br"[a [b\]](c)";
+    let st = run_chained_balanced!(src, true, false);
+    assert_eq!(
+        st.links.as_slice(),
+        &[Link {
+            is_image: false,
+            text: Span::new(4, 7),
+            url: Span::new(9, 10),
+        }]
+    );
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, 3)]);
+}
+
+// 11. The same recovery applies when the failed search is for a balanced
+//     url and the inner url contains an escaped close.
+#[test]
+fn dead_close_11_balanced_url_recovers_escaped_inner() {
+    let src = br"[a](b [c](d\))";
+    let st = run_chained_balanced!(src, false, true);
+    assert_eq!(
+        st.links.as_slice(),
+        &[Link {
+            is_image: false,
+            text: Span::new(7, 8),
+            url: Span::new(10, 13),
+        }]
+    );
+    assert_eq!(st.texts.as_slice(), &[Span::new(0, 6)]);
+}
+
+// ================================================================
+// line ends: what the hard-break marker takes
+// ================================================================
+//
+// `run_inline!` declares `hard_break(b'\\', b' ', 2)` and `\` as the escape
+// byte. The marker is a `\` that is not itself escaped, or at least two
+// spaces; nothing else before the line end is trimmed.
+
+// 01. An escaped backslash before the line end is text, not a marker
+#[test]
+fn line_end_01_escaped_backslash_is_text() {
+    let src = b"a\\\\\nb";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a\\\\", "b"]);
+}
+
+// 02. With three backslashes the last one is the marker
+#[test]
+fn line_end_02_odd_backslash_run_is_marker() {
+    let src = b"a\\\\\\\nb";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 3);
+    assert_eq!(all(src, &st.texts), vec!["a\\\\", "b"]);
+}
+
+// 03. The same at the end of the run
+#[test]
+fn line_end_03_backslash_at_run_end() {
+    let src = b"a\\\\";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a\\\\"]);
+    let src = b"a\\";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(all(src, &st.texts), vec!["a"]);
+}
+
+// 04. A single space before the line end stays text
+#[test]
+fn line_end_04_single_space_stays_text() {
+    let src = b"a \nb";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a ", "b"]);
+    let src = b"a ";
+    let (st, _) = run_inline!(src);
+    assert!(st.hard_breaks.is_empty());
+    assert_eq!(all(src, &st.texts), vec!["a "]);
+}
+
+// 05. Two spaces are the marker and are trimmed
+#[test]
+fn line_end_05_space_run_is_marker() {
+    let src = b"a  \nb";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 1);
+    assert_eq!(all(src, &st.texts), vec!["a", "b"]);
+}
+
+// 06. With `merge_simple` a line ending in one space joins the next line
+//     like a line ending without one
+#[test]
+fn line_end_06_single_space_merges_like_bare_eol() {
+    for (src, want) in [(&b"a \nb"[..], "a \nb"), (b"a\nb", "a\nb")] {
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, true, b'\\', b' ', b'\t', b'\n', 1, true;
+            hard_break(b'\\', b' ', 2) => hard_breaks;
+            on_trigger(b'*') {
+                symmetric b'*' { parse_inside = true; 1 => italics }
+            }
+        );
+        assert!(st.hard_breaks.is_empty());
+        assert_eq!(all(src, &st.texts), vec![want]);
+    }
+}
+
+// 07. At the end of the run an odd backslash run ends in the marker too
+#[test]
+fn line_end_07_odd_backslash_run_at_run_end() {
+    let src = b"a\\\\\\";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 3);
+    assert_eq!(all(src, &st.texts), vec!["a\\\\"]);
+}
+
+// 08. Spaces before a backslash marker stay text
+#[test]
+fn line_end_08_spaces_before_backslash_marker() {
+    let src = b"a  \\\nb";
+    let (st, _) = run_inline!(src);
+    assert_eq!(st.hard_breaks.len(), 1);
+    assert_eq!(st.hard_breaks[0].start, 3);
+    assert_eq!(all(src, &st.texts), vec!["a  ", "b"]);
+}
+
+// 09. The marker is escaped by the grammar's escape byte, not by a marker
+//     byte before it, when the two differ
+#[test]
+fn line_end_09_marker_byte_differs_from_escape() {
+    for (src, hb, want) in [
+        (&b"a\\^"[..], None, vec!["a\\^"]),
+        (b"a^^", Some(2), vec!["a^"]),
+        (b"a\\^\nb", None, vec!["a\\^", "b"]),
+        (b"a^^\nb", Some(2), vec!["a^", "b"]),
+    ] {
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 1, true;
+            hard_break(b'^', b' ', 2) => hard_breaks;
+            on_trigger(b'*') {
+                symmetric b'*' { parse_inside = true; 1 => italics }
+            }
+        );
+        assert_eq!(
+            st.hard_breaks.first().map(|h| h.start),
+            hb,
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+        assert_eq!(
+            all(src, &st.texts),
+            want,
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+    }
+}
+
+// ================================================================
+// chained rules of both kinds in one grammar
+// ================================================================
+//
+// `run_chained_kinds!` declares a chained rule with a transparent text
+// component (into `links`), `$upi` setting its url component's opacity, and
+// an opaque one on `{`/`}` and `<`/`>` (into `refs`), `$rbal` setting its
+// components' `balanced`. `~` is a stack rule (into `codes`). The phase
+// state of a transparent match is its own rule's: the other rule's bytes
+// neither close nor nest it, and the rule's own open byte inside its match
+// opens nothing.
+
+macro_rules! run_chained_kinds {
+    ($src:expr, $upi:tt, $rbal:tt) => {{
+        let src: &[u8] = $src;
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'~', b'[', b']', b'(', b')', b'{', b'}', b'<', b'>') {
+                symmetric b'~' { parse_inside = true; 1 => codes }
+                chained: Link {
+                    | b'[', b']' | { parse_inside = true; balanced = false; } => text,
+                    | b'(', b')' | { parse_inside = $upi; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+                chained: Link {
+                    | b'{', b'}' | { parse_inside = false; balanced = $rbal; } => text,
+                    | b'<', b'>' | { parse_inside = false; balanced = $rbal; } => url,
+                    prefix | b'@' | => is_image,
+                } => refs
+            }
+        );
+        st
+    }};
+}
+
+fn components(src: &[u8], v: &[Link]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|l| (txt(src, l.text).to_string(), txt(src, l.url).to_string()))
+        .collect()
+}
+
+// 01. The rule's open byte inside its transparent text opens nothing: the
+//     text after it is read by the other rules
+#[test]
+fn chained_kinds_01_open_byte_inside_text() {
+    let src = b"x [a [~b~](c) d](e) y";
+    let st = run_chained_kinds!(src, true, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a [~b~".into(), "c".into())]
+    );
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " d](e) y"]);
+}
+
+// 02. The same inside a transparent url component
+#[test]
+fn chained_kinds_02_open_byte_inside_url() {
+    let src = b"x [a](u [~b~](c) v) y";
+    let st = run_chained_kinds!(src, true, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u [~b~](c".into())]
+    );
+    assert_eq!(all(src, &st.codes), vec!["b"]);
+    assert_eq!(all(src, &st.texts), vec!["x ", " v) y"]);
+}
+
+// 03. The other rule's close byte does not close the text component
+#[test]
+fn chained_kinds_03_other_close_byte() {
+    let src = b"x [a } b](u) y";
+    let st = run_chained_kinds!(src, false, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a } b".into(), "u".into())]
+    );
+    assert!(st.refs.is_empty());
+}
+
+// 04. The other rule's open byte does not nest the text component
+#[test]
+fn chained_kinds_04_other_open_byte() {
+    let src = b"x [a { b](u) y";
+    let st = run_chained_kinds!(src, false, true);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a { b".into(), "u".into())]
+    );
+    assert!(st.refs.is_empty());
+}
+
+// 05. The other rule matches inside the transparent text component
+#[test]
+fn chained_kinds_05_other_rule_inside_text() {
+    let src = b"x [a {r}<s> b](u) y";
+    for rbal in [false, true] {
+        let st = if rbal {
+            run_chained_kinds!(src, false, true)
+        } else {
+            run_chained_kinds!(src, false, false)
+        };
+        assert_eq!(components(src, &st.refs), vec![("r".into(), "s".into())]);
+        assert_eq!(
+            components(src, &st.links),
+            vec![("a {r}<s> b".into(), "u".into())]
+        );
+    }
+}
+
+// 06. ... and not inside the opaque url component
+#[test]
+fn chained_kinds_06_other_rule_inside_opaque_url() {
+    let src = b"x [a](u {r}<s>) y";
+    let st = run_chained_kinds!(src, false, false);
+    assert!(st.refs.is_empty());
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u {r}<s>".into())]
+    );
+}
+
+// 07. A balanced component whose open and close bytes are one byte never
+//     closes, but the byte is there: another rule's search still finds it
+#[test]
+fn chained_kinds_07_same_open_and_close_byte() {
+    for (src, want) in [(&b"\"a <b\""[..], vec!["b"]), (b"[a]\"x <b\"", vec!["b"])] {
+        let le = src.len();
+        let mut st = ParseState::new(le);
+        meon::parse_inline!(
+            st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', 4, true;
+            on_trigger(b'"', b'<', b'[') {
+                asymmetric b'<', b'"' { balanced = false; parse_inside = false; 1 => autolinks }
+                chained: Link {
+                    | b'"', b'"' | { parse_inside = false; balanced = true; } => text,
+                    | b'(', b')' | { parse_inside = false; balanced = false; } => url,
+                    prefix | b'!' | => is_image,
+                } => links
+                chained: Link {
+                    | b'[', b']' | { parse_inside = false; balanced = false; } => text,
+                    | b'"', b'"' | { parse_inside = false; balanced = true; } => url,
+                    prefix | b'@' | => is_image,
+                } => refs
+            }
+        );
+        assert!(st.links.is_empty() && st.refs.is_empty());
+        assert_eq!(
+            all(src, &st.autolinks),
+            want,
+            "{:?}",
+            String::from_utf8_lossy(src)
+        );
+    }
+}
+
+// 08. The other rule's url close byte does not close the url component
+#[test]
+fn chained_kinds_08_other_url_close_byte() {
+    let src = b"x [a](u > v) y";
+    let st = run_chained_kinds!(src, true, false);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u > v".into())]
+    );
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
+}
+
+// 09. The other rule's url open byte does not nest the url component
+#[test]
+fn chained_kinds_09_other_url_open_byte() {
+    let src = b"x [a](u < v) y";
+    let st = run_chained_kinds!(src, true, true);
+    assert_eq!(
+        components(src, &st.links),
+        vec![("a".into(), "u < v".into())]
+    );
+    assert_eq!(all(src, &st.texts), vec!["x ", " y"]);
 }

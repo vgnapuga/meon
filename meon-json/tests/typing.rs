@@ -801,3 +801,29 @@ fn test_53_type_scalars_is_repeatable_and_non_mutating() {
     assert_eq!(c.members.len(), members_before);
     assert_eq!(c.arrays.len(), arrays_before);
 }
+
+// ==========================================================================
+// Spans that do not fit the source
+//
+// The content struct's fields are public, so a caller can hand the post-pass
+// a span the parser never produced. Typing then panics like slice indexing
+// instead of reading outside the source.
+// ==========================================================================
+
+// 54. An array span reaching past the end of the source panics.
+#[test]
+#[should_panic]
+fn test_54_out_of_range_array_span_panics() {
+    let mut c = JsonParser::parse(b"[1]");
+    c.arrays[0].end = 1 << 20;
+    let _ = c.type_scalars();
+}
+
+// 55. A member value span over a replaced, shorter source panics.
+#[test]
+#[should_panic]
+fn test_55_member_span_over_shorter_source_panics() {
+    let mut c = JsonParser::parse(br#"{"a":1}"#);
+    c.source = b"";
+    let _ = c.type_field(ScalarKind::Num);
+}

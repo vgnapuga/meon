@@ -30,14 +30,14 @@ pub struct Pair {
     pub value: meon::span::Span,
 }
 
-// `meon_md`'s actual grammar, verbatim, with exactly one addition: a
+// A Markdown-shaped grammar with an additional
 // `key_value` rule inside the same `on_trigger` block as `*`/`` ` ``/`<`/`[`,
 // and `:` added to that trigger set (`,` is auto-added by the engine from
 // `key_value`'s own `end =`). Fuzz-only: `meon-md`'s real, published
 // grammar does not declare this — `:` firing on ordinary prose ("Note:",
 // "3:00", a URL after `http`) on every real parse is not an acceptable
-// cost for the production crate just to get this coverage. Everything else
-// below is copied unchanged from `meon-md/src/lib.rs`.
+// cost for the production crate just to get this coverage. This target also
+// leaves `crlf` disabled and both chained components unbalanced.
 define_parser!(MdKvFuzz {
     sep = b' ',
     eol = b'\n',
@@ -52,12 +52,10 @@ define_parser!(MdKvFuzz {
         on_trigger(b'*', b'`', b'[', b'<', b':') {
             symmetric b'`' {
                 parse_inside = false;
-                balanced     = false;
                 1 => codes [80],
             }
             symmetric b'*' {
                 parse_inside = true;
-                balanced     = true;
                 1 => italics [40], 2 => bolds [40], 3 => bold_italics [80],
             }
             asymmetric b'<', b'>' {
@@ -116,10 +114,9 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    // Same rule set `meon-md`'s real grammar declares, copied verbatim,
-    // plus `key_value` sharing the unified `frames`/`fdepth` stack with
-    // its own balanced=true symmetric (`*`) and asymmetric (`<`,`>`) stack
-    // users. One parser, one pass over the input.
+    // Markdown-shaped rules plus `key_value`, sharing the unified
+    // `frames`/`fdepth` stack with transparent symmetric (`*`) frames.
+    // The opaque autolink rule uses a separate forward search.
     let kv = MdKvFuzzParser::parse(data);
     let kv_check = |start: u32, end: u32| {
         assert!(start <= end);

@@ -21,7 +21,7 @@ where
     src: &'a [u8],
     byte: u8,
     max: u8,
-    eol: u8,
+    breaks: LineBreaks,
     sep: u8,
     make: F,
     pos: usize,
@@ -40,17 +40,24 @@ where
     /// - `byte` — the marker byte that must appear at the start of a line.
     /// - `max` — maximum number of consecutive `byte` occurrences to count;
     ///   runs longer than `max` do not match.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte required immediately after the marker run
     ///   (or end of line).
     /// - `make` — closure that receives the count of marker bytes and constructs
     ///   the metadata value `T`.
-    pub fn new(src: &'a [u8], byte: u8, max: u8, eol: u8, sep: u8, make: F) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        byte: u8,
+        max: u8,
+        breaks: impl Into<LineBreaks>,
+        sep: u8,
+        make: F,
+    ) -> Self {
         Self {
             src,
             byte,
             max,
-            eol,
+            breaks: breaks.into(),
             sep,
             make,
             pos: 0,
@@ -72,7 +79,8 @@ where
             let p = memchr::memchr(self.byte, &src[self.pos..])? + self.pos;
 
             // The marker run must begin its line.
-            if p > 0 && src[p - 1] != self.eol {
+            let eol = self.breaks.eol;
+            if p > 0 && src[p - 1] != eol {
                 self.pos = p + 1;
                 continue;
             }
@@ -84,18 +92,22 @@ where
                 i += 1;
             }
 
-            // The run must terminate the line or be followed by `sep`.
-            if i >= len || src[i] == self.eol {
-                let meta = (self.make)(c);
-                self.pos = if i < len { i + 1 } else { len };
-                return Some((meta, Span::new(i as u32, i as u32)));
-            }
-            if src[i] == self.sep {
-                let cs = i + 1;
-                let le = find_line_end(src, cs, self.eol);
-                let meta = (self.make)(c);
-                self.pos = if le < len { le + 1 } else { len };
-                return Some((meta, Span::new(cs as u32, le as u32)));
+            // The run must terminate the line's content or be followed by
+            // `sep`.
+            if i >= len || src[i] == eol || src[i] == self.sep || src[i] == b'\r' {
+                let le = find_line_end(src, i, eol);
+                let ce = self.breaks.content_end(src, p, le);
+                let next = if le < len { le + 1 } else { len };
+                if i >= ce {
+                    let meta = (self.make)(c);
+                    self.pos = next;
+                    return Some((meta, Span::new(i as u32, i as u32)));
+                }
+                if src[i] == self.sep {
+                    let meta = (self.make)(c);
+                    self.pos = next;
+                    return Some((meta, Span::new((i + 1) as u32, ce as u32)));
+                }
             }
 
             // Run too long or missing separator: skip it. Deeper bytes of the

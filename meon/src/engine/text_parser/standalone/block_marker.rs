@@ -24,6 +24,7 @@ where
     F: Fn(u8) -> T,
 {
     src: &'a [u8],
+    breaks: LineBreaks,
     eol: u8,
     sep: u8,
     tab: u8,
@@ -46,7 +47,7 @@ where
     /// # Parameters
     ///
     /// - `src` — source byte slice to scan.
-    /// - `eol` — line terminator byte.
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`].
     /// - `sep` — separator byte; allowed as leading indentation and required
     ///   immediately after the marker byte.
     /// - `tab` — tab byte; treated equivalently to `sep` for indentation and
@@ -54,7 +55,15 @@ where
     /// - `matches` — predicate that returns `true` for valid marker bytes.
     /// - `make` — closure that receives the marker byte and constructs the
     ///   metadata value `T`.
-    pub fn new(src: &'a [u8], eol: u8, sep: u8, tab: u8, matches: M, make: F) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        breaks: impl Into<LineBreaks>,
+        sep: u8,
+        tab: u8,
+        matches: M,
+        make: F,
+    ) -> Self {
+        let breaks: LineBreaks = breaks.into();
         let mut needles = [0u8; 3];
         let (nn, streaming) = match probe_matcher(&matches, &mut needles) {
             Some(n) => (n, true),
@@ -62,7 +71,8 @@ where
         };
         Self {
             src,
-            eol,
+            breaks,
+            eol: breaks.eol,
             sep,
             tab,
             matches,
@@ -110,9 +120,10 @@ where
             if nxt < len && (src[nxt] == self.sep || src[nxt] == self.tab) {
                 let cs = nxt + 1;
                 let le = find_line_end(src, cs, self.eol);
+                let ce = self.breaks.content_end(src, cs, le);
                 let meta = (self.make)(src[p]);
                 self.pos = if le < len { le + 1 } else { len };
-                return Some((meta, Span::new(cs as u32, le as u32)));
+                return Some((meta, Span::new(cs as u32, ce as u32)));
             }
 
             // Marker at line start without its separator: the line is ruled
@@ -141,18 +152,19 @@ where
                 return None;
             }
             let le = find_line_end(src, self.pos, self.eol);
+            let ce = self.breaks.content_end(src, self.pos, le);
 
             let mut p = self.pos;
-            while p < le && (src[p] == self.sep || src[p] == self.tab) {
+            while p < ce && (src[p] == self.sep || src[p] == self.tab) {
                 p += 1;
             }
 
-            if p < le && (self.matches)(src[p]) {
+            if p < ce && (self.matches)(src[p]) {
                 let nxt = p + 1;
-                if nxt < le && (src[nxt] == self.sep || src[nxt] == self.tab) {
+                if nxt < ce && (src[nxt] == self.sep || src[nxt] == self.tab) {
                     let cs = nxt + 1;
                     let meta = (self.make)(src[p]);
-                    let span = Span::new(cs as u32, le as u32);
+                    let span = Span::new(cs as u32, ce as u32);
                     self.pos = if le < len { le + 1 } else { len };
                     return Some((meta, span));
                 }
@@ -354,5 +366,68 @@ mod tests {
         assert_eq!(iter.next(), None);
         let mut iter = BlockMarkerIter::new(b"\n\n", b'\n', b' ', b'\t', wide_matches, stub_make);
         assert_eq!(iter.next(), None);
+    }
+
+    #[allow(unused)]
+    mod generated {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub struct Item {
+            pub kind: u8,
+        }
+
+        // Two marker bytes: the finder streams by them.
+        mod narrow {
+            use super::Item;
+            crate::define_parser!(Narrow {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline { fallback => texts [10]; }
+                blocks {
+                    block { (b'x'..=b'y') |b|: Item { kind: b } => items [40]; }
+                    fallback => paragraphs [80];
+                }
+            });
+        }
+
+        // Four marker bytes: the finder scans line by line.
+        mod wide {
+            use super::Item;
+            crate::define_parser!(Wide {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                inline { fallback => texts [10]; }
+                blocks {
+                    block { (b'x'..=b'z' | b'+') |b|: Item { kind: b } => items [40]; }
+                    fallback => paragraphs [80];
+                }
+            });
+        }
+
+        fn items(it: impl IntoIterator<Item = (Item, crate::span::Span)>) -> Vec<(u8, u32, u32)> {
+            it.into_iter()
+                .map(|(m, s)| (m.kind, s.start, s.end))
+                .collect()
+        }
+
+        // 19. A range marker pattern reaches the finders as written, and the
+        //     finders yield the full parse's items
+        #[test]
+        fn test_19_generated_range_marker() {
+            let src: &[u8] = b"x a\n  y b\nz c\n+ d\nw e\nxy f";
+            let full = narrow::NarrowParser::parse(src);
+            let want = vec![(b'x', 2, 3), (b'y', 8, 9)];
+            assert_eq!(items(full.items.iter().copied()), want);
+            assert_eq!(items(narrow::NarrowParser::find_items(src)), want);
+            let ctx = narrow::NarrowParser::context(src);
+            assert_eq!(
+                items(narrow::NarrowParser::find_context_items(src, &ctx)),
+                want
+            );
+
+            let full = wide::WideParser::parse(src);
+            let want = vec![(b'x', 2, 3), (b'y', 8, 9), (b'z', 12, 13), (b'+', 16, 17)];
+            assert_eq!(items(full.items.iter().copied()), want);
+            assert_eq!(items(wide::WideParser::find_items(src)), want);
+            let ctx = wide::WideParser::context(src);
+            assert_eq!(items(wide::WideParser::find_context_items(src, &ctx)), want);
+        }
     }
 }

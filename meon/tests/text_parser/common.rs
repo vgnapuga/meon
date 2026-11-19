@@ -38,6 +38,7 @@ pub struct OrderedItem {
 define_content!(TestContent {
     inline {
         links:      Link     [100],
+        refs:       Link     [100],
         key_values: KeyValue [20],
     }
     inline_simple {
@@ -100,12 +101,10 @@ macro_rules! run_inline {
             on_trigger(b'*', b'`', b'<', b'[') {
                 symmetric b'`' {
                     parse_inside = false;
-                    balanced     = false;
                     _ => codes
                 }
                 symmetric b'*' {
                     parse_inside = true;
-                    balanced     = false;
                     1 => italics, 2 => bolds, _ => bold_italics
                 }
                 asymmetric b'<', b'>' {
@@ -159,7 +158,7 @@ macro_rules! run_inline_balanced_nested {
             on_trigger(b'{', b'}') {
                 asymmetric b'{', b'}' {
                     balanced     = true;
-                    parse_inside = false;
+                    parse_inside = true;
                     1 => objects
                 }
             }
@@ -178,7 +177,6 @@ macro_rules! run_inline_sym_nested {
             on_trigger(b'*') {
                 symmetric b'*' {
                     parse_inside = true;
-                    balanced     = true;
                     1 => n_italics, 2 => n_bolds
                 }
             }
@@ -210,10 +208,10 @@ macro_rules! run_block {
     ($active:expr, $src:expr, $pos:expr, $le:expr) => {{
         let src: &[u8] = $src;
         let mut st = ParseState::new(src.len());
-        let mut _stack: [(u8, u8, u8, u32); 1] = [(0u8, 0u8, 0u8, 0u32); 1];
+        let mut _stack: [(u32, u32); 1] = [(0u32, 0u32); 1];
         let mut _depth: usize = 0;
-        if let Some((d, b, c, s)) = *$active {
-            _stack[0] = (d, b, c, s);
+        if let Some(frame) = *$active {
+            _stack[0] = frame;
             _depth = 1;
         }
         let result = meon::parse_block!(
@@ -259,7 +257,7 @@ macro_rules! run_block_nested {
     }};
 }
 
-macro_rules! run_sym_balanced {
+macro_rules! run_sym_opaque {
     ($src:expr) => {{
         let src: &[u8] = $src;
         let le = src.len();
@@ -269,7 +267,6 @@ macro_rules! run_sym_balanced {
             on_trigger(b'"') {
                 symmetric b'"' {
                     parse_inside = false;
-                    balanced     = true;
                     _ => codes,
                 }
             }
@@ -311,7 +308,7 @@ macro_rules! run_inline_kv_json {
         let consumed = meon::parse_inline!(
             st, src, 0, le, texts, false, b'\\', b' ', b'\t', b'\n', $maxn, true;
             on_trigger(b'{', b'}', b'[', b']', b'"', b':') {
-                symmetric b'"' { parse_inside = false; balanced = false; _ => codes }
+                symmetric b'"' { parse_inside = false; _ => codes }
                 asymmetric b'{', b'}' { balanced = true; parse_inside = true; 1 => objects }
                 asymmetric b'[', b']' { balanced = true; parse_inside = true; 1 => autolinks }
                 key_value: KeyValue {

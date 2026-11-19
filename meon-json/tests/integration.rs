@@ -626,26 +626,27 @@ fn test_48_stack_survives_many_lines_deep_indent() {
 // 49. An unterminated object still finalises its open key_value pair at end
 //     of input (the kv frame's own end-of-run drain): the member is
 //     committed, but the unclosed container span itself is discarded
-//     (`Vec::remove` on the never-closed placeholder). Nothing leaks into
-//     `scalars` here because the kv drain explicitly advances `text_start`
-//     past the committed value before the final flush runs.
+//     (`Vec::remove` on the never-closed placeholder). Its open byte is bare
+//     text; the member's bytes are not, because the kv drain advances
+//     `text_start` past the committed value before the final flush runs.
 #[test]
 fn test_49_unterminated_object_member_committed_container_discarded() {
     let c = JsonParser::parse(br#"{"a":1"#);
     assert_eq!(c.objects.len(), 0);
     assert_eq!(members(&c), vec![(r#""a""#.into(), "1".into())]);
-    assert!(c.scalars.is_empty());
+    assert_eq!(texts(&c, &c.scalars), vec!["{"]);
 }
 
 // 50. An unterminated *bare* (unwrapped) array: the array placeholder is
 //     discarded, and with no key_value frame to move `text_start` past the
-//     content, the final flush sweeps the array's tail into `scalars`. This
-//     asymmetry with the object case follows from the drain order.
+//     content, the final flush sweeps the array, open byte included, into
+//     `scalars`. This asymmetry with the object case follows from the drain
+//     order.
 #[test]
 fn test_50_unterminated_array_discarded_tail_leaks_to_scalars() {
     let c = JsonParser::parse(br#"[1,2"#);
     assert_eq!(c.arrays.len(), 0);
-    assert_eq!(texts(&c, &c.scalars), vec!["1,2"]);
+    assert_eq!(texts(&c, &c.scalars), vec!["[1,2"]);
 }
 
 // 51. A top-level unterminated string: the off-stack string search
@@ -1002,4 +1003,134 @@ fn test_74_key_without_colon_no_member() {
     assert_eq!(c.objects.len(), 1);
     assert_eq!(c.members.len(), 0);
     assert_eq!(sorted(&c, &c.strings), vec!["a"]);
+}
+
+// 75. A key containing a space is kept whole, quotes included.
+#[test]
+fn test_75_key_with_space() {
+    let c = JsonParser::parse(br#"{"first name": "Ada", "last name": "L"}"#);
+    assert_eq!(
+        members(&c),
+        vec![
+            (r#""first name""#.to_string(), r#""Ada""#.to_string()),
+            (r#""last name""#.to_string(), r#""L""#.to_string()),
+        ]
+    );
+}
+
+// 76. Keys of a pretty-printed document without indentation carry no line
+//     break, for both LF and CRLF line ends.
+#[test]
+fn test_76_unindented_keys_carry_no_line_break() {
+    for src in [
+        &b"{\n\"a\": 1,\n\"b\": 2\n}"[..],
+        b"{\r\n\"a\": 1,\r\n\"b\": 2\r\n}",
+    ] {
+        let c = JsonParser::parse(src);
+        let keys: Vec<String> = members(&c).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![r#""a""#, r#""b""#]);
+    }
+}
+
+// 77. Leading blank lines produce no scalars.
+#[test]
+fn test_77_leading_blank_lines_no_scalars() {
+    let c = JsonParser::parse(b"\n\n\n\n\n{}");
+    assert_eq!(c.objects.len(), 1);
+    assert!(c.scalars.is_empty());
+}
+
+// 78. The newline that ends the document is not a scalar.
+#[test]
+fn test_78_trailing_newline_no_scalar() {
+    let c = JsonParser::parse(b"{\"a\": 1}\n");
+    assert_eq!(c.objects.len(), 1);
+    assert!(c.scalars.is_empty());
+}
+
+// 79. Bare values on lines separated by a blank line carry no line break.
+#[test]
+fn test_79_bare_values_carry_no_line_break() {
+    let c = JsonParser::parse(b"1\n\n2\n");
+    assert_eq!(texts(&c, &c.scalars), vec!["1", "2"]);
+}
+
+// 80. The value of an unterminated member ends before the final newline.
+#[test]
+fn test_80_unterminated_member_value_excludes_newline() {
+    let c = JsonParser::parse(b"{\"a\": 1\n");
+    assert_eq!(members(&c), vec![(r#""a""#.to_string(), "1".to_string())]);
+}
+
+// 81. A `{` past the nesting cap starts the bare text that follows it, and the
+//     text before it, the unclosed arrays' open bytes included, is not
+//     repeated.
+#[test]
+fn test_81_open_past_cap_does_not_repeat_text() {
+    let mut src = vec![b'['; 64];
+    src.extend_from_slice(b"x{y");
+    let c = JsonParser::parse(&src);
+    let opens = "[".repeat(64) + "x";
+    assert_eq!(texts(&c, &c.scalars), vec![opens.as_str(), "{y"]);
+}
+
+// 82. An array opened past the nesting cap and closed again keeps its bytes
+//     in the text of the still-open outer array.
+#[test]
+fn test_82_array_past_cap_keeps_its_content() {
+    let mut src = vec![b'['; 64];
+    src.extend_from_slice(b"[a]b");
+    let c = JsonParser::parse(&src);
+    let all = "[".repeat(65) + "a]b";
+    assert_eq!(texts(&c, &c.scalars), vec![all.as_str()]);
+}
+
+// 83. Two empty strings do not pair up as one string: every member between
+//     them is kept.
+#[test]
+fn test_83_empty_strings_do_not_swallow_members() {
+    let c = JsonParser::parse(br#"{"a":"","b":"x","c":""}"#);
+    assert_eq!(
+        members(&c),
+        vec![
+            (r#""a""#.to_string(), r#""""#.to_string()),
+            (r#""b""#.to_string(), r#""x""#.to_string()),
+            (r#""c""#.to_string(), r#""""#.to_string()),
+        ]
+    );
+}
+
+// 84. A member past the nesting cap keeps its key and `:` in the bare text of
+//     the still-open container.
+#[test]
+fn test_84_member_past_cap_keeps_its_key() {
+    let mut src = vec![b'{'; 64];
+    src.extend_from_slice(b"a b:1");
+    let c = JsonParser::parse(&src);
+    assert!(c.members.is_empty());
+    let all = "{".repeat(64) + "a b:1";
+    assert_eq!(texts(&c, &c.scalars), vec![all.as_str()]);
+}
+
+// 85. A doubled `:` starts the value at the second one.
+#[test]
+fn test_85_doubled_colon_is_value_content() {
+    let c = JsonParser::parse(br#"{"a"::1}"#);
+    assert_eq!(members(&c), vec![(r#""a""#.to_string(), ":1".to_string())]);
+}
+
+// 86. A doubled `,` in an object that never closes keeps the second one as
+//     bare text, as is the object's open byte, and the next member keeps its
+//     own key.
+#[test]
+fn test_86_doubled_comma_keeps_bare_text() {
+    let c = JsonParser::parse(br#"{"a":1,,"b":2"#);
+    assert_eq!(
+        members(&c),
+        vec![
+            (r#""a""#.to_string(), "1".to_string()),
+            (r#""b""#.to_string(), "2".to_string()),
+        ]
+    );
+    assert_eq!(texts(&c, &c.scalars), vec!["{", ","]);
 }

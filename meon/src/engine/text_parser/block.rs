@@ -2,8 +2,10 @@
 //!
 //! # Overview
 //!
-//! `parse_block!` handles structured multi-line constructs: fenced code blocks,
-//! blockquote continuations, bullet lists, and ordered lists. It is called by
+//! `parse_block!` handles the grammar's block rules: `fence` and `cont` frames,
+//! which span lines, and `block` items — marker and `num` items — which are
+//! one line each (fenced code, blockquotes and list items, for instance). It
+//! is called by
 //! `parse_text!` at the start of each line and, in a single call, fully
 //! resolves that line's block structure:
 //!
@@ -13,22 +15,28 @@
 //!   is closed (together with everything nested inside it).
 //! - **Open phase**: at the position left after peeling, new block frames are
 //!   opened (as many as nest on one line, e.g. a fence opening inside a
-//!   blockquote), bounded by `max_nest`.
+//!   `cont` frame), bounded by `max_nest`.
 //!
 //! It is not meant to be called by users directly.
 //!
 //! # Active block stack (`max_nest`)
 //!
-//! The active block state is a bounded stack `[(u8, u8, u8, u32); max_nest]`
-//! plus a depth counter, sharing the grammar-wide `max_nest` cap with the
-//! inline engine (see [`crate::parse_inline!`]). At `max_nest = 1` it is a
-//! single slot: at most one block open at a time, no block opening inside
-//! another.
+//! The active block state is a bounded stack `[(u32, u32); max_nest]` of
+//! `(count, start)` frames plus a depth counter, sharing the grammar-wide
+//! `max_nest` cap with the inline engine (see [`crate::parse_inline!`]). At
+//! `max_nest = 1` it is a single slot: at most one block open at a time, no
+//! block opening inside another.
 //!
-//! | Discriminant (field 0) | Meaning            | Field 1  | Field 2 | Field 3  |
-//! |------------------------|--------------------|----------|---------|----------|
-//! | `0`                    | Open fence         | `byte`   | `count` | `start`  |
-//! | `1`                    | Continuation (`>`) | `byte`   | `0`     | `start`  |
+//! | Frame              | `count`                  | `start`                   |
+//! |--------------------|--------------------------|---------------------------|
+//! | Open fence         | opening run length, `≥ 1`| position of the run       |
+//! | Continuation (`>`) | `0`                      | position of the marker    |
+//!
+//! The frame's byte is `src[start]`, and the rule that owns it is the one
+//! that opened it: the first `cont` rule of that byte for a continuation,
+//! the first `fence` rule whose pattern takes the byte and whose `min` the
+//! count reaches for a fence. A frame is 8 bytes, and a fence counts its run
+//! exactly at any length.
 //!
 //! Two structural invariants make the stack tractable:
 //!
@@ -40,9 +48,9 @@
 //!   (where open and close are indistinguishable, so an identical key can't
 //!   nest), a `cont` opens positionally — at the line start, after the outer
 //!   markers have been peeled — and closes by *absence* of its marker, so
-//!   `> >` is two genuinely nested blockquote frames.
+//!   `> >` (with `cont(b'>')`) is two genuinely nested frames.
 //!
-//! `block` items (bullets, ordered) are per-line leaves: they push nothing onto
+//! `block` items (marker and `num` items) are per-line leaves: they push nothing onto
 //! the stack and so consume no depth. They may still open *inside* a `cont`,
 //! but only when `max_nest > 1`; at `max_nest = 1` the open phase never runs
 //! inside an already-open block.
@@ -65,18 +73,44 @@
 //! The macro consumes the `blocks { ... }` section after `strip`. Two sub-sections:
 //!
 //! - `block_simple { ... }` — single-line openers and continuations:
-//!   - `fence(byte, min = N) => field;` — fenced code blocks (e.g. ` ``` `).
+//!   - `fence(pat, min = N) => field;` — fenced code blocks (e.g. ` ``` `): a
+//!     run of at least `N` of one byte `pat` matches, with no further such
+//!     byte on the line, opens; a run of at least as many of that same byte,
+//!     followed by `sep`/`tab` only, closes — so with `b'`' | b'~'` a
+//!     ` ``` ` block is not closed by `~~~`.
 //!   - `cont(byte) => field;` — line-continuation blocks (e.g. blockquotes `>`).
 //!
 //! - `block { ... }` — single-line blocks with per-line metadata:
 //!   - `(pat) |var|: Type { ... } => field;` — marker-prefixed items (bullet lists).
 //!   - `num(digit_pat, end = end_pat) |n, k|: Type { ... } => field;` — numbered
-//!     items (ordered lists).
+//!     items (ordered lists): one to nine bytes `digit_pat` matches, each
+//!     counting as its value less `b'0'` (wrapping for bytes other than ASCII
+//!     digits), then one byte `end_pat` matches.
+//!
+//! Every `pat` is a Rust byte pattern, read with `matches!`: literals,
+//! alternations, ranges, constants.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_block {
+    // A line whose `eol` comes right after its content: the next line starts
+    // past it.
     (
         $stack:ident, $depth:ident, $state:ident, $src:ident, $pos:expr, $le:expr,
+        sep = $sep:literal, tab = $tab:literal, max_nest = $maxn:literal ;
+        block_simple { $($sr:tt)* }
+        block        { $($br:tt)* }
+    ) => {{
+        let _le: usize = $le;
+        $crate::parse_block!(
+            $stack, $depth, $state, $src, $pos, _le,
+            nl = if _le < $src.len() { _le + 1 } else { $src.len() },
+            sep = $sep, tab = $tab, max_nest = $maxn ;
+            block_simple { $($sr)* }
+            block        { $($br)* }
+        )
+    }};
+    (
+        $stack:ident, $depth:ident, $state:ident, $src:ident, $pos:expr, $le:expr, nl = $nl:expr,
         sep = $sep:literal, tab = $tab:literal, max_nest = $maxn:literal ;
         block_simple { $($sr:tt)* }
         block        { $($br:tt)* }
@@ -84,6 +118,9 @@ macro_rules! parse_block {
         let src: &[u8] = $src;
         let pos: usize = $pos;
         let le:  usize = $le;
+        // Where the next line starts: past the line's `eol`, and past
+        // whatever the caller counts as part of the line end before it.
+        let nl:  usize = $nl;
 
         // ---- PEEL: walk the active frames outermost → innermost from `pos`. //
         let mut _cur: usize = pos;
@@ -93,8 +130,9 @@ macro_rules! parse_block {
         let mut _consumed_np: usize = 0;
 
         while _fi < $depth {
-            let (_disc, _ab, _ac, _astart) = $stack[_fi];
-            if _disc == 1u8 {
+            let (_ac, _astart) = $stack[_fi];
+            let _ab = src[_astart as usize];
+            if _ac == 0 {
                 // cont frame: its marker must be present at `_cur` to continue.
                 if _cur < le && src[_cur] == _ab {
                     _cur = if _cur + 1 < le
@@ -109,9 +147,9 @@ macro_rules! parse_block {
                     let mut _j = $depth;
                     while _j > _fi {
                         _j -= 1;
-                        let (_d2, _b2, _c2, _s2) = $stack[_j];
+                        let (_c2, _s2) = $stack[_j];
                         $crate::parse_block!(@close_frame
-                            $state, src, pos as u32, _d2, _b2, _s2 ; $($sr)*);
+                            $state, src, pos as u32, _c2, _s2 ; $($sr)*);
                     }
                     $depth = _fi;
                     _peel_broke = true;
@@ -120,16 +158,15 @@ macro_rules! parse_block {
             } else {
                 // fence frame (always the top): does this line close it?
                 let mut _i = _cur;
-                let mut _fc: u8 = 0;
-                while _i < le && src[_i] == _ab { _fc = _fc.saturating_add(1); _i += 1; }
+                let mut _fc: u32 = 0;
+                while _i < le && src[_i] == _ab { _fc += 1; _i += 1; }
                 if _fc >= _ac && src[_i..le].iter().all(|&b| b == $sep || b == $tab) {
-                    let _end = if le < src.len() { le + 1 } else { src.len() };
                     $crate::parse_block!(@close_frame
-                        $state, src, _end as u32, _disc, _ab, _astart ; $($sr)*);
+                        $state, src, nl as u32, _ac, _astart ; $($sr)*);
                     $depth -= 1;
                 }
                 // Closed or not, the fence line is fully consumed.
-                _consumed_np = if le < src.len() { le + 1 } else { src.len() };
+                _consumed_np = nl;
                 _line_consumed = true;
                 break;
             }
@@ -158,7 +195,7 @@ macro_rules! parse_block {
                     let mut _or: ::core::option::Option<(bool, usize)> = None;
                     if $depth < $maxn {
                         $crate::parse_block!(@open_simple _or, $stack, $depth, $state,
-                            src, _open_cur, le, $sep, $tab ; $($sr)*);
+                            src, _open_cur, le, nl, $sep, $tab ; $($sr)*);
                     }
                     if let Some((_o, _cs)) = _or {
                         _opened_any = true;
@@ -166,7 +203,7 @@ macro_rules! parse_block {
                         _go = true;          // a frame opened — try to nest further
                         continue;
                     }
-                    // A leaf `block` item (bullet / num) counts as a nesting
+                    // A leaf `block` item (marker / num) counts as a nesting
                     // level and is gated by the same `max_nest` cap as a
                     // frame: at `max_nest = 1` an item never opens inside an
                     // already-open block and the remainder goes to inline. At
@@ -195,42 +232,51 @@ macro_rules! parse_block {
 
 
     // ------------------------------------------------------------------ //
-    // @close_frame: push the span for one frame (by runtime tuple), the  //
-    // field chosen by matching the stored byte against each rule.        //
+    // @close_frame: push the span for one `(count, start)` frame into the //
+    // field of the rule that opened it — the first rule, in order, that  //
+    // would open a frame of that byte and count.                         //
     // ------------------------------------------------------------------ //
-    (@close_frame $st:ident, $src:ident, $endpos:expr, $disc:expr, $byte:expr, $start:expr ;
+    (@close_frame $st:ident, $src:ident, $endpos:expr, $count:expr, $start:expr ;
         $($sr:tt)*
-    ) => {
+    ) => {{
+        let _fcount: u32 = $count;
+        let _fstart: u32 = $start;
+        let _fbyte: u8 = $src[_fstart as usize];
+        let mut _fdone = false;
         $crate::parse_block!(@close_frame_inner
-            $st, $src, $endpos, $disc, $byte, $start ; $($sr)*)
-    };
-    (@close_frame_inner $st:ident, $src:ident, $endpos:expr, $disc:expr, $byte:expr, $start:expr ;
+            $st, _fdone, $endpos, _fcount, _fbyte, _fstart ; $($sr)*);
+    }};
+    (@close_frame_inner $st:ident, $done:ident, $endpos:expr, $count:ident, $byte:ident, $start:ident ;
         cont($cb:literal) => $field:ident $($rest:tt)*
     ) => {
-        if $disc == 1u8 && $byte == $cb {
+        if !$done && $count == 0 && $byte == $cb {
+            $done = true;
             $crate::paste::paste! {
                 $st.[<push_ $field>]($crate::span::Span::new($start, $endpos));
             }
         }
-        $crate::parse_block!(@close_frame_inner $st, $src, $endpos, $disc, $byte, $start ; $($rest)*)
+        $crate::parse_block!(@close_frame_inner $st, $done, $endpos, $count, $byte, $start ; $($rest)*)
     };
-    (@close_frame_inner $st:ident, $src:ident, $endpos:expr, $disc:expr, $byte:expr, $start:expr ;
+    (@close_frame_inner $st:ident, $done:ident, $endpos:expr, $count:ident, $byte:ident, $start:ident ;
         fence($pat:pat, min = $min:literal) => $field:ident $($rest:tt)*
     ) => {
-        if $disc == 0u8 && matches!($byte, $pat) {
+        if !$done && $count != 0 && matches!($byte, $pat) && $count >= $min {
+            $done = true;
             $crate::paste::paste! {
                 $st.[<push_ $field>]($crate::span::Span::new($start, $endpos));
             }
         }
-        $crate::parse_block!(@close_frame_inner $st, $src, $endpos, $disc, $byte, $start ; $($rest)*)
+        $crate::parse_block!(@close_frame_inner $st, $done, $endpos, $count, $byte, $start ; $($rest)*)
     };
-    (@close_frame_inner $st:ident, $src:ident, $e:expr, $d:expr, $b:expr, $s:expr ; , $($r:tt)*) => {
-        $crate::parse_block!(@close_frame_inner $st, $src, $e, $d, $b, $s ; $($r)*)
+    (@close_frame_inner $st:ident, $done:ident, $e:expr, $c:ident, $b:ident, $s:ident ; , $($r:tt)*) => {
+        $crate::parse_block!(@close_frame_inner $st, $done, $e, $c, $b, $s ; $($r)*)
     };
-    (@close_frame_inner $st:ident, $src:ident, $e:expr, $d:expr, $b:expr, $s:expr ; ; $($r:tt)*) => {
-        $crate::parse_block!(@close_frame_inner $st, $src, $e, $d, $b, $s ; $($r)*)
+    (@close_frame_inner $st:ident, $done:ident, $e:expr, $c:ident, $b:ident, $s:ident ; ; $($r:tt)*) => {
+        $crate::parse_block!(@close_frame_inner $st, $done, $e, $c, $b, $s ; $($r)*)
     };
-    (@close_frame_inner $st:ident, $src:ident, $e:expr, $d:expr, $b:expr, $s:expr ;) => {};
+    (@close_frame_inner $st:ident, $done:ident, $e:expr, $c:ident, $b:ident, $s:ident ;) => {
+        let _ = $done;
+    };
 
 
     // ------------------------------------------------------------------ //
@@ -238,53 +284,52 @@ macro_rules! parse_block {
     // stack. The depth-vs-max_nest gate is applied by the caller.        //
     // ------------------------------------------------------------------ //
     (@open_simple $res:ident, $stack:ident, $depth:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ;
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ;
      fence($pat:pat, min = $min:literal) => $field:ident $($rest:tt)*
     ) => {
         if $res.is_none() && $pos < $le && matches!($src[$pos], $pat) {
             let _byte = $src[$pos];
             let mut _i: usize = $pos;
-            let mut _c: u8    = 0;
-            while _i < $le && $src[_i] == _byte { _c = _c.saturating_add(1); _i += 1; }
+            let mut _c: u32   = 0;
+            while _i < $le && $src[_i] == _byte { _c += 1; _i += 1; }
             if _c >= $min && $src[_i..$le].iter().all(|&b| b != _byte) {
-                $stack[$depth] = (0u8, _byte, _c, $pos as u32);
+                $stack[$depth] = (_c, $pos as u32);
                 $depth += 1;
-                let np = if $le < $src.len() { $le + 1 } else { $src.len() };
-                $res = Some((true, np));
+                $res = Some((true, $nl));
             }
         }
-        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
 
     (@open_simple $res:ident, $stack:ident, $depth:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ;
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ;
      cont($byte:literal) => $field:ident $($rest:tt)*
     ) => {
         if $res.is_none() && $pos < $le && $src[$pos] == $byte {
-            $stack[$depth] = (1u8, $byte, 0u8, $pos as u32);
+            $stack[$depth] = (0u32, $pos as u32);
             $depth += 1;
             let cs = if $pos + 1 < $le
                 && ($src[$pos + 1] == $sep || $src[$pos + 1] == $tab)
             { $pos + 2 } else { $pos + 1 };
             $res = Some((true, cs));
         }
-        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+        $crate::parse_block!(@open_simple $res, $stack, $depth, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
 
     (@open_simple $r:ident, $stk:ident, $d:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ; , $($rest:tt)*) => {
-        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ; , $($rest:tt)*) => {
+        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
     (@open_simple $r:ident, $stk:ident, $d:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ; ; $($rest:tt)*) => {
-        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $sep, $tab ; $($rest)*)
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ; ; $($rest:tt)*) => {
+        $crate::parse_block!(@open_simple $r, $stk, $d, $st, $src, $pos, $le, $nl, $sep, $tab ; $($rest)*)
     };
     (@open_simple $r:ident, $stk:ident, $d:ident, $st:ident, $src:ident,
-     $pos:ident, $le:ident, $sep:literal, $tab:literal ;) => {};
+     $pos:ident, $le:ident, $nl:ident, $sep:literal, $tab:literal ;) => {};
 
 
     // ------------------------------------------------------------------ //
-    // @open_block: try to open one leaf `block` item (bullet / num).     //
+    // @open_block: try to open one leaf `block` item (marker / num).     //
     // Pushes a `(Type, Span)` entry; touches no stack frame.             //
     // ------------------------------------------------------------------ //
     (@open_block $res:ident, $st:ident, $src:ident,
@@ -322,7 +367,11 @@ macro_rules! parse_block {
                 let mut _num: u32 = 0;
                 let mut _dc: u8   = 0;
                 while _i < $le && matches!($src[_i], $dp) && _dc < 9 {
-                    _num = _num * 10 + ($src[_i] - b'0') as u32;
+                    // Each byte counts as its value less `b'0'`: the
+                    // number itself for ASCII digits, wrapping otherwise.
+                    _num = _num
+                        .wrapping_mul(10)
+                        .wrapping_add($src[_i].wrapping_sub(b'0') as u32);
                     _i += 1; _dc += 1;
                 }
                 if _dc > 0 && _i < $le && matches!($src[_i], $ep) {

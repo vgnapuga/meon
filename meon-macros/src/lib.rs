@@ -15,9 +15,10 @@
 //! * `collect` — the front-end: walks the grammar tokens and fills a
 //!   `model::CF` plus a list of `model::StandaloneRule`s; the only place
 //!   that reports grammar errors;
-//! * `strip` / `normalize` — token surgery on the sections handed to the
-//!   runtime macros: capacities removed, the `inline` section rewritten into
-//!   the one shape those macros pattern-match;
+//! * `strip` / `normalize` — token surgery: the invisible groups of
+//!   `macro_rules!` fragments unwrapped, and on the sections handed to the
+//!   runtime macros, capacities removed and the `inline` section rewritten
+//!   into the one shape those macros pattern-match;
 //! * `codegen` / `methods` — the back-end: turns that data into tokens.
 //!
 //! The front-end returns `error::Result`; a malformed grammar surfaces as a
@@ -34,17 +35,17 @@ mod normalize;
 mod strip;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Ident, Literal, TokenStream as TS2, TokenTree as TT};
+use proc_macro2::{Delimiter, Ident, Literal, Span as PS, TokenStream as TS2, TokenTree as TT};
 use quote::quote;
 
 use crate::codegen::{build_define_content, build_standalone_dsl};
 use crate::collect::{collect_blocks, collect_inline, collect_lines};
 use crate::cursor::Cursor;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::methods::build_content_methods;
 use crate::model::{CF, crate_path};
 use crate::normalize::canonicalize_inline;
-use crate::strip::strip;
+use crate::strip::{flatten_invisible, strip};
 
 /// Generate a parser from a declarative grammar.
 ///
@@ -81,12 +82,19 @@ use crate::strip::strip;
 /// | `eol`       | Line terminator (typically `\n`)                               |
 /// | `tab`       | Tab character                                                  |
 /// | `escape`    | Escape prefix that suppresses the next byte                    |
-/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline      |
-/// |             | stack (`symmetric` with `balanced = true`, `asymmetric`        |
-/// |             | with `balanced = true` or `parse_inside = true`,               |
-/// |             | `key_value`) and the block stack (`cont` / `fence`). At `1`    |
-/// |             | nothing self-nests. Declared alongside the other context       |
-/// |             | bytes: `sep = ..., escape = ..., max_nest = 4;`                |
+/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline        |
+/// |             | stack (`symmetric` and `asymmetric` with `parse_inside =       |
+/// |             | true`, `key_value`) and the block stack (`cont` / `fence`).    |
+/// |             | At `1` nothing self-nests. Declared alongside the other        |
+/// |             | context bytes: `sep = ..., escape = ..., max_nest = 4;`        |
+/// | `crlf`      | Optional, default `false`. With `true`, a `\r` right before    |
+/// |             | `eol` is part of the line end: no line content, text or        |
+/// |             | element takes it, and a line of it alone, or of it after       |
+/// |             | `sep`/`tab` bytes, is blank. A `\r` anywhere else is a byte    |
+/// |             | like any other. May come before or after `max_nest`.           |
+///
+/// A line of `sep` and `tab` bytes alone is as blank as an empty line: it
+/// ends a paragraph and closes the open blocks, outside a fence.
 ///
 /// ## `inline { ... }` section
 ///
@@ -99,19 +107,23 @@ use crate::strip::strip;
 ///     merge_simple = true;          // coalesce adjacent fallback spans
 ///
 ///     hard_break(esc, sp, min) => field [div];
-///     // Detects trailing hard-break sequences: `esc` byte OR ≥ `min`
-///     // consecutive `sp` bytes at end of line. Emits a zero-length Span.
+///     // Detects trailing hard-break sequences: an `esc` byte not itself
+///     // escaped OR ≥ `min` consecutive `sp` bytes at end of line. Emits a
+///     // zero-length Span; fewer `sp` bytes stay text.
 ///
 ///     on_trigger(b1, b2, ...) {
 ///         symmetric byte {
-///             parse_inside = true | false;
-///             balanced     = true | false;
+///             parse_inside = true | false; // true: frames on the stack;
+///                                          // false: opaque forward search
 ///             N => field [div],   // exact count N of `byte` → Span
 ///         }
 ///         asymmetric open, close {
-///             balanced     = true | false;
-///             parse_inside = true | false;
-///             N => field [div],
+///             balanced     = true | false; // counts nested `open`/`close`
+///             parse_inside = true | false; // true: frames on the stack;
+///                                          // false: opaque forward search
+///             N => field [div],   // exact count N of `open`; with either
+///                                 // flag true each open byte is an open
+///                                 // of its own, and `1 =>` is the only arm
 ///         }
 ///         chained: Type {
 ///             | open1, close1 | { parse_inside = ...; balanced = ...; } => text_field,
@@ -133,18 +145,20 @@ use crate::strip::strip;
 ///
 /// ## `lines { ... }` section
 ///
-/// Declares whole-line elements. A matching line is consumed entirely; inline
-/// scanning is skipped for it.
+/// Declares whole-line elements, tried at the start of a line no block rule
+/// claims.
 ///
 /// ```text
 /// lines {
 ///     line(byte, max = N) |var|: Type { ... } => field [div];
-///     // Matches 1–N leading `byte` bytes followed by `sep` or EOL.
-///     // `var` receives the count. Produces Vec<(Type, Span)>.
+///     // Matches 1–N leading `byte` bytes followed by `sep` or the line end.
+///     // `var` receives the count. The Span is the rest of the line, which is
+///     // scanned for inline rules. Produces Vec<(Type, Span)>.
 ///
-///     line_simple(b1 | b2 | ..., min = N) |var|: Type { ... } => field [div];
-///     // Matches a line composed entirely of one delimiter byte (interleaved
-///     // with `sep`), at least `min` times. `var` receives the delimiter byte.
+///     line_simple(pattern, min = N) |var|: Type { ... } => field [div];
+///     // Matches a line composed entirely of one byte `pattern` matches
+///     // (interleaved with `sep`), at least `min` times. `var` receives that
+///     // byte. The whole line is consumed; no inline scan.
 ///     // Produces Vec<(Type, Span)>.
 /// }
 /// ```
@@ -156,10 +170,11 @@ use crate::strip::strip;
 /// ```text
 /// blocks {
 ///     block_simple {
-///         fence(byte, min = N) => field [div];
-///         // Opens on a line starting with ≥ N `byte` bytes; closes on a
-///         // matching fence line. Entire range is one Span. Inline scanning
-///         // suppressed while fence is active.
+///         fence(pattern, min = N) => field [div];
+///         // Opens on a line starting with ≥ N of one byte `pattern` matches
+///         // (and no further such byte on the line); closes on a line of at
+///         // least as many of that same byte. Entire range is one Span.
+///         // Inline scanning suppressed while fence is active.
 ///
 ///         cont(byte) => field [div];
 ///         // Groups consecutive lines starting with `byte` into one Span.
@@ -172,9 +187,10 @@ use crate::strip::strip;
 ///         // Produces Vec<(Type, Span)>.
 ///
 ///         num(digit_pat, end = end_pat) |n, k|: Type { ... } => field [div];
-///         // Single-line numbered item: digit run followed by byte matching
-///         // `end_pat`. `n` receives the parsed number, `k` the delimiter byte.
-///         // Produces Vec<(Type, Span)>.
+///         // Single-line numbered item: one to nine bytes matching
+///         // `digit_pat`, then a byte matching `end_pat`, then `sep` or `tab`.
+///         // `n` receives the number (each byte counts as its value less
+///         // `b'0'`), `k` the delimiter byte. Produces Vec<(Type, Span)>.
 ///     }
 ///
 ///     fallback => field [div];
@@ -187,6 +203,14 @@ use crate::strip::strip;
 /// Each field carries `[div]` — the initial `Vec` capacity is
 /// `source.len() / div`. Tune based on expected element density:
 /// a divisor of `10` means roughly one element per 10 bytes.
+///
+/// ## Inside `macro_rules!`
+///
+/// A grammar may be written inside a `macro_rules!` macro and take its
+/// settings, bytes, patterns, capacities and metadata from the macro's
+/// fragments (`$n:literal`, `$p:pat`, `$e:expr`, ...): a fragment reads as
+/// the tokens it stands for, and an `$e:expr` in a metadata body keeps its
+/// precedence.
 ///
 /// # Errors
 ///
@@ -210,7 +234,7 @@ pub fn define_parser(input: TokenStream) -> TokenStream {
 
 /// Fallible core of [`define_parser`].
 fn expand(input: TS2) -> Result<TS2> {
-    let mut c = Cursor::new(input);
+    let mut c = Cursor::new(flatten_invisible(input));
 
     let name = c.next_ident("parser name")?;
     let body_g = c.next_group(Delimiter::Brace, "parser body")?;
@@ -226,14 +250,30 @@ fn expand(input: TS2) -> Result<TS2> {
     bc.skip(',');
     let esc = bc.named_lit("escape")?;
 
-    // `max_nest` is an optional fifth context setting: `, max_nest = N` after
-    // `escape`, before the header's closing `;`. Absent ⇒ `1`.
-    let max_nest: Literal = if matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ',') {
+    // Two optional context settings may follow `escape`, before the header's
+    // closing `;`, in either order: `max_nest = N` (absent ⇒ `1`) and
+    // `crlf = true | false` (absent ⇒ `false`).
+    let mut max_nest: Option<Literal> = None;
+    let mut crlf: Option<Ident> = None;
+    while matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ',') {
         bc.advance();
-        bc.named_lit("max_nest")?
-    } else {
-        Literal::usize_unsuffixed(1)
-    };
+        let span = bc.span();
+        match bc.peek_str().as_deref() {
+            Some("max_nest") if max_nest.is_none() => max_nest = Some(bc.named_lit("max_nest")?),
+            Some("crlf") if crlf.is_none() => crlf = Some(bc.named_flag("crlf")?),
+            Some(name @ ("max_nest" | "crlf")) => {
+                return Err(Error::new(span, format!("`{name}` is set twice")));
+            }
+            _ => {
+                return Err(Error::new(
+                    span,
+                    format!("expected `max_nest` or `crlf`, got {:?}", bc.peek()),
+                ));
+            }
+        }
+    }
+    let max_nest = max_nest.unwrap_or_else(|| Literal::usize_unsuffixed(1));
+    let crlf = crlf.unwrap_or_else(|| Ident::new("false", PS::call_site()));
     bc.skip(';');
 
     let mut inline_ts = TS2::new();
@@ -273,7 +313,7 @@ fn expand(input: TS2) -> Result<TS2> {
 
     let dc = build_define_content(&content_name, &cf, &mc);
     let cm = build_content_methods(&content_name, &cf, &sep, &eol, &tab, &esc);
-    let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &cf.standalone);
+    let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &crlf, &cf.standalone);
 
     Ok(quote! {
         #dc
@@ -287,7 +327,7 @@ fn expand(input: TS2) -> Result<TS2> {
                 #mc::parse_text!(
                     source;
                     sep = #sep, eol = #eol, tab = #tab, escape = #esc,
-                    max_nest = #max_nest;
+                    max_nest = #max_nest, crlf = #crlf;
                     inline { #(#pt_inline)* }
                     lines  { #(#pt_lines)* }
                     blocks { #(#pt_blocks)* }
@@ -316,12 +356,10 @@ mod tests {
                     on_trigger(b'*', b'`') {
                         symmetric b'`' {
                             parse_inside = false;
-                            balanced = false;
                             1 => codes [80],
                         }
                         symmetric b'*' {
                             parse_inside = true;
-                            balanced = false;
                             1 => italics [40], 2 => bolds [40],
                         }
                     }
@@ -479,7 +517,7 @@ mod tests {
                 blocks { block_simple { fence(b'`') => fenced_codes [400]; } }
             }
         });
-        assert!(e.contains("fence min"));
+        assert!(e.contains("`fence` rule needs `min = N`"), "{e}");
     }
 
     // 16. max_nest, when present, is forwarded verbatim into the parse_text!
@@ -508,7 +546,7 @@ mod tests {
                 inline {
                     on_trigger(b'*', b'<') {
                         asymmetric b'<', b'>' { parse_inside = false; balanced = false; 1 => autolinks [100], }
-                        symmetric b'*' { balanced = false; parse_inside = true; 1 => italics [40], }
+                        symmetric b'*' { parse_inside = true; 1 => italics [40], }
                     }
                     fallback => texts [10];
                 }
@@ -522,12 +560,9 @@ mod tests {
             "symmetric must precede asymmetric in the expansion"
         );
         // Flag order follows the runtime pattern per kind.
+        assert!(s.contains("symmetric b'*' { parse_inside = true ; "), "{s}");
         assert!(
-            s.contains("symmetric b'*' { parse_inside = true ; balanced = false ;"),
-            "{s}"
-        );
-        assert!(
-            s.contains("asymmetric b'<' , b'>' { balanced = false ; parse_inside = false ;"),
+            s.contains("asymmetric b'<' , b'>' { balanced = false ; parse_inside = false ; "),
             "{s}"
         );
     }
@@ -538,22 +573,22 @@ mod tests {
         let e = expand_err(quote! {
             Demo {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
-                inline { memchr(b'*') { symmetric b'*' { parse_inside = true; balanced = false; 1 => italics [40], } } }
+                inline { memchr(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } }
             }
         });
         assert!(e.contains("unknown keyword `memchr`"), "{e}");
     }
 
-    // 20. A symmetric body without `balanced` is a located front-end error
+    // 20. A symmetric body with `balanced` is a located front-end error
     #[test]
-    fn test_20_symmetric_missing_flag_err() {
+    fn test_20_symmetric_balanced_err() {
         let e = expand_err(quote! {
             Demo {
                 sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
-                inline { on_trigger(b'*') { symmetric b'*' { parse_inside = true; 1 => italics [40], } } }
+                inline { on_trigger(b'*') { symmetric b'*' { parse_inside = true; balanced = true; 1 => italics [40], } } }
             }
         });
-        assert!(e.contains("missing `balanced = true|false;`"), "{e}");
+        assert!(e.contains("`symmetric` takes no `balanced`"), "{e}");
     }
 
     // 17. max_nest, when absent, still appears in the expansion with the
@@ -566,6 +601,86 @@ mod tests {
             s[idx..idx + 20].contains('1'),
             "expected default max_nest = 1, got: ...{}...",
             &s[idx..idx + 20]
+        );
+    }
+
+    // 21. A `chained` rule with both components opaque feeds `context()`; one
+    //     with a transparent component does not
+    #[test]
+    fn test_21_chained_context_source() {
+        let grammar = |text_inside: bool| {
+            quote! {
+                Demo {
+                    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                    inline {
+                        on_trigger(b'[') {
+                            chained: Link {
+                                | b'[', b']' | { parse_inside = #text_inside; balanced = false; } => text,
+                                | b'(', b')' | { parse_inside = false; balanced = true; } => url,
+                                prefix | b'!' | => is_image,
+                            } => links [70]
+                        }
+                        fallback => texts [10];
+                    }
+                }
+            }
+        };
+        let compact = |s: String| s.split_whitespace().collect::<String>();
+        let opaque = compact(expand_str(grammar(false)));
+        assert!(
+            opaque.contains("chained[(b'[',b']',false,b'(',b')',true)]"),
+            "{opaque}"
+        );
+        assert!(opaque.contains("caps[70]"), "{opaque}");
+        let mixed = compact(expand_str(grammar(true)));
+        assert!(mixed.contains("chained[]"), "{mixed}");
+        assert!(mixed.contains("caps[]"), "{mixed}");
+        // The finder gets both components' `balanced` flags and whether
+        // either is transparent.
+        assert!(
+            opaque.contains("chained(b'[',b']',false,b'(',b')',true,false,b'!',"),
+            "{opaque}"
+        );
+        assert!(
+            mixed.contains("chained(b'[',b']',false,b'(',b')',true,true,b'!',"),
+            "{mixed}"
+        );
+    }
+
+    // 22. `crlf`, set or not, reaches `parse_text!` and the finders; it may
+    //     come before `max_nest`
+    #[test]
+    fn test_22_crlf_forwarded() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = true, max_nest = 2;
+                inline { fallback => texts [10]; }
+            }
+        };
+        let s = expand_str(g);
+        assert_eq!(s.matches("max_nest = 2 , crlf = true ;").count(), 2, "{s}");
+        let s = expand_str(valid());
+        assert!(s.contains("crlf = false ;"), "{s}");
+    }
+
+    // 23. A context setting set twice, an unknown one, or a `crlf` that is
+    //     no flag, is a located error
+    #[test]
+    fn test_23_context_setting_errs() {
+        let e = expand_err(quote! {
+            Demo { sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = true, crlf = false; }
+        });
+        assert!(e.contains("`crlf` is set twice"), "{e}");
+        let e = expand_err(quote! {
+            Demo { sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', depth = 2; }
+        });
+        assert!(e.contains("expected `max_nest` or `crlf`"), "{e}");
+        let e = expand_err(quote! {
+            Demo { sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', crlf = 1; }
+        });
+        assert!(
+            e.contains("expected `true` or `false` after `crlf =`"),
+            "{e}"
         );
     }
 }

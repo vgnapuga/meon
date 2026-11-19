@@ -10,13 +10,14 @@ use super::common::*;
 /// the delimiters, excluding the delimiter bytes themselves.
 ///
 /// Matching is **paragraph-bounded**: the closing run may sit past a single
-/// `eol` (the pair spans lines of one paragraph, as in the full parse), but an
-/// empty line — two consecutive `eol` bytes — or the end of input aborts the
-/// pending opener.
+/// `eol` (the pair spans lines of one paragraph, as in the full parse), but a
+/// blank line (see [`LineBreaks`]) or the end of input aborts the pending
+/// opener.
 ///
-/// Escape sequences are respected on the opening delimiter: an odd number of
-/// preceding `escape` bytes suppresses the match. The closing delimiter is
-/// found by a plain scan (no escape check on close).
+/// Escape sequences are respected on both delimiters, as in the full parse: a
+/// byte preceded by an odd number of `escape` bytes is no delimiter, and the
+/// rest of its run is read as a run of its own (`*a\**` closes at the last
+/// `*`).
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
@@ -24,7 +25,7 @@ pub struct SymmetricExactIter<'a> {
     src: &'a [u8],
     byte: u8,
     count: u32,
-    eol: u8,
+    breaks: LineBreaks,
     escape: u8,
     pos: usize,
 }
@@ -38,16 +39,22 @@ impl<'a> SymmetricExactIter<'a> {
     /// - `byte` — the delimiter byte (e.g. `b'*'`).
     /// - `count` — exact number of consecutive delimiter bytes required for
     ///   both the opening and closing run.
-    /// - `eol` — line terminator byte; a pair may span single line breaks, but
-    ///   never an empty line (two consecutive `eol` bytes).
+    /// - `breaks` — how lines end: an `eol` byte or a [`LineBreaks`]; a pair
+    ///   may span single line breaks, but never a blank line.
     /// - `escape` — escape prefix byte; an odd number of preceding escape bytes
     ///   suppresses the opening delimiter.
-    pub fn new(src: &'a [u8], byte: u8, count: u32, eol: u8, escape: u8) -> Self {
+    pub fn new(
+        src: &'a [u8],
+        byte: u8,
+        count: u32,
+        breaks: impl Into<LineBreaks>,
+        escape: u8,
+    ) -> Self {
         Self {
             src,
             byte,
             count,
-            eol,
+            breaks: breaks.into(),
             escape,
             pos: 0,
         }
@@ -82,14 +89,18 @@ impl Iterator for SymmetricExactIter<'_> {
             }
 
             // Close scan, bounded by the end of the paragraph: a single `eol`
-            // is ordinary content, two in a row (an empty line) — or the end
-            // of input — abort the pending opener.
+            // is ordinary content, a blank line — or the end of input —
+            // aborts the pending opener.
             let cs = end;
             let mut j = cs;
             let close = loop {
-                let Some(q) = next_in_paragraph(src, j, self.byte, self.eol, Some) else {
+                let Some(q) = next_in_paragraph(src, j, self.byte, self.breaks, Some) else {
                     break None;
                 };
+                if count_escape(src, q, self.escape) % 2 == 1 {
+                    j = q + 1;
+                    continue;
+                }
                 let mut cc = 0u32;
                 let mut tmp = q;
                 while tmp < len && src[tmp] == self.byte {
@@ -262,12 +273,20 @@ mod tests {
 
     // 15. Specific implementation behavior: the closing marker loop does not validate escape sequences
     #[test]
-    fn test_15_closing_marker_ignores_escapes() {
+    fn test_15_closing_marker_respects_escapes() {
         let src = b"test *content\\*";
         let mut iter = SymmetricExactIter::new(src, b'*', 1, b'\n', b'\\');
-
-        assert_eq!(iter.next(), Some(Span::new(6, 14)));
         assert_eq!(iter.next(), None);
+        let mut iter = SymmetricExactIter::new(b"*a\\*b*", b'*', 1, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(1, 5)));
+        // The rest of a run whose first byte is escaped is a run of its own.
+        let mut iter = SymmetricExactIter::new(b"*a\\**", b'*', 1, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(1, 4)));
+        let mut iter = SymmetricExactIter::new(b"**a\\***", b'*', 2, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(2, 5)));
+        // An even number of escapes leaves the close a close.
+        let mut iter = SymmetricExactIter::new(b"*a\\\\*", b'*', 1, b'\n', b'\\');
+        assert_eq!(iter.next(), Some(Span::new(1, 4)));
     }
 
     // ---- Paragraph-bounded behaviour ------------------------------------ //
@@ -311,5 +330,59 @@ mod tests {
 
         assert_eq!(iter.next(), Some(Span::new(5, 6)));
         assert_eq!(iter.next(), None);
+    }
+
+    #[allow(unused)]
+    mod generated {
+        // A hard break whose marker bytes are a delimiter's: `~` repeated,
+        // or one `~` before the line end.
+        macro_rules! tildes {
+            ($m:ident, $p:ident, $hb_esc:literal, $sp:literal) => {
+                mod $m {
+                    crate::define_parser!($p {
+                        sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+                        inline {
+                            hard_break($hb_esc, $sp, 2) => hbs [40];
+                            on_trigger(b'~') {
+                                symmetric b'~' { parse_inside = true; 2 => s2 [40], }
+                            }
+                            fallback => texts [10];
+                        }
+                        blocks { fallback => paragraphs [80]; }
+                    });
+                }
+            };
+        }
+        tildes!(run, Run, b'\\', b'~');
+        tildes!(single, Single, b'~', b' ');
+
+        fn spans(v: &[crate::span::Span]) -> Vec<(u32, u32)> {
+            v.iter().map(|s| (s.start, s.end)).collect()
+        }
+
+        // 20. A hard-break marker is no other rule's byte, at the end of the
+        //     run and before an internal eol alike: a delimiter run reaching
+        //     the marker stops where it starts
+        #[test]
+        fn test_20_generated_hard_break_marker_is_its_own() {
+            for src in [&b"~~a~~"[..], b"~~a~~\nb", b"~~a~~~\nb"] {
+                let full = run::RunParser::parse(src);
+                assert!(full.s2.is_empty(), "{:?}", String::from_utf8_lossy(src));
+                assert_eq!(spans(&full.hbs), vec![(3, 3)]);
+            }
+            let full = run::RunParser::parse(b"~~a~~ x\nb");
+            assert_eq!((spans(&full.s2), spans(&full.hbs)), (vec![(2, 3)], vec![]));
+            // One `~` is the marker: the run before it is one byte short.
+            for src in [&b"~~a~~"[..], b"~~a~~\nb"] {
+                let full = single::SingleParser::parse(src);
+                assert!(full.s2.is_empty(), "{:?}", String::from_utf8_lossy(src));
+                assert_eq!(spans(&full.hbs), vec![(4, 4)]);
+            }
+            let full = single::SingleParser::parse(b"~~a~~~\nb");
+            assert_eq!(
+                (spans(&full.s2), spans(&full.hbs)),
+                (vec![(2, 3)], vec![(5, 5)])
+            );
+        }
     }
 }

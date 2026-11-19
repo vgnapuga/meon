@@ -1,8 +1,91 @@
-//! Token surgery: remove the `=> field [N]` annotations from a grammar section
-//! so the cleaned stream can be handed to the runtime `parse_*!` macros, which
-//! don't understand those annotations.
+//! Token surgery: unwrap the invisible groups a grammar written inside a
+//! `macro_rules!` macro arrives with, and remove the `=> field [N]`
+//! annotations from a grammar section so the cleaned stream can be handed to
+//! the runtime `parse_*!` macros, which don't understand those annotations.
 
 use proc_macro2::{Delimiter, Group, Spacing, TokenStream as TS2, TokenTree as TT};
+
+/// Splice the tokens of every invisible (`Delimiter::None`) group into the
+/// stream around it, at any depth, except inside a rule's metadata body
+/// (`|vars|: Type { ... }`).
+///
+/// A grammar written inside a `macro_rules!` macro receives its `$x:literal`,
+/// `$x:pat` and similar fragments wrapped in such groups; unwrapped, they read
+/// exactly like the tokens they stand for. A metadata body is Rust code, where
+/// a wrapped `$x:expr` must keep its precedence; the runtime macros read it
+/// as an `expr` fragment, which does not see invisible groups, so there a
+/// group of several tokens becomes a parenthesised one (see
+/// [`parenthesize_invisible`]).
+pub(crate) fn flatten_invisible(ts: TS2) -> TS2 {
+    let mut out = TS2::new();
+    // A `|` right before, and a `|:` seen with its body still ahead.
+    let mut after_bar = false;
+    let mut meta_ahead = false;
+    for tt in ts {
+        match tt {
+            TT::Group(g) if g.delimiter() == Delimiter::None => {
+                out.extend(flatten_invisible(g.stream()));
+                after_bar = false;
+            }
+            TT::Group(g) if meta_ahead && g.delimiter() == Delimiter::Brace => {
+                let mut ng = Group::new(Delimiter::Brace, parenthesize_invisible(g.stream()));
+                ng.set_span(g.span());
+                out.extend([TT::Group(ng)]);
+                meta_ahead = false;
+                after_bar = false;
+            }
+            TT::Group(g) => {
+                let mut ng = Group::new(g.delimiter(), flatten_invisible(g.stream()));
+                ng.set_span(g.span());
+                out.extend([TT::Group(ng)]);
+                after_bar = false;
+            }
+            TT::Punct(p) => {
+                if p.as_char() == ':' && after_bar {
+                    meta_ahead = true;
+                }
+                after_bar = p.as_char() == '|';
+                out.extend([TT::Punct(p)]);
+            }
+            other => {
+                after_bar = false;
+                out.extend([other]);
+            }
+        }
+    }
+    out
+}
+
+/// Turn every invisible group of several tokens into a parenthesised group,
+/// and splice a one-token one, at any depth.
+///
+/// An `expr` fragment the runtime macros match does not see invisible
+/// groups, so `$x * 2` with `$x` standing for `1 + 1` would read as
+/// `1 + 1 * 2`; parenthesised it reads as written. One token has no
+/// precedence to keep.
+fn parenthesize_invisible(ts: TS2) -> TS2 {
+    let mut out = TS2::new();
+    for tt in ts {
+        match tt {
+            TT::Group(g) => {
+                let inner = parenthesize_invisible(g.stream());
+                if g.delimiter() == Delimiter::None && inner.clone().into_iter().count() <= 1 {
+                    out.extend(inner);
+                } else {
+                    let delim = match g.delimiter() {
+                        Delimiter::None => Delimiter::Parenthesis,
+                        d => d,
+                    };
+                    let mut ng = Group::new(delim, inner);
+                    ng.set_span(g.span());
+                    out.extend([TT::Group(ng)]);
+                }
+            }
+            other => out.extend([other]),
+        }
+    }
+    out
+}
 
 /// Recursively strip every `=> field [N]` sequence from `ts`, descending into
 /// groups. Everything else is preserved verbatim.
@@ -140,5 +223,42 @@ mod tests {
         let once = strip(quote! { 1 => italics [40] });
         let twice = strip(once.clone());
         assert_eq!(once.to_string(), twice.to_string());
+    }
+
+    fn invisible(ts: TS2) -> TT {
+        TT::Group(Group::new(Delimiter::None, ts))
+    }
+
+    // 11. Invisible groups are unwrapped at any depth outside a metadata
+    //     body: a forwarded literal and pattern read as written
+    #[test]
+    fn test_11_flatten_unwraps_invisible_groups() {
+        let mut ts = quote! { max_nest = };
+        ts.extend([invisible(quote! { 4 })]);
+        let mut args = quote! {};
+        args.extend([invisible(quote! { b'~' | b'=' })]);
+        args.extend(quote! { , min = 3 });
+        ts.extend(quote! { ; fence });
+        ts.extend([TT::Group(Group::new(Delimiter::Parenthesis, args))]);
+        assert_eq!(
+            flatten_invisible(ts).to_string(),
+            quote! { max_nest = 4; fence(b'~' | b'=', min = 3) }.to_string()
+        );
+    }
+
+    // 12. In a metadata body an invisible group of several tokens becomes a
+    //     parenthesised one, keeping its precedence; one token is unwrapped
+    #[test]
+    fn test_12_flatten_parenthesizes_in_metadata_body() {
+        let mut body = quote! { kind: };
+        body.extend([invisible(quote! { 1 + 1 })]);
+        body.extend(quote! { * 2, other: });
+        body.extend([invisible(quote! { b })]);
+        let mut ts = quote! { (b'-') |b|: Item };
+        ts.extend([TT::Group(Group::new(Delimiter::Brace, body))]);
+        assert_eq!(
+            flatten_invisible(ts).to_string(),
+            quote! { (b'-') |b|: Item { kind: (1 + 1) * 2, other: b } }.to_string()
+        );
     }
 }
