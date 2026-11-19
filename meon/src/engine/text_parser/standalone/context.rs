@@ -986,6 +986,15 @@ impl LineModel {
 /// shared (immutably) by any number of `find_context_*` iterators over the
 /// same source. See the [module documentation](self) for the construction
 /// semantics.
+#[derive(Debug)]
+struct Built {
+    spans: Vec<Span>,
+    is_fence: Vec<bool>,
+    clean_len: Vec<usize>,
+    inner: Vec<Option<(usize, usize)>>,
+    classes: ByteClasses,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParseContext {
     spans: Vec<Span>,
@@ -1067,12 +1076,35 @@ impl ParseContext {
         max_inline: Option<u32>,
         max_block: Option<u32>,
     ) -> Self {
+        let built = Self::build_inner(
+            source, escape, lines, sym, asym, chained, cap_hint, max_inline, max_block, 0,
+        );
+        Self {
+            spans: built.spans,
+            lines,
+            classes: built.classes,
+        }
+    }
+
+    fn build_inner(
+        source: &[u8],
+        escape: u8,
+        lines: LineModel,
+        sym: &[SymSpec],
+        asym: &[AsymSpec],
+        chained: &[ChainSpec],
+        cap_hint: usize,
+        max_inline: Option<u32>,
+        max_block: Option<u32>,
+        depth: usize,
+    ) -> Built {
         let len = source.len();
         let eol = lines.eol;
         let breaks = lines.breaks();
         let mut spans: Vec<Span> = Vec::with_capacity(cap_hint);
         let mut is_fence: Vec<bool> = Vec::with_capacity(cap_hint);
         let mut clean_len: Vec<usize> = Vec::with_capacity(cap_hint);
+        let mut inner: Vec<Option<(usize, usize)>> = Vec::with_capacity(cap_hint);
 
         // One deduplicated needle set — fence bytes and opaque triggers
         // together — so every iteration issues exactly ONE search
@@ -1125,6 +1157,12 @@ impl ParseContext {
                     spans.push(Span::new(p as u32, end as u32));
                     is_fence.push(true);
                     clean_len.push(end - p);
+                    let _cs = if le < len { le + 1 } else { len };
+                    let mut _ce = end;
+                    while _ce > _cs && source[_ce - 1] != eol {
+                        _ce -= 1;
+                    }
+                    inner.push(if _cs < _ce { Some((_cs, _ce)) } else { None });
                     pos = if end < len { end + 1 } else { len };
                     continue;
                 }
@@ -1149,6 +1187,12 @@ impl ParseContext {
                             spans.push(Span::new(p as u32, end as u32));
                             is_fence.push(true);
                             clean_len.push(end - p);
+                            let _cs = if line.le < len { line.le + 1 } else { len };
+                            let mut _ce = end;
+                            while _ce > _cs && source[_ce - 1] != eol {
+                                _ce -= 1;
+                            }
+                            inner.push(if _cs < _ce { Some((_cs, _ce)) } else { None });
                             pos = resume;
                             continue;
                         }
@@ -1202,6 +1246,10 @@ impl ParseContext {
                             spans.push(Span::new(p as u32, close_end as u32));
                             is_fence.push(false);
                             clean_len.push(close_end.saturating_sub(p + 2 * count as usize));
+                            inner.push(Some((
+                                p + count as usize,
+                                close_end.saturating_sub(count as usize),
+                            )));
                             pos = close_end;
                         }
                         None => pos = run_end,
@@ -1218,6 +1266,7 @@ impl ParseContext {
                             spans.push(Span::new(o as u32, (q + 1) as u32));
                             is_fence.push(false);
                             clean_len.push(q - o - 1);
+                            inner.push(Some((o + 1, q)));
                             pos = q + 1;
                             break;
                         }
@@ -1233,6 +1282,7 @@ impl ParseContext {
                             spans.push(Span::new(p as u32, (cp + 1) as u32));
                             is_fence.push(false);
                             clean_len.push(cp - run_end);
+                            inner.push(Some((run_end, cp)));
                             pos = cp + 1;
                         }
                         Err(stop) => {
@@ -1258,6 +1308,7 @@ impl ParseContext {
                             spans.push(Span::new((run_end - 1) as u32, end as u32));
                             is_fence.push(false);
                             clean_len.push(end - (run_end - 1));
+                            inner.push(Some((run_end, end - 1)));
                             pos = end;
                         }
                         None => pos = run_end,
@@ -1266,36 +1317,58 @@ impl ParseContext {
             }
         }
 
-        if let Some(limit) = max_inline {
-            let mut i = 0;
-            while i < spans.len() {
-                if !is_fence[i] && clean_len[i] > limit as usize {
-                    spans.remove(i);
-                    is_fence.remove(i);
-                    clean_len.remove(i);
-                } else {
-                    i += 1;
-                }
-            }
-        }
-        if let Some(limit) = max_block {
-            let mut i = 0;
-            while i < spans.len() {
-                if is_fence[i] && clean_len[i] > limit as usize {
-                    spans.remove(i);
-                    is_fence.remove(i);
-                    clean_len.remove(i);
-                } else {
-                    i += 1;
-                }
-            }
-        }
-
-        Self {
-            spans,
-            lines,
+        let mut out = Built {
+            spans: Vec::with_capacity(spans.len()),
+            is_fence: Vec::with_capacity(spans.len()),
+            clean_len: Vec::with_capacity(spans.len()),
+            inner: Vec::with_capacity(spans.len()),
             classes,
+        };
+        for i in 0..spans.len() {
+            let over = if is_fence[i] {
+                max_block.map_or(false, |l| clean_len[i] > l as usize)
+            } else {
+                max_inline.map_or(false, |l| clean_len[i] > l as usize)
+            };
+            if !over {
+                out.spans.push(spans[i]);
+                out.is_fence.push(is_fence[i]);
+                out.clean_len.push(clean_len[i]);
+                out.inner.push(inner[i]);
+                continue;
+            }
+            if depth >= lines.max_nest {
+                continue;
+            }
+            let Some((s, e)) = inner[i] else {
+                continue;
+            };
+            if s >= e {
+                continue;
+            }
+            let sub = Self::build_inner(
+                &source[s..e],
+                escape,
+                lines,
+                sym,
+                asym,
+                chained,
+                0,
+                max_inline,
+                max_block,
+                depth + 1,
+            );
+            for j in 0..sub.spans.len() {
+                out.spans.push(Span::new(
+                    sub.spans[j].start + s as u32,
+                    sub.spans[j].end + s as u32,
+                ));
+                out.is_fence.push(sub.is_fence[j]);
+                out.clean_len.push(sub.clean_len[j]);
+                out.inner.push(sub.inner[j].map(|(a, b)| (a + s, b + s)));
+            }
         }
+        out
     }
 }
 
