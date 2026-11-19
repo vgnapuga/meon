@@ -266,18 +266,19 @@ Inherited from `meon`:
 
 ```toml
 [dependencies]
-meon-json = { version = "0.4", features = ["avx2"] }
+meon = { version = "0.7", features = ["avx2"] }
 ```
 
 ---
 
 ## Nesting
 
-This grammar sets `max_nest = 64`: objects and arrays nest up to 64 levels
-deep, and `key_value` member values survive arbitrarily deep container
-nesting within that cap. A document nested deeper than 64 levels is parsed
-without panicking, but the over-cap containers are left untracked rather than
-represented as their own spans.
+This grammar sets `max_nest = 64` in its `limits` section: objects and arrays
+nest up to 64 levels deep, and `key_value` member values survive arbitrarily
+deep container nesting within that cap. The three span caps are written as
+`0` (absent), so no span is dropped for its length. A document nested deeper
+than 64 levels is parsed without panicking, but the over-cap containers are
+left untracked rather than represented as their own spans.
 
 ```rust
 let pretty = b"{\n  \"a\": {\n    \"b\": { \"c\": 1 }\n  }\n}";

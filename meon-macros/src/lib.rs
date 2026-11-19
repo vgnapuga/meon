@@ -70,13 +70,20 @@ use crate::strip::{flatten_invisible, strip};
 /// define_parser!(Name {
 ///     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 ///
+///     limits {
+///         max_nest = 4;
+///         max_inline_span = 1_024;
+///         max_line_span = 0;
+///         max_block_span = 0;
+///     }
+///
 ///     inline  { ... }
 ///     lines   { ... }
 ///     blocks  { ... }
 /// });
 /// ```
 ///
-/// ## Context bytes (required header, plus one optional)
+/// ## Context bytes
 ///
 /// | Key         | Meaning                                                        |
 /// |-------------|----------------------------------------------------------------|
@@ -84,16 +91,43 @@ use crate::strip::{flatten_invisible, strip};
 /// | `eol`       | Line terminator (typically `\n`)                               |
 /// | `tab`       | Tab character                                                  |
 /// | `escape`    | Escape prefix that suppresses the next byte                    |
-/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline        |
-/// |             | stack (`symmetric` and `asymmetric` with `parse_inside =       |
-/// |             | true`, `key_value`) and the block stack (`cont` / `fence`).    |
-/// |             | At `1` nothing self-nests. Declared alongside the other        |
-/// |             | context bytes: `sep = ..., escape = ..., max_nest = 4;`        |
 /// | `crlf`      | Optional, default `false`. With `true`, a `\r` right before    |
 /// |             | `eol` is part of the line end: no line content, text or        |
 /// |             | element takes it, and a line of it alone, or of it after       |
 /// |             | `sep`/`tab` bytes, is blank. A `\r` anywhere else is a byte    |
-/// |             | like any other. May come before or after `max_nest`.           |
+/// |             | like any other.                                                |
+///
+/// `max_nest` is also accepted in the header for existing grammars, but
+/// `limits` is the current home for it. When both are present they must
+/// agree.
+///
+/// ## `limits { ... }` section
+///
+/// Optional. Settings may be written in any order; `;` and `,` are optional.
+///
+/// | Key               | Meaning                                                     |
+/// |-------------------|-------------------------------------------------------------|
+/// | `max_nest`        | Default `1`. Shared nesting cap of the inline stack and     |
+/// |                   | the block stack (`cont` / `fence`). At `1` nothing nests.   |
+/// | `max_inline_span` | Default absent. Longest emitted inline span, in bytes.      |
+/// | `max_line_span`   | Default absent. Longest emitted line span, in bytes.        |
+/// | `max_block_span`  | Default absent. Longest emitted block span, in bytes.       |
+///
+/// The span caps are measured on the clean span — `end - start` of the
+/// stored `Span`, without delimiters. `0` and `u32::MAX` mean absent: no
+/// check is generated. A value above `u32::MAX` is a compile error. When a
+/// cap is absent, the corresponding checks and fallback code are not
+/// generated.
+///
+/// A span longer than its cap is not emitted:
+///
+/// - an inline transparent span keeps its inner spans and its text;
+/// - an inline `parse_inside = false` span is dropped and its interior is
+///   reparsed;
+/// - a `chained` element is dropped and its interior is reparsed;
+/// - a `key_value` pair is dropped and is not reparsed;
+/// - a line or block item span goes to `blocks { fallback => ... }`;
+/// - an over-long fence is reparsed as paragraph runs and no longer opaque.
 ///
 /// A line of `sep` and `tab` bytes alone is as blank as an empty line: it
 /// ends a paragraph and closes the open blocks, outside a fence.

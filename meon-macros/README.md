@@ -45,6 +45,13 @@ use meon::define_parser;
 define_parser!(MyFormat {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
+    limits {
+        max_nest = 4;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+    }
+
     inline {
         fallback => texts [10];
     }
@@ -58,6 +65,8 @@ let content = MyFormatParser::parse(b"hello world\n");
 
 For the full grammar reference see
 [`meon/README.md`](https://github.com/vgnapuga/meon/blob/main/meon/README.md).
+
+`limits { ... }` is optional: `max_nest` sets the shared nesting cap, and `max_inline_span`, `max_line_span` and `max_block_span` cap emitted span lengths in bytes. `0` and `u32::MAX` mean absent, so no check or fallback code is generated; a value above `u32::MAX` is rejected.
 
 ---
 

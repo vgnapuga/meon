@@ -215,14 +215,14 @@ Inherited from `meon`:
 
 ```toml
 [dependencies]
-meon-md = { version = "0.5", features = ["avx2"] }
+meon = { version = "0.7", features = ["avx2"] }
 ```
 
 ---
 
 ## Nesting
 
-This grammar sets `max_nest = 4`. Two independent mechanisms opt into it:
+This grammar sets `max_nest = 4` in its `limits` section. Two independent mechanisms opt into it:
 
 - **Blockquotes and fences** nest up to 4 levels deep. `> > text` opens two
   distinct, correctly-bounded `blockquotes` spans rather than one collapsed
@@ -239,6 +239,10 @@ assert_eq!(c.blockquotes.len(), 2);
 assert_eq!(c.bolds.len(), 1);
 assert_eq!(c.italics.len(), 1);
 ```
+
+The three span caps are written as `0` (absent): `max_inline_span = 0`,
+`max_line_span = 0`, `max_block_span = 0`. The engine treats `0` as no cap,
+so no span is dropped for its length.
 
 Link and image components are opaque and balanced. `[a [b] c](url)` and
 `[t](https://x/a_(b))` each produce one link; bracket/parenthesis bytes inside

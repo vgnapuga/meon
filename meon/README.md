@@ -80,27 +80,53 @@ Spans are `u32` byte offsets. Input must not exceed 4 GiB (`span::MAX_INPUT_LEN`
 define_parser!(Name {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
+    limits {
+        max_nest = 4;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+    }
+
     inline  { ... }
     lines   { ... }
     blocks  { ... }
 });
 ```
 
-Four context bytes are required and apply to every rule. `max_nest` and
-`crlf` are optional grammar-wide settings:
+Four context bytes are required and apply to every rule. `crlf` is optional.
+`max_nest` is still accepted in the header for existing grammars, but the
+`limits` section is its current home; when both are present they must agree.
 
-| Key        | Meaning                                                        |
-|------------|----------------------------------------------------------------|
-| `sep`      | Word separator (typically space)                               |
-| `eol`      | Line terminator (typically `\n`)                               |
-| `tab`      | Tab character                                                  |
-| `escape`   | Escape prefix that suppresses the next byte                    |
-| `crlf`     | Optional. Recognise CR before `eol` as a line-ending byte; default `false`. |
-| `max_nest` | Optional. Bounded self-nesting depth cap, shared by            |
-|            | stack-based inline rules and `key_value`                      |
-|            | values (below) and by block-level `cont`/`fence` nesting.      |
-|            | Default `1`: no self-nesting, at most one block active.        |
-|            | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
+| Key      | Meaning                                                        |
+|----------|----------------------------------------------------------------|
+| `sep`    | Word separator (typically space)                               |
+| `eol`    | Line terminator (typically `\n`)                              |
+| `tab`    | Tab character                                                  |
+| `escape` | Escape prefix that suppresses the next byte                    |
+| `crlf`   | Optional. Recognise CR before `eol` as a line-ending byte; default `false`. |
+
+### `limits { ... }`
+
+Optional. Settings may be written in any order; `;` and `,` are optional.
+
+| Key               | Meaning                                                      |
+|-------------------|--------------------------------------------------------------|
+| `max_nest`        | Default `1`. Shared nesting cap of the inline stack and the  |
+|                   | block stack (`cont` / `fence`). At `1` nothing nests.        |
+| `max_inline_span` | Default absent. Longest emitted inline span, in bytes.       |
+| `max_line_span`   | Default absent. Longest emitted line span, in bytes.         |
+| `max_block_span`  | Default absent. Longest emitted block span, in bytes.        |
+
+The span caps are measured on the clean span — `end - start` of the stored
+`Span`, without delimiters. `0` and `u32::MAX` mean absent: no check and no
+fallback code is generated for that cap. A value above `u32::MAX` is a
+compile error.
+
+When a span exceeds its cap it is not emitted: a transparent inline element
+keeps its inner spans and text; an opaque inline element and a `chained`
+element are reparsed inside; a `key_value` pair is dropped without reparse;
+a line or block item span goes to `blocks { fallback => ... }`; an over-long
+fence is reparsed as paragraph runs.
 
 The optional `crlf` setting defaults to `false`. With `crlf = true`, only a
 CR immediately followed by an actual `eol` is part of the line ending. A bare CR, including at EOF, remains content.

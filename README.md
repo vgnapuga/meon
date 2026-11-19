@@ -195,7 +195,14 @@ use std::num::NonZeroU8;
 pub struct Heading { pub level: NonZeroU8 }
 
 define_parser!(MyFormat {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+
+    limits {
+        max_nest = 4;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+    }
 
     inline {
         on_trigger(b'*') {
@@ -234,6 +241,19 @@ define_parser!(MyFormat {
 Everything — the content struct, the parse method, all find_* iterators, all
 accessors — is generated at compile time. There is no runtime dispatch, no
 vtable, no grammar interpreter.
+
+### Span limits
+
+`limits { ... }` is optional. `max_nest` sets the shared nesting cap;
+`max_inline_span`, `max_line_span` and `max_block_span` cap the length of an
+emitted span in bytes, measured on the clean span without delimiters. `0` and
+`u32::MAX` mean absent: no check and no fallback code is generated for that
+cap. A value above `u32::MAX` is a compile error.
+
+When a span exceeds its cap it is not emitted: transparent inline elements
+keep their inner spans and text, opaque inline elements are reparsed inside,
+line and block items go to `blocks { fallback => ... }`, and an over-long
+fence is reparsed as paragraph runs.
 
 ---
 

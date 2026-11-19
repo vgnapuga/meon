@@ -7,6 +7,47 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [Unreleased]
+
+### Added
+
+- **`meon`, `meon-macros`** — optional `limits { ... }` grammar section:
+  `max_nest`, `max_inline_span`, `max_line_span` and `max_block_span`.
+  `max_nest` is still accepted in the header for existing grammars; when both
+  places are present they must agree.
+- Span caps are measured on the clean span, `end - start` without delimiters.
+  `0` and `u32::MAX` mean absent; a value above `u32::MAX` is a compile error.
+  When a cap is absent, no comparison, fallback or reparse code is generated
+  for that level.
+- An over-limit span is not emitted: a transparent inline span keeps its text
+  and inner spans; an opaque inline span and a `chained` element are reparsed
+  inside; a `key_value` pair is dropped without reparse; a line or block item
+  span goes to `blocks { fallback => ... }`; an over-long fence is reparsed as
+  paragraph runs, skipping the `cont` markers of the frames that held it.
+- `find_*` and `find_context_*` apply the caps. `ParseContext` drops an
+  over-limit opaque region and rescans its interior for nested regions.
+
+### Changed
+
+- **`meon-md`, `meon-json`** — grammars now declare `max_nest` in `limits`,
+  with `max_inline_span = 0`, `max_line_span = 0` and `max_block_span = 0`.
+  The header form is still accepted.
+- **`meon`** — `parse_text!`, `parse_inline!`, `parse_line!` and
+  `parse_block!` accept optional `[]`/`[N]` cap tokens; `[]` emits the normal
+  path only.
+
+### Fixed
+
+- A `chained` over-limit match keeps its delimiters in source order.
+- An opaque key keeps its full span through the key-value parser.
+- Context caps are measured on the clean span, not on the delimiter-inclusive
+  region.
+
+### Testing
+
+- Unit, UI (`trybuild`) and mechanism tests for `limits`; the full workspace
+  test suite passes.
+
 ## [0.7.0] - 2026-11-19
 
 ### Fixed

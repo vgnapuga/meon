@@ -50,6 +50,7 @@ deeper than the public API.
 16. [Cross-crate macro hygiene](#16-cross-crate-macro-hygiene)
 17. [Known limitations and deliberate trade-offs](#17-known-limitations-and-deliberate-trade-offs)
 18. [Extension points](#18-extension-points)
+19. [Span limits](#19-span-limits)
 
 ---
 
@@ -261,10 +262,11 @@ Each variant carries exactly the literals and identifiers needed to emit both
 the `find_*` method (via `define_standalone_fns!`) and the `_clean` / `_raw`
 accessors (via `methods.rs`). Nothing more is stored.
 
-Note that `max_nest` itself is *not* part of `CF` — it is parsed directly in
-`lib.rs`'s `expand()` as a standalone `Literal`, alongside `sep`/`eol`/`tab`/
-`escape`, and forwarded straight through to `parse_text!`'s call site rather
-than being threaded through the collected-fields structure.
+The optional `limits` section is parsed by `limits.rs` from `expand()`. Its
+`max_nest` and the three span caps are *not* part of `CF`: they are forwarded
+as literals or optional tokens to `parse_text!`, `parse_inline!`,
+`parse_line!`, `parse_block!` and the standalone DSL, rather than being
+threaded through the collected-fields structure.
 
 ---
 
@@ -320,8 +322,9 @@ impl NameParser {
 ```
 
 `max_nest` is always forwarded explicitly to `parse_text!`, even when the
-grammar omitted it — `lib.rs`'s `expand()` defaults the literal to `1` before
-emitting this call, rather than relying on `parse_text!`'s own default arm.
+grammar omitted it — `expand()` defaults the literal to `1` before emitting
+this call. The three span caps are forwarded as optional `[]`/`[N]` tokens:
+`[]` means no cap and generates no limit code.
 
 The grammar sections passed to `parse_text!` have been stripped of their
 `=> field [N]` annotations by `strip.rs` — those annotations are only
@@ -1125,6 +1128,65 @@ gating on `portable_simd`, and adding a `search_simd!` invocation inside
 `meon` uses the global allocator for all `Vec` allocations. Replacing it with
 `mimalloc` or another allocator is the responsibility of the binary/grammar
 crate, not the engine. No changes to `meon` are needed.
+
+---
+
+## 19. Span limits
+
+The optional `limits { ... }` section carries the grammar-wide nesting cap and
+three span-length caps:
+
+| Key               | Meaning                                                     |
+|-------------------|-------------------------------------------------------------|
+| `max_nest`        | Shared cap of the inline and block stacks; default `1`.     |
+| `max_inline_span` | Longest emitted inline span, in bytes; default absent.      |
+| `max_line_span`   | Longest emitted line span, in bytes; default absent.        |
+| `max_block_span`  | Longest emitted block span, in bytes; default absent.       |
+
+`max_nest` is also accepted in the header for existing grammars; if both are
+present they must agree. The span caps are measured on the clean span,
+`end - start` of the stored `Span`, without delimiters. `0` and `u32::MAX` are
+normalized to absent; a value above `u32::MAX` is a compile error.
+
+The front-end emits each cap as an optional token, `[]` or `[N]`. `[]` means
+no cap: the runtime macros emit no comparison, no fallback push and no reparse
+helper for that level. `[N]` is emitted as the smallest unsigned literal that
+holds the value (`u8`, `u16` or `u32`); comparisons are done in `u32`.
+
+### Full parse
+
+- **Inline simple spans** — a span longer than the cap is not emitted. A
+  transparent symmetric/asymmetric frame is removed and its plain text stays
+  in the fallback field; its completed inner elements remain.
+- **Opaque inline spans** (`parse_inside = false`) — the span is dropped and
+  its interior is reparsed with the same grammar. The delimiters become text.
+  A `chained` element over the cap is dropped and its interior reparsed.
+  A `key_value` pair is dropped and is not reparsed; its key and value spans
+  and any inner elements remain.
+- **Line and block spans** — a line rule, block item or `cont` span over its
+  cap is not emitted; the span itself is pushed to the grammar's
+  `blocks { fallback => ... }` field, while inline content keeps being
+  scanned. A fence over the cap is also reparsed: its content is split into
+  paragraph runs at blank lines, `cont` markers of the frames below it are
+  skipped, and the fence is no longer opaque.
+- **Fallback fields** — `inline` fallback text is never capped. The block
+  fallback paragraph is not pushed when its own span exceeds the block cap.
+
+The reparse helper is generated only when a cap needs it. Its recursion depth
+is bounded by `max_nest`. It scans an interior as an inline run; for fence
+content it first splits the content into paragraph runs and skips the
+continuation markers of the frames that held the fence.
+
+### Standalone and context
+
+Every `find_*` and `find_context_*` iterator applies the same caps: a yielded
+span longer than its level's cap is skipped. Context-free opaque finders skip
+an over-limit match and resume after it; they do not search its interior for
+the same kind. `ParseContext` drops an over-limit opaque region and rescans
+its interior for nested regions, so context-aware finders see the same
+structure the full parse reparses. A fence over `max_block_span` is not added
+to the context map and its content is rescanned. Over-limit line and block
+items are filtered by their finders.
 
 ---
 

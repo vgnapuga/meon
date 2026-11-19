@@ -99,7 +99,9 @@ pub use crate::parse_block;
 /// # Expansion
 ///
 /// ```text
-/// parse_text!(src; sep=…, eol=…, tab=…, escape=…, max_nest=…, crlf=…; <sections>)
+/// parse_text!(src; sep=…, eol=…, tab=…, escape=…, max_nest=…, crlf=…,
+///            max_inline_span=…, max_line_span=…, max_block_span=…, reparse=…;
+///            <sections>)
 ///    ├─ @cs   — split the sections into [inline], [lines], [blocks]
 ///    ├─ @ci   — inline settings: merge_simple, fallback, hard_break, the
 ///    │          on_trigger byte sets
@@ -120,26 +122,37 @@ pub use crate::parse_block;
 /// Bytes outside both — `eol` bytes between runs, lines consumed by a `line`
 /// rule or a fence — belong to no fallback span.
 ///
-/// # Context bytes
+/// # Context bytes and span caps
 ///
-/// | Parameter  | Meaning                                          | Typical value |
-/// |------------|--------------------------------------------------|---------------|
-/// | `sep`      | Word separator                                   | `b' '`        |
-/// | `eol`      | Line terminator                                  | `b'\n'`       |
-/// | `tab`      | Tab character                                    | `b'\t'`       |
-/// | `escape`   | Escape prefix                                    | `b'\\'`       |
-/// | `max_nest` | Nesting cap shared by the inline and block stacks | `1`           |
-/// | `crlf`     | A `\r` right before `eol` is part of the line end | `false`       |
+/// | Parameter         | Meaning                                            | Default |
+/// |-------------------|----------------------------------------------------|---------|
+/// | `sep`             | Word separator                                     | —       |
+/// | `eol`             | Line terminator                                    | —       |
+/// | `tab`             | Tab character                                      | —       |
+/// | `escape`          | Escape prefix                                      | —       |
+/// | `max_nest`        | Nesting cap shared by the inline and block stacks  | `1`     |
+/// | `crlf`            | A `\r` before `eol` is part of the line end       | `false` |
+/// | `max_inline_span` | Optional inline span cap, in bytes                 | absent  |
+/// | `max_line_span`   | Optional line span cap, in bytes                   | absent  |
+/// | `max_block_span`  | Optional block span cap, in bytes                  | absent  |
 ///
-/// `max_nest` is always supplied by `define_parser!`. It bounds the unified
-/// inline stack of [`crate::parse_inline!`] (symmetric and asymmetric with
-/// `parse_inside = true`, key_value) and the block stack of
-/// [`crate::parse_block!`] (how deep `cont` / `fence` frames nest, and
-/// whether a `block` item opens inside an open block). At `max_nest = 1`
-/// nothing self-nests and at most one block is open at a time. A `symmetric`
-/// or `asymmetric` rule with `parse_inside = false` never touches the stack:
-/// it is a forward search, and an `asymmetric` one with `balanced = true`
-/// counts its own nesting without bound.
+/// `max_nest` bounds the unified inline stack of [`crate::parse_inline!`]
+/// (symmetric and asymmetric with `parse_inside = true`, key_value) and the
+/// block stack of [`crate::parse_block!`]. At `1` nothing self-nests and at
+/// most one block is open. A `symmetric` or `asymmetric` rule with
+/// `parse_inside = false` never touches the stack.
+///
+/// The three `max_*_span` values are optional tokens: `[]` means no cap and
+/// generates no check, fallback or reparse code; `[N]` enables the cap.
+/// `define_parser!` normalizes `0` and `u32::MAX` to `[]`. A cap is measured
+/// on the clean span, `end - start` without delimiters.
+///
+/// A span longer than its cap is not emitted. An inline transparent span
+/// keeps its inner spans and text; an inline `parse_inside = false` span and a
+/// `chained` element are reparsed inside; a `key_value` pair is dropped
+/// without reparse; a line or block item span goes to `blocks { fallback =>
+/// ... }`; an over-long fence is reparsed as paragraph runs and is no longer
+/// opaque.
 ///
 /// # Known limitations
 ///
