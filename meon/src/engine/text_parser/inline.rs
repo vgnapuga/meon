@@ -1181,7 +1181,7 @@ macro_rules! parse_inline {
                                                         $crate::parse_inline!(@choose $max_inline,
                                                             {
                                                                 $state.$af[_vidx as usize].end =
-                                                                    _close_char_pos;
+                                                                    _close_char_pos as $off;
                                                                 pop_frame!();
                                                             },
                                                             {
@@ -1205,7 +1205,7 @@ macro_rules! parse_inline {
                                                                     }
                                                                 } else {
                                                                     $state.$af[_vidx as usize].end =
-                                                                        _close_char_pos;
+                                                                        _close_char_pos as $off;
                                                                     pop_frame!();
                                                                 }
                                                             }
