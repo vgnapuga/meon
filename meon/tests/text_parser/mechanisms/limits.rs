@@ -180,6 +180,15 @@ mod limited {
     }
 
     #[test]
+    fn fence_inside_cont_skips_markers() {
+        let src = b"> ```\n> *ab*\n> ```\n";
+        let c = LimitedParser::parse(src);
+        assert_eq!(c.italics.len(), 1);
+        let all: String = c.texts.iter().map(|s| txt(src, *s)).collect();
+        assert_eq!(all, "");
+    }
+
+    #[test]
     fn context_removes_over_limit_opaque_region() {
         let src = b"`*ab*`";
         let ctx = LimitedParser::context(src);

@@ -388,13 +388,27 @@ fn expand(input: TS2) -> Result<TS2> {
                 start: usize,
                 end: usize,
                 _reparse_depth: usize,
+                cont_bytes: &[u8],
+                cd: usize,
             ) {
                 if _reparse_depth > #max_nest {
                     return;
                 }
+                let mut start = start;
+                let mut _k = 0;
+                while _k < cd && start < end && src[start] == cont_bytes[_k] {
+                    start += if start + 1 < end
+                        && (src[start + 1] == #sep || src[start + 1] == #tab)
+                    {
+                        2
+                    } else {
+                        1
+                    };
+                    _k += 1;
+                }
                 #mc::parse_inline!(
                     state, src, start, end, #tx, #merge, #esc, #sep, #tab, #eol, #max_nest,
-                    true, crlf = #crlf, max_inline = #lim_inline,
+                    cont(cont_bytes, cd), crlf = #crlf, max_inline = #lim_inline,
                     reparse = [ #reparse_helper ], depth = _reparse_depth ;
                     #pt_inline_rules
                 );

@@ -175,7 +175,7 @@ macro_rules! parse_block {
                             $state, src, pos as u32, _c2, _s2,
                             max_block = $max_block,
                             para = $para, reparse = $reparse, eol = $eol,
-                            closed = false ; $($sr)*);
+                            closed = false, contb = &[], contd = 0 ; $($sr)*);
                     }
                     $depth = _fi;
                     _peel_broke = true;
@@ -187,11 +187,17 @@ macro_rules! parse_block {
                 let mut _fc: u32 = 0;
                 while _i < le && src[_i] == _ab { _fc += 1; _i += 1; }
                 if _fc >= _ac && src[_i..le].iter().all(|&b| b == $sep || b == $tab) {
+                    let mut _cont_bytes: [u8; $maxn] = [0u8; $maxn];
+                    let mut _cont_depth = 0usize;
+                    while _cont_depth < $depth - 1 && $stack[_cont_depth].0 == 0 {
+                        _cont_bytes[_cont_depth] = src[$stack[_cont_depth].1 as usize];
+                        _cont_depth += 1;
+                    }
                     $crate::parse_block!(@close_frame
                         $state, src, nl as u32, _ac, _astart,
                         max_block = $max_block,
                         para = $para, reparse = $reparse, eol = $eol,
-                        closed = true ; $($sr)*);
+                        closed = true, contb = &_cont_bytes, contd = _cont_depth ; $($sr)*);
                     $depth -= 1;
                 }
                 // Closed or not, the fence line is fully consumed.
@@ -272,9 +278,9 @@ macro_rules! parse_block {
     (@over [$n:literal], $s:expr, $e:expr) => {
         (($e) - ($s)) > $n as u32
     };
-    (@reparse [], $st:ident, $src:ident, $s:expr, $e:expr) => {};
-    (@reparse [$f:ident], $st:ident, $src:ident, $s:expr, $e:expr) => {
-        $f(&mut $st, $src, $s, $e, 0);
+    (@reparse [], $st:ident, $src:ident, $s:expr, $e:expr, $cb:expr, $cd:expr) => {};
+    (@reparse [$f:ident], $st:ident, $src:ident, $s:expr, $e:expr, $cb:expr, $cd:expr) => {
+        $f(&mut $st, $src, $s, $e, 0, $cb, $cd);
     };
     (@push_block [], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {
         $crate::paste::paste! {
@@ -313,7 +319,8 @@ macro_rules! parse_block {
 
     (@close_frame $st:ident, $src:ident, $endpos:expr, $count:expr, $start:expr,
         max_block = $max_block:tt, para = $para:ident, reparse = $reparse:tt,
-        eol = $eol:literal, closed = $closed:ident ;
+        eol = $eol:literal, closed = $closed:ident,
+        contb = $contb:expr, contd = $contd:expr ;
         $($sr:tt)*
     ) => {{
         let _fcount: u32 = $count;
@@ -323,11 +330,12 @@ macro_rules! parse_block {
         $crate::parse_block!(@close_frame_inner
             $st, $src, _fdone, $endpos, _fcount, _fbyte, _fstart,
             max_block = $max_block, para = $para, reparse = $reparse,
-            eol = $eol, closed = $closed ; $($sr)*);
+            eol = $eol, closed = $closed, contb = $contb, contd = $contd ; $($sr)*);
     }};
     (@close_frame_inner $st:ident, $src:ident, $done:ident, $endpos:expr, $count:ident, $byte:ident, $start:ident,
         max_block = $max_block:tt, para = $para:ident, reparse = $reparse:tt,
-        eol = $eol:literal, closed = $closed:ident ;
+        eol = $eol:literal, closed = $closed:ident,
+        contb = $contb:expr, contd = $contd:expr ;
         cont($cb:literal) => $field:ident $($rest:tt)*
     ) => {
         if !$done && $count == 0 && $byte == $cb {
@@ -337,11 +345,12 @@ macro_rules! parse_block {
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $done, $endpos, $count, $byte, $start,
             max_block = $max_block, para = $para, reparse = $reparse,
-            eol = $eol, closed = $closed ; $($rest)*)
+            eol = $eol, closed = $closed, contb = $contb, contd = $contd ; $($rest)*)
     };
     (@close_frame_inner $st:ident, $src:ident, $done:ident, $endpos:expr, $count:ident, $byte:ident, $start:ident,
         max_block = $max_block:tt, para = $para:ident, reparse = $reparse:tt,
-        eol = $eol:literal, closed = $closed:ident ;
+        eol = $eol:literal, closed = $closed:ident,
+        contb = $contb:expr, contd = $contd:expr ;
         fence($pat:pat, min = $min:literal) => $field:ident $($rest:tt)*
     ) => {
         if !$done && $count != 0 && matches!($byte, $pat) && $count >= $min {
@@ -367,31 +376,34 @@ macro_rules! parse_block {
                     _span.end as usize
                 };
                 if _cs < _ce {
-                    $crate::parse_block!(@reparse $reparse, $st, $src, _cs, _ce);
+                    $crate::parse_block!(@reparse $reparse, $st, $src, _cs, _ce, $contb, $contd);
                 }
             }
         }
         $crate::parse_block!(@close_frame_inner $st, $src, $done, $endpos, $count, $byte, $start,
             max_block = $max_block, para = $para, reparse = $reparse,
-            eol = $eol, closed = $closed ; $($rest)*)
+            eol = $eol, closed = $closed, contb = $contb, contd = $contd ; $($rest)*)
     };
     (@close_frame_inner $st:ident, $src:ident, $done:ident, $e:expr, $c:ident, $b:ident, $s:ident,
         max_block = $max_block:tt, para = $para:ident, reparse = $reparse:tt,
-        eol = $eol:literal, closed = $closed:ident ; , $($r:tt)*) => {
+        eol = $eol:literal, closed = $closed:ident,
+        contb = $contb:expr, contd = $contd:expr ; , $($r:tt)*) => {
         $crate::parse_block!(@close_frame_inner $st, $src, $done, $e, $c, $b, $s,
             max_block = $max_block, para = $para, reparse = $reparse,
-            eol = $eol, closed = $closed ; $($r)*)
+            eol = $eol, closed = $closed, contb = $contb, contd = $contd ; $($r)*)
     };
     (@close_frame_inner $st:ident, $src:ident, $done:ident, $e:expr, $c:ident, $b:ident, $s:ident,
         max_block = $max_block:tt, para = $para:ident, reparse = $reparse:tt,
-        eol = $eol:literal, closed = $closed:ident ; ; $($r:tt)*) => {
+        eol = $eol:literal, closed = $closed:ident,
+        contb = $contb:expr, contd = $contd:expr ; ; $($r:tt)*) => {
         $crate::parse_block!(@close_frame_inner $st, $src, $done, $e, $c, $b, $s,
             max_block = $max_block, para = $para, reparse = $reparse,
-            eol = $eol, closed = $closed ; $($r)*)
+            eol = $eol, closed = $closed, contb = $contb, contd = $contd ; $($r)*)
     };
     (@close_frame_inner $st:ident, $src:ident, $done:ident, $e:expr, $c:ident, $b:ident, $s:ident,
         max_block = $max_block:tt, para = $para:ident, reparse = $reparse:tt,
-        eol = $eol:literal, closed = $closed:ident ;) => {
+        eol = $eol:literal, closed = $closed:ident,
+        contb = $contb:expr, contd = $contd:expr ;) => {
         let _ = $done;
     };
 

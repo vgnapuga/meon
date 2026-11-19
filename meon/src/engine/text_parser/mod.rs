@@ -472,7 +472,7 @@ macro_rules! parse_text {
                     if !is_fence {
                         $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, pos,
                             max_block = $max_block, max_inline = $max_inline,
-                            para = $para, reparse = $reparse, eol = $eol ;
+                            para = $para, reparse = $reparse, eol = $eol, maxn = $maxn ;
                             block_simple { $($sr)* } block { $($br)* });
                     }
                     pos = next_line_start;
@@ -671,7 +671,7 @@ macro_rules! parse_text {
             }
             $crate::parse_text!(@close_stack _active_stack, _active_depth, state, src, len,
                 max_block = $max_block, max_inline = $max_inline,
-                para = $para, reparse = $reparse, eol = $eol ;
+                para = $para, reparse = $reparse, eol = $eol, maxn = $maxn ;
                 block_simple { $($sr)* } block { $($br)* });
 
             state.into_content(src)
@@ -783,17 +783,23 @@ macro_rules! parse_text {
     // arm.
     (@close_stack $stack:ident, $depth:ident, $st:ident, $src:ident, $pos:expr,
         max_block = $max_block:tt, max_inline = $max_inline:tt,
-        para = $para:ident, reparse = $reparse:tt, eol = $eol:literal ;
+        para = $para:ident, reparse = $reparse:tt, eol = $eol:literal, maxn = $maxn:literal ;
         block_simple { $($sr:tt)* } block { $($br:tt)* }
     ) => {
         while $depth > 0 {
             $depth -= 1;
             let (_c2, _s2) = $stack[$depth];
+            let mut _cont_bytes: [u8; $maxn] = [0u8; $maxn];
+            let mut _cont_depth = 0usize;
+            while _cont_depth < $depth && $stack[_cont_depth].0 == 0 {
+                _cont_bytes[_cont_depth] = $src[$stack[_cont_depth].1 as usize];
+                _cont_depth += 1;
+            }
             $crate::parse_block!(@close_frame
                 $st, $src, $pos as u32, _c2, _s2,
                 max_block = $max_block,
                 para = $para, reparse = $reparse, eol = $eol,
-                closed = false ; $($sr)*);
+                closed = false, contb = &_cont_bytes, contd = _cont_depth ; $($sr)*);
         }
     };
 }
