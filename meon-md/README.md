@@ -34,7 +34,7 @@ demonstrating what `meon` can express in a single `define_parser!` invocation.
 
 ```toml
 [dependencies]
-meon-md = "0.5"
+meon-md = "0.6"
 ```
 
 ```rust
@@ -74,10 +74,10 @@ if let Some((_, span)) = c.headings.first() {
 
 Emphasis, links and autolinks are matched within a paragraph, not within a
 single line: `*a\nb*` is one italic span. A delimiter that never closes
-before the paragraph ends is not an element — its marker bytes are dropped
-and the text it enclosed stays in `texts`, together with any element that did
-close inside it. ``**a `c` b`` gives no `bolds` entry, one `codes` entry and
-the two surrounding text runs.
+before the paragraph ends is not an element: its opening bytes remain in
+`texts`, together with the surrounding literal text. Elements that close
+inside it survive. ``**a `c` b`` gives no `bolds` entry, one `codes` entry
+and fallback `**a ` and ` b`.
 
 ### Line
 
@@ -240,8 +240,15 @@ assert_eq!(c.bolds.len(), 1);
 assert_eq!(c.italics.len(), 1);
 ```
 
-Links, images, and autolinks remain non-nesting by design — `[a [b] c](url)`
-does not nest its own brackets.
+Link and image components are opaque and balanced. `[a [b] c](url)` and
+`[t](https://x/a_(b))` each produce one link; bracket/parenthesis bytes inside
+are counted, but no separate inner elements are emitted. Autolinks remain
+unbalanced opaque searches for the first unescaped `>`.
+
+The grammar enables `crlf = true`: LF and CRLF end lines, while a bare CR,
+including at EOF, remains content. Space/tab-only lines are blank. Single
+line breaks may be crossed inside paragraph or same-marker blockquote runs;
+continuation markers do not nest inside inline constructs.
 
 ---
 
@@ -251,7 +258,7 @@ This is a **demonstration grammar**, not a CommonMark-compliant implementation.
 
 - Emphasis is bounded by the paragraph: it may cross a line break, but a
   blank line inside an open delimiter discards the emphasis and leaves its
-  content as plain text.
+  opening bytes and content as plain text.
 - Emphasis precedence (CommonMark §6.2) is not enforced — declaration order
   wins.
 - Reference-style links, HTML entities, and indented code blocks are not
@@ -263,7 +270,8 @@ This is a **demonstration grammar**, not a CommonMark-compliant implementation.
 See
 [`ARCHITECTURE.md §17`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#17-known-limitations-and-deliberate-trade-offs) - *GitHub*
 for the full discussion of the engine's remaining trade-offs, including the
-bounded `max_nest` cap and the single-active-`chained`-rule constraint.
+bounded `max_nest` cap and the single-active-transparent-`chained` constraint.
+This Markdown grammar's chained rule is fully opaque.
 
 ---
 

@@ -36,7 +36,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.6"
+meon = "0.7"
 ```
 
 ```rust
@@ -69,20 +69,26 @@ Given `define_parser!(Name { ... })`, the macro expands into:
 all borrowing from the original source slice via `u32` byte-offset spans.
 
 **`NameParser`** — a unit struct with:
-- `parse(source: &[u8]) -> NameContent<'_>` — full single-pass O(n) parse.
+- `parse(source: &[u8]) -> NameContent<'_>` — full parse with linear search
+  work per fixed grammar.
 - `find_<field>(source: &[u8]) -> impl Iterator` — standalone per-element
   iterators, one per grammar rule that supports it. Context-free and faster
   than a full parse when only one element kind is needed.
 - `context(source: &[u8]) -> ParseContext` — the opaque-region map (fences
-  plus every `parse_inside = false` rule), built in one streaming pass.
-- `find_context_<field>(source, &ctx) -> impl Iterator` — one per non-opaque
-  rule; the same matcher with candidates inside opaque regions skipped.
+  plus opaque symmetric/asymmetric rules and chained rules with both
+  components opaque), built by a forward trigger scan with bounded searches.
+- `find_context_<field>(source, &ctx) -> impl Iterator` — for transparent
+  symmetric/asymmetric and non-fence line/block rules; candidates inside
+  opaque regions are skipped.
 
 **Accessor methods on `NameContent`:**
 - `str(span) -> Option<&str>` — span to UTF-8 string, `None` on invalid UTF-8.
 - `bytes(span) -> &[u8]` — span to byte slice.
 - `<field>_clean()` — iterator over inner content slices (between delimiters).
 - `<field>_raw()` — iterator over full slices including delimiter bytes.
+  For numbered blocks, the number is recovered with the grammar's declared
+  digit pattern, including ranges and alternatives. `AB: x` therefore stays
+  intact for `num(b'A'..=b'F', end = b':')`; `_clean()` returns `x`.
 
 ---
 
@@ -148,8 +154,12 @@ What the front-end rejects:
 
 - An unknown keyword in a section — the error names the section and lists the
   keywords it does accept.
-- A missing `parse_inside` or `balanced` in a `symmetric`, `asymmetric`, or
-  `chained` component body, or a value for either that is not `true` / `false`.
+- A missing `parse_inside` in a symmetric rule; `balanced` on symmetric is
+  rejected. Asymmetric rules and chained components require both flags, each
+  set to `true` or `false`.
+- An asymmetric rule with `balanced = true` or `parse_inside = true` must
+  declare exactly one arm, `1 => field`; other counts, wildcard arms and
+  multiple arms are rejected.
 - An incomplete `chained` (fewer than two components, or no `prefix`) or
   `key_value` (a missing `eq`, `allow_sep`, `end`, `key`, or `value`).
 - A missing `[div]` capacity, a missing rule body, and a missing literal in
@@ -157,6 +167,14 @@ What the front-end rejects:
   the context bytes).
 
 ---
+
+## Grammars inside `macro_rules!`
+
+Invisible groups around forwarded literal and pattern fragments are unwrapped
+where the DSL expects those fragments. Expression fragments in metadata bodies
+retain their grouping: `$weight * 2` keeps the expression's original precedence.
+Capacities, context settings and pattern arguments may therefore be forwarded
+from a declarative macro, as exercised by `tests/ui/pass/macro_grammar.rs`.
 
 ## Cross-crate hygiene
 

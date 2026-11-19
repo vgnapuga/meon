@@ -59,14 +59,18 @@ set comfortably exceeds cache.
 | `hot`   | Light, evenly spread markup (~one of each common inline per paragraph).| Typical real-world document.                                      |
 | `heavy` | Dense: headings, rules, quotes, fences, lists, nested inline.          | Every rule family at once, including nesting. Stress case.        |
 
-> **Synthetic data notice.** These corpora are generated programmatically with
-> uniform, predictable structure. Real-world documents typically have **lower
-> element density** than `hot` or `heavy` — and lower density means less
-> per-element work, so real throughput usually sits **at or above** the
-> `hot`/`heavy` numbers. Read `hot`/`heavy` as a conservative lower bound, with
-> `plain` (markup-free) as the ceiling, and your workload somewhere in between.
+> **Synthetic data notice.** Regular generated corpora do not establish a
+> lower bound for production throughput. Real inputs differ in delimiter
+> distribution, nesting, matched/unmatched rules and size; measure the workload
+> you intend to parse.
 
-Exact per-corpus element counts are in
+Current Markdown reports include a pulldown-cmark composition cross-check
+before the timed loops. Counts exclude container paragraphs and collapse
+direct emphasis/strong wrappers to bold-italic; text is compared by byte
+coverage excluding LF. A check mark means agreement under this mapping, not
+CommonMark compliance or equality of all spans.
+
+Current composition and historical measurements are in
 [***MD_COMPARE.md***](https://github.com/vgnapuga/meon/blob/main/benches/MD_COMPARE.md).
 
 ### JSON corpora (`meon-json_*`)

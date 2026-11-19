@@ -15,9 +15,6 @@ comrak = { version = "0.52.0", default-features = false }
 simd-json = "0.17.0"
 sonic-rs = "0.5.8"
 
-[profile.bench]
-debug = true
-
 [[bench]]
 name = "meon-md_parse"
 harness = false

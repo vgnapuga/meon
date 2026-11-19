@@ -26,13 +26,14 @@
 //!   **can differ by design**. This is not a bug.
 //! - Standalone iterators are faster for single-element queries on large sources
 //!   because they skip all cross-element bookkeeping.
-//! - For rules that are not themselves opaque (`parse_inside = true`, and
-//!   every line/block rule except `fence`), a second, context-aware method is
+//! - For transparent symmetric/asymmetric rules and every line/block rule
+//!   except `fence`, a second, context-aware method is
 //!   also generated — see [`context`] and [`context_iter`] — that closes most
 //!   of this gap at the cost of one extra pass, shared across every
 //!   context-aware call. A `chained` rule gets none: with both components
 //!   opaque it is a source of the context, and with a transparent one
-//!   neither its source nor read through it.
+//!   neither its source nor read through it. `key_value` has a raw finder
+//!   only and does not generate a context-aware method.
 //!
 //! # Iterator types
 //!
@@ -94,14 +95,15 @@ pub mod symmetric;
 /// impl Iterator` method, wiring the appropriate iterator type with the rule's
 /// compile-time parameters.
 ///
-/// For every *transparent* rule (`parse_inside = true`, and the line/block
-/// rules other than `fence`) a second method, `find_context_<field>(source,
+/// For transparent symmetric/asymmetric rules and line/block rules other
+/// than `fence`, a second method, `find_context_<field>(source,
 /// ctx: &ParseContext)`, is also emitted, plus one `Parser::context(source)
 /// -> ParseContext` builder shared by all of them. *Opaque* rules
 /// (`parse_inside = false`, and fences) get no `find_context_*` variant: they
 /// are the source of the context, not a consumer of it. Nor does a `chained`
 /// rule: with both components opaque it is a source, and with a transparent
-/// one it is neither source nor consumer.
+/// one it is neither source nor consumer. `key_value` has no context-aware
+/// variant either.
 ///
 /// The macro is not part of the public API and is called only by the expansion
 /// of `define_parser!`. Grammar authors never invoke it directly.

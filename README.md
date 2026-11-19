@@ -26,6 +26,9 @@
 
 ---
 
+This documentation describes the current checkout. Unreleased DSL changes are
+listed in [CHANGELOG.md](CHANGELOG.md); build the workspace crates to use them.
+
 ## What is meon
 
 Most text parsers build a tree. `meon`([wiki](https://en.wikipedia.org/wiki/Meon_(philosophy))) builds a table.
@@ -43,7 +46,7 @@ pressure from node objects, no virtual dispatch. Just contiguous arrays of
 | Property | What it means |
 |----------|---------------|
 | **O(1) access by element kind** | Every element kind is its own `Vec` of spans. "All links" or "all headings" is a field, not a tree walk with node matching. |
-| **Standalone parsing of a single kind** | Every rule also generates `find_*`: it scans the source for that one kind only and skips everything else. Need only the headings — parse only the headings. |
+| **Standalone parsing of a single kind** | Supported rules generate `find_*`: it scans the source for that one kind only and skips everything else. Need only the headings — parse only the headings. |
 | **One declaration, whole parser** | `define_parser!` is a code generator: from one grammar you get the content struct, `parse`, every `find_*` / `find_context_*` iterator and every accessor. No runtime grammar interpreter, no dispatch. |
 | **Throughput that holds as input grows** | The output is a flat table of 8-byte spans, so the working set stays small. On an input 100x larger than cache `meon-md` keeps its throughput within 3% and `meon-json` loses at most a quarter, while the tree, event and tape parsers it is compared with lose a third to two thirds of theirs. |
 
@@ -130,9 +133,10 @@ is dropped the source is released. No intermediate representations persist.
 
 ## Context-free extraction — parse one type without parsing everything
 
-Every grammar rule generates a `find_*` standalone iterator. It scans the raw
+Every standalone-capable rule generates a `find_*` iterator. It scans the raw
 source for one element kind only, with no knowledge of surrounding elements,
-active blocks, or paragraph state.
+active blocks, or other rules' line classification. The rule's own
+escapes, balancing, nesting and blank-line limits still apply.
 
 ```rust
 // Full parse — all element kinds in one pass
@@ -173,8 +177,8 @@ for span in MarkdownParser::find_context_bolds(src, &ctx) {
 }
 ```
 
-Every rule that is not itself opaque gets a `find_context_*` variant; the
-map is built by one streaming pass and shared across all of them.
+Transparent symmetric/asymmetric and non-fence line/block rules get
+a `find_context_*` variant. The map is built once and shared across them.
 
 ---
 
@@ -185,6 +189,10 @@ format as a grammar and the engine compiles it into a parser at build time:
 
 ```rust
 use meon::define_parser;
+use std::num::NonZeroU8;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Heading { pub level: NonZeroU8 }
 
 define_parser!(MyFormat {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
@@ -193,7 +201,6 @@ define_parser!(MyFormat {
         on_trigger(b'*') {
             symmetric b'*' {
                 parse_inside = true;
-                balanced     = false;
                 1 => italics [40],
                 2 => bolds   [40],
             }

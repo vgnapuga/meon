@@ -49,9 +49,9 @@
 //!   spans.
 //!
 //! `max_nest = 4` means up to four such levels self-nest correctly per
-//! family. Past the cap, a fifth inline level collapses via the inline
-//! engine's overflow counter (see [`meon::parse_inline!`]); a fifth block
-//! level does not open, and its marker is content of the innermost frame
+//! family. Past the cap, another emphasis opener remains literal and gets
+//! no frame (see [`meon::parse_inline!`]); a fifth block level does not open,
+//! and its marker is content of the innermost frame
 //! (see [`meon::parse_block!`]).
 //!
 //! Autolinks are `balanced = false, parse_inside = false`: a forward search

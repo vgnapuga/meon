@@ -261,9 +261,9 @@ fn collect_symmetric_standalone(ts: TS2, byte: Literal, opaque: bool, cf: &mut C
 
 /// Extract the `N => field` exact-count arms of an `asymmetric` block.
 ///
-/// A rule with `balanced` or `parse_inside` set is kept on the full parse's
-/// stack, which opens one frame per open byte: only a `1 =>` arm can match,
-/// and any other arm is an error.
+/// A rule with `balanced` or `parse_inside` set reads each opening byte
+/// separately, in a depth-counting forward search or on the bounded stack.
+/// Only a `1 =>` arm can match, and any other arm is an error.
 fn collect_asymmetric_standalone(
     ts: TS2,
     open: Literal,

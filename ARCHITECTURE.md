@@ -207,8 +207,8 @@ The front-end reads the grammar by keyword, so sub-rules and settings may be
 declared in any order and a trailing `;` or `,` is optional. The runtime macros
 are `macro_rules!` patterns and match exactly one token shape: inside an
 `on_trigger { ... }` block the sub-rules in the order `symmetric`,
-`asymmetric`, `chained`, `key_value`; `parse_inside` before `balanced` in a
-`symmetric` body and after it in an `asymmetric` one; `prefix` last in a
+`asymmetric`, `chained`, `key_value`; only `parse_inside` in a symmetric
+body, and `balanced` before `parse_inside` in an asymmetric one; `prefix` last in a
 `chained` body; `eq`, `allow_sep`, `end`, `key`, `value` in that order in a
 `key_value` body; every setting closed by `;` and every arm by `,`.
 
@@ -492,7 +492,7 @@ asym_overflow: u32                          // one-shot counter for balanced ope
 ```
 
 A frame stores only `(byte, count, vidx)` — **there is no kind tag**. Each
-frame's kind, close byte, opacity, and field routing are recovered at the point
+frame's kind, close byte and field routing are recovered at the point
 of use by matching the stored `byte` against each rule's own compile-time
 literal — the same idiom the open side already used to route a field. This
 rests on the engine-wide assumption that a byte has one meaning across the
@@ -500,9 +500,9 @@ stack-eligible rules of an `on_trigger` block.
 
 - **asymmetric** — `byte` = the rule's open byte; `count` = 1 always (each byte
   of an open run is its own event); `vidx` = index of the placeholder span
-  pushed at open and back-patched on close. Opacity is derived from the stored
-  open byte, not stored per frame.
-- **symmetric** (`parse_inside = true, balanced = true`) — `byte` = the
+  pushed at open and back-patched on close. Opaque asymmetric rules use a
+  separate forward search rather than these frames.
+- **symmetric** (`parse_inside = true`) — `byte` = the
   delimiter; `count` = run length (picks the field 1/2/3 → italics/bolds/
   bold_italics, and is matched exactly on close); `vidx` = placeholder index.
 - **key_value** — `byte` = the rule's `end` byte; `count` = 0 (unused);
@@ -520,13 +520,12 @@ open" check is `fdepth == 0` regardless of which kinds are on the stack.
 
 These never touch the unified stack:
 
-- **symmetric `parse_inside = true, balanced = false`** — a single `pending`
-  slot holding `(byte, open offset, count)`. A trigger of the same byte closes
-  the slot when the counts match and replaces it when they do not.
 - **symmetric `parse_inside = false`** (greedy, code spans) — escape-aware
   forward search.
-- **asymmetric `balanced = false, parse_inside = false`** (autolinks) — a
-  `memchr` forward search; its close byte is NOT required in `on_trigger`.
+- **asymmetric `parse_inside = false`** — a forward search, using exact
+  opening counts when unbalanced and depth-counting rings when balanced.
+  Its close byte is not required in `on_trigger`; opaque balanced depth
+  does not consume `max_nest`.
 - **chained** — a two-phase transparent state machine, or a two-phase forward
   search where a component is opaque. Its phases are strictly sequential —
   phase 2 only starts once phase 1 has fully closed — so one slot per phase
@@ -534,18 +533,23 @@ These never touch the unified stack:
 
 ### Close bytes known to be absent
 
-The off-stack asymmetric search and each `chained` component scan from the
-opener to the end of the run when that component is declared
-`balanced = false`. Such a failure is monotone: a byte absent after position
-*i* is absent after every later position too. A per-run bitset
-of 256 bits (`[u64; 4]`) records the close bytes whose search has already come
-back empty, and a later opener of the same kind is then rejected without
-scanning at all. This turns *k* unmatched openers in one run from *O(k·n)*
-into *O(n)* — `[a[a[a…` never rescans the tail per bracket.
+Unbalanced opaque asymmetric searches remember absent close bytes in a
+per-run bitset. Opaque `chained` rules instead share `ChainMemo` between the
+full parse, standalone finders and the context builder. Unbalanced components
+retain scalar absent/found-close memos. When nested first components move
+second starts backwards, a known absent suffix bounds the new prefix search.
 
-Depth-counting components (`balanced = true`) are deliberately excluded: their
-failure is not monotone, since an opener that comes later can be balanced by a
-close that an earlier scan already consumed.
+A failure involving a balanced chained component lazily indexes the rest of
+its inline run. A forward pass marks unescaped delimiters, excluding line
+markers; a reverse pass pairs them. Each cell records the close balancing a
+virtual opener after that byte. Cells at closing bytes also store the reverse
+stack's parent links, so no separate working stack is allocated. An exact
+reservation follows an initial run-end scan. The single reusable `Vec<u32>`
+contains one plane per balanced component: four bytes per indexed byte per
+plane, up to eight with two planes. Earlier successful chains consume disjoint
+ranges, and subsequent balanced queries use constant-time lookups. The search
+work is linear per rule. Transparent chained phases continue to use their
+existing streaming state machine.
 
 ### Closing — one unified pass with a key_value drain
 
@@ -576,24 +580,19 @@ stored byte:
   it so the final plain-text flush does not re-emit the value.
 - **asymmetric** — discarded via `Vec::remove(vidx)` (a closed inner
   self-nesting entry can sit at a *higher* index than a still-open outer one).
-- **symmetric** — discarded via `truncate(vidx)` (an identical `(byte, count)`
-  never self-nests, so each field has at most one live placeholder, always
-  last).
+- **symmetric** — removes only the unclosed placeholder with `remove(vidx)`,
+  preserving any completed inner entry in the same field.
 
 ### Plain text of a frame that never closes
 
-A frame discarded at the end of the run loses its own delimiter bytes, not the
-plain text it held. Text flushes are not gated on `fdepth`: plain-text runs are
-appended to the fallback vector as they are scanned, even while frames are
-open. Every push site snapshots the fallback vector — its length and the end
-offset of its last span — into `held_base[fdepth]`, and a normal close rolls
-the vector back to that snapshot, so text that belongs to a construct which
-*did* close is not also emitted as fallback. A run that ends with the frame
-still open performs no rollback, and the held text stays.
-
-With `*` declared as a stack-eligible symmetric rule, `*a\nb\n` therefore
-yields the fallback span `a\nb` rather than dropping the line; the unclosed
-`*` itself is still discarded.
+An unclosed frame loses its placeholder, not its literal source bytes.
+Fallback spans are appended even while frames are open. `held_base[fdepth]`
+records the fallback length and previous last-span end; a successful close
+rolls back the covered text before emitting the completed element. Discarding
+an unclosed frame performs no rollback. Thus `*a\nb\n` keeps fallback
+`*a\nb`, including the opener; a closed inner code span survives without
+its bytes also being duplicated as fallback. Transparent chained phases use
+the same held-text mechanism, including across other frame closes.
 
 ### Bounded-cap overflow
 
@@ -601,7 +600,7 @@ Beyond `max_nest`, an extra same-type **asymmetric** open with `balanced = true`
 bumps `asym_overflow` instead of pushing; the next same-type close consumes one
 overflow unit instead of popping, so the real tracked frame's close isn't
 mistaken early. A **symmetric** open past the cap, and a **key_value** `eq` past
-the cap, are simply absorbed (no frame, the pair/run untracked).
+the cap, open no frame and remain literal text (the pair/run is untracked).
 
 ### Multi-line runs
 
@@ -627,16 +626,16 @@ N=3 → memchr::memchr3
 N≥4 → SWAR / SIMD loop (see §13)
 ```
 
-Multiple `on_trigger` blocks each contribute their bytes; the inner loop takes
-the minimum offset across finder results to locate the earliest trigger byte.
+The bytes from all `on_trigger` blocks, including key/value ends, form one
+union. Each iteration searches that union once for the earliest trigger byte.
 `eol` is included as one extra target only on multi-line calls (see above).
 
 ---
 
 ## 10. Line parsing
 
-`parse_line!` is called at the start of each new line, before block and inline
-processing. It tries each rule in declaration order and returns `Some(cs)` on
+`parse_line!` is called after block handling when no block rule claimed the
+line, before scanning its remaining content for inline elements. It tries each rule in declaration order and returns `Some(cs)` on
 the first match, where `cs` is the byte offset of the first content byte (for
 `line`) or the end of the line (for `line_simple`).
 
@@ -725,52 +724,21 @@ Every rule that supports standalone scanning generates a `find_*` method via
 `define_standalone_fns!`. Each method constructs one of the iterator structs
 from `engine/text_parser/standalone/`.
 
-All standalone iterators share the same contract:
+Standalone iterators follow one rule's own semantics: escapes, opening-run
+counts, balanced depth or bounded transparent frames, and blank-line limits.
+They do not inspect other rules. A standalone match may therefore occur inside
+another rule's fence/string or span a line that another rule would split.
+Context-aware iterators additionally consult the shared opaque map and line
+reader. This is a difference in available context, not a different escape or
+balancing contract.
 
-- They scan the raw source as a **byte stream**: one `memchr`-family search
-  finds the next candidate marker, and only then is its neighbourhood walked.
-  Lines without a marker are never visited; there is no per-line loop.
-- They carry no cross-element state (no paragraph tracking, no inline trigger
-  dispatch) — with one exception: `ContIter` keeps a bounded frame stack so
-  same-type block nesting (`> >` opening two blockquote frames) matches the
-  full parse, capped by the grammar's `max_nest` exactly like `parse_block!`.
-- Inline pair matching is **paragraph-bounded**: a pair may span a single
-  line break; an empty line (two consecutive `eol` bytes) or end of input
-  aborts a pending opener. `symmetric`/`asymmetric` rules match only the
-  *exact* count declared, ignoring `balanced` entirely.
-- They may still match bytes that `parse_text!` would suppress (e.g. a
-  delimiter inside a fenced block); output can differ from the full parse by
-  design. The `find_context_*` variants (below) close most of that gap.
-
-### Iterator structure
-
-Every iterator stores the parameters passed to its `new` constructor plus a
-`pos` cursor.
-
-The `next` method loops: one `memchr`/`memchr2`/`memchr3` search from `pos`
-finds the next candidate marker; an O(1) neighbour check validates its
-position (previous byte for line-start rules, a backward indentation walk
-for block rules); the candidate is then matched in place and `Some(...)`
-returned, or the loop continues.
-
-Rules whose marker set is an arbitrary predicate (`line_simple`,
-`block (pattern)`, `block num(...)`) probe the predicate over all 256 byte
-values at construction: up to three accepted bytes drive the streaming
-search, more fall back to a line-by-line scan.
-
-Iterators use shared utilities from `standalone/common.rs`:
-
-- `find_line_end(src, from, eol)` — locate end of current line.
-- `count_escape(src, pos, escape)` — count consecutive escape bytes before
-  `pos`, used to detect escaped delimiters.
-- `probe_matcher(matches, buf)` / `find_any_of(needles, n, hay)` — turn a
-  byte predicate into a `memchr`-family streaming search.
-- `next_in_paragraph(src, from, needle, eol, enter_line)` — the paragraph-bounded
-  close search shared by every inline rule: one `memchr2(needle, eol)` per step,
-  a blank line ends the paragraph, and the `enter_line` callback decides at each
-  new line start whether to continue, to jump over a region, or to give up. The
-  context-aware iterators pass a callback that skips opaque regions; the
-  context-free ones pass the identity.
+Line/marker predicates are probed over the byte domain at construction. Up to
+three candidate bytes use streaming `memchr` searches; wider sets fall back to
+line-by-line scanning. Patterns are preserved as written for `line_simple`,
+`fence`, marker blocks and both `num` arguments. `LineBreaks` supplies `eol`,
+`crlf`, `sep`/`tab` blank-line recognition, and the callback deciding whether a
+search may cross a new line. Context construction uses `LineReader` to respect
+paragraph, block-line, fence and same-marker continuation boundaries.
 
 ### Iterator types
 
@@ -802,13 +770,19 @@ grammar's own `[cap]` divisors. Opaque inline matching inside the builder is
 escape-aware and paragraph-bounded, and a fence-opening line ends the
 paragraph, mirroring the full parser.
 
-Every *transparent* rule additionally generates
+Opaque symmetric and exact asymmetric arms are selected after measuring the
+opening run, using both byte and count. An unsupported count stays literal;
+balanced asymmetric and chained rules accept every opening run length.
+Line readers treat a CR as part of a line ending only before an actual `eol`;
+a bare CR at EOF is content, not an empty final line.
+
+Transparent symmetric/asymmetric and non-fence line/block rules generate
 `find_context_*(source, &ctx)`: the same matcher with candidate delimiters
 inside opaque regions skipped. Line/block rules post-filter their
 context-free iterator through a monotone `ContextCursor` (amortized O(1)
 per query); `symmetric`/`asymmetric` rules use the dedicated iterators
-above, whose close search also skips covered candidates and aborts at a
-fence — a block construct ends the paragraph. Opaque rules themselves get
+above, whose searches also respect opaque regions and the grammar's line
+structure. `key_value` and `chained` have no context-aware consumer. Opaque rules themselves get
 no `find_context_*`: they are the source of the context, not a consumer.
 The context suppresses **candidate positions**, not enclosing spans, so a
 bold span may still legally contain a code span, exactly as in the full
@@ -919,9 +893,9 @@ user-controlled input from a library is unsound.
 
 **`<field>_clean()`** — iterator over inner content slices (between delimiters).
 
-**`<field>_raw()`** — iterator over full slices including delimiter bytes. Uses
-`saturating_sub` on the low boundary and `.min(source.len())` on the high
-boundary to prevent out-of-bounds indexing.
+**`<field>_raw()`** — iterator over full slices including delimiter bytes.
+Delimiter arithmetic uses saturating/clamped bounds where applicable; caller-
+mutated invalid content spans may still panic through checked slice indexing.
 
 The raw accessor logic differs per rule type:
 
@@ -931,10 +905,10 @@ The raw accessor logic differs per rule type:
 - `BlockMarker`: `start - 2 .. end` (marker + sep)
 - `BlockNumbered`: walks backwards past sep/tab and digit bytes
 
-These accessors are entirely separate from the full-parse bounded-nesting
-mechanism described in §9/§11 — they operate on the (un-nested, exact-count)
-`StandaloneRule` data, consistent with §12's note that standalone scanning
-ignores `balanced`/`parse_inside` altogether.
+Accessor generation uses each rule's collected metadata. It does not rerun a
+standalone iterator: `_clean` and `_raw` resolve the content's existing spans.
+For numbered items, the backward digit check uses the declared digit pattern,
+not an ASCII-only test.
 
 ---
 
@@ -990,9 +964,9 @@ is imported.
 
 ### External crate dependencies in macro expansions
 
-`paste` and `memchr` are used inside `define_content!` and `parse_text!`
-without `$crate::` qualification — declarative macros cannot forward external
-crate paths through `$crate`. The engine re-exports both:
+Runtime macros refer to dependencies through `$crate` re-exports rather than
+requiring grammar crates to import transitive dependency names. The engine
+re-exports both `paste` and `memchr`:
 
 ```rust
 // meon/src/lib.rs
@@ -1010,11 +984,12 @@ inside the macros. Grammar crates only need to depend on `meon`; `paste` and
 
 ### Bounded nesting depth (`max_nest`)
 
-Both the block-level active-block stack (§11) and the inline-level unified
+The block-level active-block stack (§11) and the inline-level unified
 nesting stack — shared by symmetric, asymmetric AND key_value rules (§9) —
 share one grammar-wide `max_nest` setting. Its default, `1`, degenerates both
-stacks to a single slot: at most one block active at a time, no self-nesting
-for `balanced` rules. That default is what a grammar wants when its format has
+stacks to a single slot: at most one block active at a time, no nested stack
+frames. Opaque balanced searches count depth outside these stacks and do not
+use this cap. That default is what a grammar wants when its format has
 no nesting, and it costs the same as a plain slot; raising it is what makes a
 blockquote containing a fenced code block, a blockquote inside another, or
 `**bold *italic* bold**` resolve into their own separate spans instead of the
@@ -1027,28 +1002,28 @@ than `max_nest` are not specially tracked:
   fifth level of blockquote nesting at `max_nest = 4` is left for whatever
   processing follows (typically literal or inline content) rather than being
   represented as a fifth span.
-- For inline `asymmetric`/`symmetric` rules with `balanced = true`, an extra
+- For transparent asymmetric rules with `balanced = true`, an extra
   same-type open beyond the cap increments a one-shot overflow counter and is
   treated as literal content instead of opening a frame; the overflow is
   consumed by the next same-type close, so the real tracked frame's close
   isn't mistaken early. A `key_value` `eq` past the cap is absorbed (the pair
-  untracked).
+  untracked and its bytes literal).
 
 The trade-off is deliberate: a small, fixed-size, stack-allocated array —
 sized by the grammar's own `max_nest`, not by input length — avoids heap
-allocation entirely and keeps the common case (`max_nest = 1`, the default) at
+allocation for the frame arrays and keeps the common case (`max_nest = 1`, the default) at
 single-slot cost, while letting a grammar opt into deeper nesting only where it
 actually needs it.
 
-### `chained` rules are scoped to one active match per grammar
+### Transparent `chained` rules share one active match slot
 
 A `chained` rule with a transparent component (`parse_inside = true` on
 either the text or url side) tracks its in-progress match in a small set of
 local variables shared across every `chained` rule in the grammar, not a
-per-rule array. Two `chained` rules with overlapping in-progress transparent
-matches would alias this shared state. Every grammar seen so far declares
-exactly one `chained` rule, so this is accepted as a documented limitation
-rather than built out further.
+per-rule array. A rule-byte discriminator prevents another chained rule from advancing the
+active rule's phases, but there is still only one active transparent match at
+a time. Fully opaque rules have independent search memos and are not subject
+to that active-phase restriction.
 
 ### `key_value` is scoped to one rule per grammar
 
@@ -1072,10 +1047,10 @@ where a `line`/`block` rule matches, or by end of input. Consequences:
 - A blank line *inside* an open construct closes the run and discards that
   construct: a JSON-shaped grammar (empty `lines`/`blocks`) must not contain
   blank lines mid-value. What is discarded is the construct, not its content —
-  the delimiter bytes are dropped and the plain text they enclosed is emitted
-  as fallback (§9).
-- Precedence between overlapping inline rules still follows declaration order,
-  not a precedence table.
+  the unmatched opening bytes and surrounding literal text remain as fallback
+  (§9), while completed inner elements survive.
+- Inline dispatch uses a fixed order of rule kinds, preserving declaration
+  order within a kind; it is not a format-specific precedence table.
 
 ### Close bytes of stack-eligible rules must be declared in `on_trigger`
 
@@ -1090,20 +1065,15 @@ their own forward search.
 
 ### Standalone vs full-parse divergence
 
-Standalone iterators (`find_*`) produce different results from the full parse
-in several cases:
-
-- A delimiter inside a fenced block is suppressed by the full parser (which
-  tracks the active-block stack) but matched by the standalone iterator
-  (which has no such state).
-- An escaped delimiter is suppressed by the full parser's escape check but
-  may be matched by the standalone iterator if its escape logic differs.
-- Standalone `symmetric`/`asymmetric` rules match only the exact declared
-  count and never participate in bounded nesting at all, regardless of the
-  grammar's `max_nest` or that rule's own `balanced`/`parse_inside` settings.
-
-This is documented and by design. Standalone iterators trade correctness for
-speed in the single-element-kind case.
+Standalone iterators (`find_*`) implement the same rule's escapes, runs and
+nesting as the full parser, but omit interactions with other rules. A delimiter
+inside another rule's string or fence may be found; another rule's line or
+frame can also change a match's boundary in the full parse. Context-aware
+finders use opaque spans and line classification to account for those cases.
+Counts can differ by design; ignoring `balanced` or escapes is not that design.
+Chained rules have a raw finder only: fully opaque matches are context sources,
+while a rule with a transparent component is neither a context source nor a
+context-aware consumer.
 
 ### 4 GiB input limit
 
