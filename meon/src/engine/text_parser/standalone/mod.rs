@@ -196,7 +196,7 @@ macro_rules! define_standalone_fns {
                 lines: &[ $( $crate::define_standalone_fns!(@lines $lk ( $($la)* )) ),* ],
             };
             let _cap_hint: usize = 0 $( + source.len() / ($cap as usize) )*;
-            $crate::ParseContext::build(
+            $crate::ParseContext::build_with_limits(
                 source, $esc, LINES,
                 &[ $( ($sb, $sc as u32) ),* ],
                 &[ $( ($ao, $acl, $an as u32, $abal) ),* ],
@@ -207,6 +207,8 @@ macro_rules! define_standalone_fns {
                     second_balanced: $cub,
                 } ),* ],
                 _cap_hint,
+                $crate::define_standalone_fns!(@opt_limit $max_inline),
+                $crate::define_standalone_fns!(@opt_limit $max_block),
             )
         }
         $crate::define_standalone_fns! { @fns sep=$sep eol=$eol
@@ -248,6 +250,12 @@ macro_rules! define_standalone_fns {
     };
 
     // A span cap is applied only when its token is present.
+    (@opt_limit []) => {
+        None
+    };
+    (@opt_limit [$n:literal]) => {
+        Some($n as u32)
+    };
     (@filter [], $it:expr, $f:expr) => {
         $it
     };
