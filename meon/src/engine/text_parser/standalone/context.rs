@@ -1072,6 +1072,7 @@ impl ParseContext {
         let breaks = lines.breaks();
         let mut spans: Vec<Span> = Vec::with_capacity(cap_hint);
         let mut is_fence: Vec<bool> = Vec::with_capacity(cap_hint);
+        let mut clean_len: Vec<usize> = Vec::with_capacity(cap_hint);
 
         // One deduplicated needle set — fence bytes and opaque triggers
         // together — so every iteration issues exactly ONE search
@@ -1123,6 +1124,7 @@ impl ParseContext {
                     let end = fence_close_scan(source, le, len, byte, count, &lines);
                     spans.push(Span::new(p as u32, end as u32));
                     is_fence.push(true);
+                    clean_len.push(end - p);
                     pos = if end < len { end + 1 } else { len };
                     continue;
                 }
@@ -1146,6 +1148,7 @@ impl ParseContext {
                             };
                             spans.push(Span::new(p as u32, end as u32));
                             is_fence.push(true);
+                            clean_len.push(end - p);
                             pos = resume;
                             continue;
                         }
@@ -1198,6 +1201,7 @@ impl ParseContext {
                         Some(close_end) => {
                             spans.push(Span::new(p as u32, close_end as u32));
                             is_fence.push(false);
+                            clean_len.push(close_end.saturating_sub(p + 2 * count as usize));
                             pos = close_end;
                         }
                         None => pos = run_end,
@@ -1213,6 +1217,7 @@ impl ParseContext {
                         if let Some(q) = rings[ri].close(source, o, bytes, &mut enter_line) {
                             spans.push(Span::new(o as u32, (q + 1) as u32));
                             is_fence.push(false);
+                            clean_len.push(q - o - 1);
                             pos = q + 1;
                             break;
                         }
@@ -1227,6 +1232,7 @@ impl ParseContext {
                         Ok(cp) => {
                             spans.push(Span::new(p as u32, (cp + 1) as u32));
                             is_fence.push(false);
+                            clean_len.push(cp - run_end);
                             pos = cp + 1;
                         }
                         Err(stop) => {
@@ -1251,6 +1257,7 @@ impl ParseContext {
                         Some(end) => {
                             spans.push(Span::new((run_end - 1) as u32, end as u32));
                             is_fence.push(false);
+                            clean_len.push(end - (run_end - 1));
                             pos = end;
                         }
                         None => pos = run_end,
@@ -1262,9 +1269,10 @@ impl ParseContext {
         if let Some(limit) = max_inline {
             let mut i = 0;
             while i < spans.len() {
-                if !is_fence[i] && (spans[i].end - spans[i].start) > limit {
+                if !is_fence[i] && clean_len[i] > limit as usize {
                     spans.remove(i);
                     is_fence.remove(i);
+                    clean_len.remove(i);
                 } else {
                     i += 1;
                 }
@@ -1273,9 +1281,10 @@ impl ParseContext {
         if let Some(limit) = max_block {
             let mut i = 0;
             while i < spans.len() {
-                if is_fence[i] && (spans[i].end - spans[i].start) > limit {
+                if is_fence[i] && clean_len[i] > limit as usize {
                     spans.remove(i);
                     is_fence.remove(i);
+                    clean_len.remove(i);
                 } else {
                     i += 1;
                 }
