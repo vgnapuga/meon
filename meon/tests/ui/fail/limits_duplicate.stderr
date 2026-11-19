@@ -1,0 +1,5 @@
+error: `max_inline_span` is set twice
+ --> tests/ui/fail/limits_duplicate.rs:7:9
+  |
+7 |         max_inline_span = 2;
+  |         ^^^^^^^^^^^^^^^

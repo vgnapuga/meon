@@ -1,0 +1,5 @@
+error: unknown keyword `max_spans` in `limits`; expected `max_nest`, `max_inline_span`, `max_line_span` or `max_block_span`
+ --> tests/ui/fail/limits_unknown_key.rs:6:9
+  |
+6 |         max_spans = 1;
+  |         ^^^^^^^^^

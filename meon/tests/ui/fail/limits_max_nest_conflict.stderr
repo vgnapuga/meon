@@ -1,0 +1,5 @@
+error: `max_nest` differs from the value in the grammar header
+ --> tests/ui/fail/limits_max_nest_conflict.rs:6:20
+  |
+6 |         max_nest = 3;
+  |                    ^

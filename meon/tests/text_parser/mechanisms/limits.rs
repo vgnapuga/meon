@@ -209,6 +209,12 @@ mod limited {
         let ctx = LimitedParser::context(src);
         assert_eq!(LimitedParser::find_context_italics(src, &ctx).count(), 0);
     }
+    #[test]
+    fn context_reparses_over_limit_fence() {
+        let src = b"```\n*a*\n```\n";
+        let ctx = LimitedParser::context(src);
+        assert_eq!(LimitedParser::find_context_italics(src, &ctx).count(), 1);
+    }
 
     #[test]
     fn context_keeps_under_limit_opaque_region() {
