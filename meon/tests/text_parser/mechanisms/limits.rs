@@ -163,7 +163,7 @@ mod limited {
         assert!(c.fenced_codes.is_empty());
         assert_eq!(c.paragraphs.len(), 1);
         assert_eq!(c.texts.len(), 1);
-        assert_eq!(txt(src, c.texts[0]), "code\n");
+        assert_eq!(txt(src, c.texts[0]), "code");
     }
 
     #[test]
@@ -186,6 +186,14 @@ mod limited {
         assert_eq!(c.italics.len(), 1);
         let all: String = c.texts.iter().map(|s| txt(src, *s)).collect();
         assert_eq!(all, "");
+    }
+
+    #[test]
+    fn fence_content_splits_at_blank_lines() {
+        let src = b"```\na\n\nb\n```\n";
+        let c = LimitedParser::parse(src);
+        let all: Vec<&str> = c.texts.iter().map(|s| txt(src, *s)).collect();
+        assert_eq!(all, vec!["a", "b"]);
     }
 
     #[test]

@@ -390,8 +390,71 @@ fn expand(input: TS2) -> Result<TS2> {
                 _reparse_depth: usize,
                 cont_bytes: &[u8],
                 cd: usize,
+                split: bool,
             ) {
                 if _reparse_depth > #max_nest {
+                    return;
+                }
+                if split {
+                    let mut pos = start;
+                    let mut run_start: Option<usize> = None;
+                    let trim_end = |s: usize, mut e: usize| -> usize {
+                        if e > s && src[e - 1] == #eol {
+                            e -= 1;
+                            if #crlf && e > s && src[e - 1] == b'\r' {
+                                e -= 1;
+                            }
+                        }
+                        e
+                    };
+                    while pos < end {
+                        let line_end = #mc::memchr::memchr(#eol, &src[pos..end])
+                            .map_or(end, |i| pos + i);
+                        let content_end = if #crlf
+                            && line_end > pos
+                            && src[line_end - 1] == b'\r'
+                        {
+                            line_end - 1
+                        } else {
+                            line_end
+                        };
+                        let mut content = pos;
+                        let mut k = 0;
+                        while k < cd
+                            && content < content_end
+                            && src[content] == cont_bytes[k]
+                        {
+                            content += if content + 1 < content_end
+                                && (src[content + 1] == #sep || src[content + 1] == #tab)
+                            {
+                                2
+                            } else {
+                                1
+                            };
+                            k += 1;
+                        }
+                        let blank = content == content_end
+                            || src[content..content_end]
+                                .iter()
+                                .all(|&b| b == #sep || b == #tab);
+                        if blank {
+                            if let Some(s) = run_start.take() {
+                                #reparse_helper(
+                                    state, src, s, trim_end(s, pos), _reparse_depth,
+                                    cont_bytes, cd, false,
+                                );
+                            }
+                        } else if run_start.is_none() {
+                            run_start = Some(pos);
+                        }
+                        pos = if line_end < end { line_end + 1 } else { end };
+                    }
+                    if let Some(s) = run_start {
+                        #reparse_helper(
+                            state, src, s, trim_end(s, end), _reparse_depth,
+                            cont_bytes, cd, false,
+                        );
+                    }
                     return;
                 }
                 let mut start = start;

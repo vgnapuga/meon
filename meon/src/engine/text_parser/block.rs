@@ -280,7 +280,7 @@ macro_rules! parse_block {
     };
     (@reparse [], $st:ident, $src:ident, $s:expr, $e:expr, $cb:expr, $cd:expr) => {};
     (@reparse [$f:ident], $st:ident, $src:ident, $s:expr, $e:expr, $cb:expr, $cd:expr) => {
-        $f(&mut $st, $src, $s, $e, 0, $cb, $cd);
+        $f(&mut $st, $src, $s, $e, 0, $cb, $cd, true);
     };
     (@push_block [], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {
         $crate::paste::paste! {

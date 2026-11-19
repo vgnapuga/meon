@@ -748,7 +748,7 @@ macro_rules! parse_inline {
         macro_rules! call_reparse {
             ([], $ist:expr, $isrc:expr, $is:expr, $ie:expr, $id:expr) => {};
             ([$if:ident], $ist:expr, $isrc:expr, $is:expr, $ie:expr, $id:expr) => {
-                $if($ist, $isrc, $is, $ie, $id + 1, &[], 0);
+                $if($ist, $isrc, $is, $ie, $id + 1, &[], 0, false);
             };
         }
 
