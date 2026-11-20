@@ -106,7 +106,7 @@ jobs:
       - name: Check MSRV
         run: cargo check --workspace --exclude fuzz --locked
 
-  32bit:
+  i686:
     name: 32-bit (i686)
     runs-on: ubuntu-latest
     timeout-minutes: 30
