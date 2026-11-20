@@ -14,6 +14,7 @@ output shapes (see [Scope & fairness](#scope--fairness)).
 | `meon-md_compare`     | meon-md vs `pulldown-cmark` / `comrak` — cross-parser throughput.    |
 | `meon-md_offsets`     | small corpora with `Span<u16/u32/u64>`; 32 MiB corpora with `u32/u64`. |
 | `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — structural / typed parse.   |
+| `meon-json_offsets`   | small corpora with `Span<u16/u32/u64>`; 32 MiB corpora with `u32/u64`. |
 | `meon-json_compare`   | meon-json vs `simd-json` / `sonic-rs` — cross-parser throughput.     |
 
 ### Cold and warmed scenarios
@@ -121,6 +122,7 @@ cargo bench --bench meon-md_standalone
 cargo bench --bench meon-md_compare
 cargo bench --bench meon-md_offsets
 cargo bench --bench meon-json_parse
+cargo bench --bench meon-json_offsets
 cargo bench --bench meon-json_compare
 
 # Nightly, AVX2 SIMD path, tuned for the host CPU:

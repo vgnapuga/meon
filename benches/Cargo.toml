@@ -48,3 +48,7 @@ harness = false
 [[bench]]
 name = "meon-md_offsets"
 harness = false
+
+[[bench]]
+name = "meon-json_offsets"
+harness = false
