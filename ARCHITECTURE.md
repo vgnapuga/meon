@@ -205,8 +205,10 @@ Source tokens (grammar DSL)
   Final token stream handed back to rustc
 ```
 
-The front-end reads the grammar by keyword, so sub-rules and settings may be
-declared in any order and a trailing `;` or `,` is optional. The runtime macros
+The front-end reads the grammar by keyword, so sub-rules and settings within a
+section may be declared in any order and a trailing `;` or `,` is optional.
+The four header context bytes keep their fixed order (`sep`, `eol`, `tab`,
+`escape`), followed by the optional `max_nest` and `crlf`. The runtime macros
 are `macro_rules!` patterns and match exactly one token shape: inside an
 `on_trigger { ... }` block the sub-rules in the order `symmetric`,
 `asymmetric`, `chained`, `key_value`; only `parse_inside` in a symmetric

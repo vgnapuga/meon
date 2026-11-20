@@ -343,7 +343,16 @@ fn expand(input: TS2) -> Result<TS2> {
         bc.advance();
         let span = bc.span();
         match bc.peek_str().as_deref() {
-            Some("max_nest") if max_nest.is_none() => max_nest = Some(bc.named_lit("max_nest")?),
+            Some("max_nest") if max_nest.is_none() => {
+                let lit = bc.named_lit("max_nest")?;
+                if literal_u64(&lit).is_none() {
+                    return Err(Error::new(
+                        lit.span(),
+                        "expected a non-negative integer after `max_nest =`",
+                    ));
+                }
+                max_nest = Some(lit);
+            }
             Some("crlf") if crlf.is_none() => crlf = Some(bc.named_flag("crlf")?),
             Some(name @ ("max_nest" | "crlf")) => {
                 return Err(Error::new(span, format!("`{name}` is set twice")));
@@ -390,6 +399,15 @@ fn expand(input: TS2) -> Result<TS2> {
             }
             _ => break,
         }
+    }
+    while matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ';' || p.as_char() == ',') {
+        bc.advance();
+    }
+    if let Some(tt) = bc.peek() {
+        return Err(Error::new(
+            tt.span(),
+            format!("unknown grammar section or setting: {tt:?}"),
+        ));
     }
 
     // `max_nest` may be written in the header or in `limits`. The header form
@@ -943,6 +961,31 @@ mod tests {
         let s = expand_str(g);
         assert!(s.contains("__meon_check_input"), "{s}");
         assert!(s.contains("4294967295"), "{s}");
+    }
+
+    // 28. Header `max_nest` must be a non-negative integer literal.
+    #[test]
+    fn test_28_header_max_nest_must_be_an_integer() {
+        let e = expand_err(quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\',
+                max_nest = "four";
+            }
+        });
+        assert!(e.contains("non-negative integer"), "{e}");
+    }
+
+    // 29. An unknown top-level section is a located error instead of silently
+    //     dropping the rest of the grammar.
+    #[test]
+    fn test_29_unknown_top_level_section_err() {
+        let e = expand_err(quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                blokcs { fallback => paragraphs [10]; }
+            }
+        });
+        assert!(e.contains("unknown grammar section"), "{e}");
     }
 
     // 21. A `chained` rule with both components opaque feeds `context()`; one

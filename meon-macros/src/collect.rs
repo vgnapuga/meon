@@ -50,12 +50,20 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
                 "merge_simple" => {
                     c.advance();
                     c.skip_eq_alone();
-                    cf.merge_simple = Some(c.next_ident("merge_simple value")?);
+                    let flag = c.next_ident("merge_simple value")?;
+                    if flag != "true" && flag != "false" {
+                        return Err(Error::new(
+                            flag.span(),
+                            "`merge_simple` must be `true` or `false`",
+                        ));
+                    }
+                    cf.merge_simple = Some(flag);
                     c.skip(';');
                 }
                 "hard_break" => {
                     c.advance();
-                    c.next_group(Delimiter::Parenthesis, "hard_break args")?;
+                    let args = c.next_group(Delimiter::Parenthesis, "hard_break args")?;
+                    validate_literal_args(args.stream(), "hard_break", Some(3))?;
                     let (f, cap) = c.arrow_field_cap("hard_break")?;
                     c.skip(';');
                     cf.block_simple.push((f, cap));
@@ -69,7 +77,8 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
                 }
                 "on_trigger" => {
                     c.advance();
-                    c.next_group(Delimiter::Parenthesis, "on_trigger bytes")?;
+                    let bytes = c.next_group(Delimiter::Parenthesis, "on_trigger bytes")?;
+                    validate_literal_args(bytes.stream(), "on_trigger", None)?;
                     let body = c.next_group(Delimiter::Brace, "on_trigger body")?;
                     collect_on_trigger(body.stream(), cf)?;
                 }
@@ -84,6 +93,42 @@ pub(crate) fn collect_inline(ts: TS2, cf: &mut CF) -> Result<()> {
         } else {
             c.advance();
         }
+    }
+    Ok(())
+}
+
+/// Validate a parenthesised argument list as literals separated by optional
+/// commas. `expected` pins the exact count; `None` requires at least one.
+fn validate_literal_args(ts: TS2, ctx: &str, expected: Option<usize>) -> Result<()> {
+    let mut c = Cursor::new(ts);
+    let mut n = 0usize;
+    while let Some(tt) = c.next_tt() {
+        match tt {
+            TT::Literal(_) => {
+                n += 1;
+                c.skip(',');
+            }
+            TT::Punct(p) if p.as_char() == ',' => {}
+            other => {
+                return Err(Error::new(
+                    other.span(),
+                    format!("expected a literal in `{ctx}` arguments, got {other:?}"),
+                ));
+            }
+        }
+    }
+    if let Some(want) = expected {
+        if n != want {
+            return Err(Error::new(
+                c.span(),
+                format!("`{ctx}` needs exactly {want} literal arguments, got {n}"),
+            ));
+        }
+    } else if n == 0 {
+        return Err(Error::new(
+            c.span(),
+            format!("`{ctx}` needs at least one literal argument"),
+        ));
     }
     Ok(())
 }
@@ -333,6 +378,9 @@ fn collect_asymmetric_standalone(
                 c.advance();
             }
         }
+    }
+    if stack && arms == 0 {
+        return Err(one_arm(open.span()));
     }
     Ok(())
 }
@@ -808,7 +856,16 @@ fn parse_line_marker_args(ts: TS2) -> Result<(Literal, Literal)> {
     let mut c = Cursor::new(ts);
     let byte = c.expect_lit("line marker byte")?;
     c.skip(',');
-    c.advance();
+    match c.peek_str().as_deref() {
+        Some("max") => c.advance(),
+        Some(other) => {
+            return Err(Error::new(
+                c.span(),
+                format!("`line` rule needs `max = N`, got `{other}`"),
+            ));
+        }
+        None => return Err(Error::new(c.span(), "expected literal (line marker max)")),
+    }
     c.skip_eq_alone();
     Ok((byte, c.expect_lit("line marker max")?))
 }
@@ -1332,6 +1389,59 @@ mod tests {
             unreachable!()
         };
         assert_eq!(pat.to_string(), quote! { b'0'..=b'9' | b'=' }.to_string());
+    }
+
+    // 24. Inline argument lists are validated before the runtime macros see
+    //     them: merge_simple is a bool, hard_break has three literals and
+    //     on_trigger has one or more.
+    #[test]
+    fn test_24_inline_argument_validation() {
+        let e = err_inline(quote! { merge_simple = yes; fallback => texts [10]; });
+        assert!(e.contains("must be `true` or `false`"), "{e}");
+
+        let e = err_inline(quote! {
+            hard_break(b'\\', b' ') => hard_breaks [10];
+            fallback => texts [10];
+        });
+        assert!(e.contains("hard_break` needs exactly 3"), "{e}");
+
+        let e = err_inline(quote! {
+            on_trigger() { }
+            fallback => texts [10];
+        });
+        assert!(e.contains("on_trigger` needs at least one"), "{e}");
+
+        let e = err_inline(quote! {
+            on_trigger(b'*', trigger) { }
+            fallback => texts [10];
+        });
+        assert!(e.contains("expected a literal in `on_trigger`"), "{e}");
+    }
+
+    // 25. A stacked asymmetric rule with no arm is rejected, not emitted as an
+    //     inert rule.
+    #[test]
+    fn test_25_asymmetric_stack_needs_an_arm() {
+        let e = err_inline(quote! {
+            on_trigger(b'{', b'}') {
+                asymmetric b'{', b'}' { balanced = true; parse_inside = true; }
+            }
+        });
+        assert!(e.contains("only arm is `1 => field`"), "{e}");
+    }
+
+    // 26. The second `line` argument must be named `max`.
+    #[test]
+    fn test_26_line_second_key_is_max() {
+        let mut cf = CF::default();
+        let e = collect_lines(
+            quote! { line(b'#', limit = 6) |n|: Heading { level: n } => headings [200]; },
+            &mut cf,
+        )
+        .unwrap_err()
+        .to_compile_error()
+        .to_string();
+        assert!(e.contains("`line` rule needs `max = N`"), "{e}");
     }
 
     // 23. A minimum given under any other key, or bare, is an error, as is a
