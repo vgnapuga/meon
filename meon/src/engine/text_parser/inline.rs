@@ -915,7 +915,7 @@ macro_rules! parse_inline {
                         push_il!($tx, __span!(text_start, _ep));
                     }
                     if _ehb {
-                        $crate::paste::paste! {
+                        $crate::pastey::paste! {
                             $state.[<push_ $hb>](__span!(_ep, _ep));
                         }
                     }
@@ -1016,7 +1016,7 @@ macro_rules! parse_inline {
                     };
                     $crate::parse_inline!(@choose $max_inline,
                         {
-                            $crate::paste::paste! {
+                            $crate::pastey::paste! {
                                 $state.[<push_ $kv_f>]($kv_ty {
                                     $kv_kf: __span!(_ks, _ke),
                                     $kv_vf: __span!(_vs, _ve),
@@ -1025,7 +1025,7 @@ macro_rules! parse_inline {
                         },
                         {
                             if !over_limit!($max_inline, _ks, _ve) {
-                                $crate::paste::paste! {
+                                $crate::pastey::paste! {
                                     $state.[<push_ $kv_f>]($kv_ty {
                                         $kv_kf: __span!(_ks, _ke),
                                         $kv_vf: __span!(_vs, _ve),
@@ -1132,7 +1132,7 @@ macro_rules! parse_inline {
                                             if _top_b == $kv_end {
                                                 $crate::parse_inline!(@choose $max_inline,
                                                     {
-                                                        $crate::paste::paste! {
+                                                        $crate::pastey::paste! {
                                                             $state.[<push_ $kv_f>]($kv_ty {
                                                                 $kv_kf: __span!(_ks, _ke),
                                                                 $kv_vf: __span!(_vs, _close_char_pos),
@@ -1145,7 +1145,7 @@ macro_rules! parse_inline {
                                                             _ks,
                                                             _close_char_pos
                                                         ) {
-                                                            $crate::paste::paste! {
+                                                            $crate::pastey::paste! {
                                                                 $state.[<push_ $kv_f>]($kv_ty {
                                                                     $kv_kf: __span!(_ks, _ke),
                                                                     $kv_vf: __span!(_vs, _close_char_pos),
@@ -1326,7 +1326,7 @@ macro_rules! parse_inline {
                                 for _k in _ch_low..fdepth {
                                     held_base[_k] = _after;
                                 }
-                                $crate::paste::paste! {
+                                $crate::pastey::paste! {
                                     $state.[<push_ $cf>]($ch_ty {
                                         $cpi: ch_is_prefix,
                                         $ct: __span!(ch_first_start, ch_saved_first_end),
@@ -1360,7 +1360,7 @@ macro_rules! parse_inline {
                                     for _k in _ch_low..fdepth {
                                         held_base[_k] = _after;
                                     }
-                                    $crate::paste::paste! {
+                                    $crate::pastey::paste! {
                                         $state.[<push_ $cf>]($ch_ty {
                                             $cpi: ch_is_prefix,
                                             $ct: __span!(ch_first_start, ch_saved_first_end),
@@ -1433,7 +1433,7 @@ macro_rules! parse_inline {
                             }
                             $crate::parse_inline!(@choose $max_inline,
                                 {
-                                    $crate::paste::paste! {
+                                    $crate::pastey::paste! {
                                         $state.[<push_ $cf>]($ch_ty {
                                             $cpi: is_prefix,
                                             $ct: __span!(pos, ct_end),
@@ -1451,7 +1451,7 @@ macro_rules! parse_inline {
                                         push_il!($tx, __span!(
                                             cu_end, cu_end + 1));
                                     } else {
-                                        $crate::paste::paste! {
+                                        $crate::pastey::paste! {
                                             $state.[<push_ $cf>]($ch_ty {
                                                 $cpi: is_prefix,
                                                 $ct: __span!(pos, ct_end),
@@ -1862,7 +1862,7 @@ macro_rules! parse_inline {
                     let (_ks, _ke, _vs) = kv_pending[fdepth];
                     $crate::parse_inline!(@choose $max_inline,
                         {
-                            $crate::paste::paste! {
+                            $crate::pastey::paste! {
                                 $state.[<push_ $kv_f>]($kv_ty {
                                     $kv_kf: __span!(_ks, _ke),
                                     $kv_vf: __span!(_vs, parse_end),
@@ -1871,7 +1871,7 @@ macro_rules! parse_inline {
                         },
                         {
                             if !over_limit!($max_inline, _ks, parse_end) {
-                                $crate::paste::paste! {
+                                $crate::pastey::paste! {
                                     $state.[<push_ $kv_f>]($kv_ty {
                                         $kv_kf: __span!(_ks, _ke),
                                         $kv_vf: __span!(_vs, parse_end),
@@ -1919,7 +1919,7 @@ macro_rules! parse_inline {
         }
         // Emit hard-break marker if detected.
         $( if _hb {
-            $crate::paste::paste! {
+            $crate::pastey::paste! {
                 $state.[<push_ $hb>](__span!(parse_end, parse_end));
             }
         } )*

@@ -1,6 +1,6 @@
 [package]
 name = "meon"
-version = "1.0.0"
+version = "1.0.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -17,7 +17,7 @@ avx2 = []
 avx512 = [ "avx2" ]
 
 [dependencies]
-paste = "1.0"
+pastey = "0.2"
 memchr = "2.0"
 meon-macros.workspace = true
 

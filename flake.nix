@@ -41,6 +41,7 @@
               cargo-fuzz
               cargo-expand
               cargo-llvm-cov
+              cargo-deny
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.linuxPackages.perf
             ] ++ [

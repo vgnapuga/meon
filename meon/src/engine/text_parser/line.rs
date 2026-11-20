@@ -125,18 +125,18 @@ macro_rules! parse_line {
     };
 
     (@push [], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             $st.[<push_ $field>](($meta, $span));
         }
     };
     (@push [$n:literal], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {{
         let _span = $span;
         if _span.len_usize() > $n as usize {
-            $crate::paste::paste! {
+            $crate::pastey::paste! {
                 $st.[<push_ $para>](_span);
             }
         } else {
-            $crate::paste::paste! {
+            $crate::pastey::paste! {
                 $st.[<push_ $field>](($meta, _span));
             }
         }

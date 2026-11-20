@@ -73,7 +73,7 @@
 #[doc(hidden)]
 pub use memchr;
 #[doc(hidden)]
-pub use paste;
+pub use pastey;
 
 #[doc(hidden)]
 pub mod engine;

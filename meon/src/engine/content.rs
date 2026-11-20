@@ -156,7 +156,7 @@ macro_rules! define_content {
             $( $block_simple_field:ident [$simple_div:literal] ),* $(,)?
         }
     }) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             pub(crate) struct [<$name State>] {
                 #[allow(dead_code)]
                 src_len: usize,

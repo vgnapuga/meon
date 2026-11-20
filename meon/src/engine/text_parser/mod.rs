@@ -408,7 +408,7 @@ macro_rules! parse_text {
             macro_rules! close_para {
                 () => {
                     if let Some(s) = para_start.take() {
-                        $crate::paste::paste! {
+                        $crate::pastey::paste! {
                             state.[<push_ $para>]($crate::span::Span::<$off>::from_usize(s as usize, pos));
                         }
                     }
@@ -712,7 +712,7 @@ macro_rules! parse_text {
             flush_cont!();
             flush_para_inline!(len);
             if let Some(s) = para_start {
-                $crate::paste::paste! {
+                $crate::pastey::paste! {
                     state.[<push_ $para>]($crate::span::Span::<$off>::from_usize(s as usize, len));
                 }
             }
@@ -801,7 +801,7 @@ macro_rules! parse_text {
         [$hb_esc:literal, $sp:literal, $sp_min:literal => $hb_fld:ident]
     ) => {
         if $hb {
-            $crate::paste::paste! {
+            $crate::pastey::paste! {
                 $st.[<push_ $hb_fld>]($crate::span::Span::<$off>::from_usize($le, $le));
             }
         }
@@ -818,10 +818,10 @@ macro_rules! parse_text {
     };
 
     (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, true) => {
-        $crate::paste::paste! { $st.[<push_merge_ $field>]($span, $floor); }
+        $crate::pastey::paste! { $st.[<push_merge_ $field>]($span, $floor); }
     };
     (@dispatch $st:ident, $field:ident, $span:expr, $floor:expr, false) => {
-        $crate::paste::paste! { $st.[<push_ $field>]($span); }
+        $crate::pastey::paste! { $st.[<push_ $field>]($span); }
     };
 
     // Close every still-open block frame at end of input (or, gated by the

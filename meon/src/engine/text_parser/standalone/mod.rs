@@ -311,7 +311,7 @@ macro_rules! define_standalone_fns {
     // Transparent symmetric rule: context-free finder + context-aware finder.
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      symmetric_exact($byte:literal, $count:literal, transparent) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -354,7 +354,7 @@ macro_rules! define_standalone_fns {
     // degenerate.
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      symmetric_exact($byte:literal, $count:literal, opaque) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -384,7 +384,7 @@ macro_rules! define_standalone_fns {
     // true`): context-free finder + context-aware finder.
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      asymmetric_stack($open:literal, $close:literal, $bal:tt) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -427,7 +427,7 @@ macro_rules! define_standalone_fns {
     // (context source).
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      asymmetric_balanced($open:literal, $close:literal) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -450,7 +450,7 @@ macro_rules! define_standalone_fns {
     // parse_inside = false`): context-free finder only (context source).
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      asymmetric_exact($open:literal, $close:literal, $count:literal, opaque) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -480,7 +480,7 @@ macro_rules! define_standalone_fns {
      chained($o1:literal, $c1:literal, $tb:tt, $o2:literal, $c2:literal, $ub:tt,
              $tr:tt, $prefix:literal, $ty:ty, $pf:ident, $ff:ident, $sf:ident)
          => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -508,7 +508,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      kv($eq:literal, $end:literal, $allow:ident, $ty:ty, $kf:ident, $vf:ident) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -530,7 +530,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      line_marker($byte:literal, $max:literal, $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -573,7 +573,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      line_uniform(($($pat:tt)*), $min:literal, $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -622,7 +622,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      fence(($($pat:tt)*), $min:literal) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -650,7 +650,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      cont($byte:literal) => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -693,7 +693,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      block_marker(($($pat:tt)*), $ty:ty, $var:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
@@ -742,7 +742,7 @@ macro_rules! define_standalone_fns {
 
     (@fns sep=$sep:tt eol=$eol:tt lb=$lb:tt tab=$tab:tt esc=$esc:tt maxn=$maxn:tt lim=($max_inline:tt, $max_line:tt, $max_block:tt) check=$check:tt, off=$off:tt ;
      block_numbered(($($dp:tt)*), ($($ep:tt)*), $ty:ty, $nvar:ident, $kvar:ident, $rule:literal) { $($body:tt)* } => $field:ident ; $($rest:tt)*) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             #[allow(missing_docs)]
             pub fn [<find_ $field>](
                 source: &[u8],
