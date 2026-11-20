@@ -49,20 +49,20 @@ native speed.
 | **O(1) access by element kind** | Every element kind is its own `Vec` of spans. "All links" or "all headings" is a field, not a tree walk with node matching. |
 | **Standalone parsing of a single kind** | Supported rules generate `find_*`: it scans the source for that one kind only and skips everything else. Need only the headings — parse only the headings. |
 | **One declaration, whole parser** | `define_parser!` is a code generator: from one grammar you get the content struct, `parse`, every `find_*` / `find_context_*` iterator and every accessor. No runtime grammar interpreter, no dispatch. |
-| **Throughput that holds as input grows** | The output is a flat table of 8-byte spans, so the working set stays small. On an input 100x larger than cache `meon-md` keeps its throughput within ~6% (nightly within ~11%) and `meon-json` loses at most ~30%, while the tree, event and tape parsers it is compared with lose a third to two thirds of theirs. |
+| **Throughput that holds as input grows** | The output is a flat table of 8-byte spans, so the working set stays small. On an input 100x larger than cache `meon-md` keeps its throughput within ~4% (nightly within ~6%) and `meon-json` loses at most ~30%, while the tree, event and tape parsers it is compared with lose a third to two thirds of theirs. |
 
 `meon-md` full parse vs CommonMark parsers, small (fits in cache) -> big
 (100x larger, exceeds L3), stable build, median throughput:
 
 | Corpus  | `meon-md`                    | `pulldown-cmark`        | `comrak`                |
 |---------|------------------------------|-------------------------|-------------------------|
-| `plain` | 2.86 -> 2.70 GiB/s (**-6%**) | 757 -> 484 MiB/s (-36%) | 280 -> 119 MiB/s (-58%) |
-| `hot`   | 946 -> 925 MiB/s (**-2%**)   | 157 -> 88 MiB/s (-44%)  | 45 -> 23 MiB/s (-49%)   |
-| `heavy` | 817 -> 827 MiB/s (**+1%**)   | 117 -> 72 MiB/s (-38%)  | 34 -> 20 MiB/s (-42%)   |
+| `plain` | 3.07 -> 2.96 GiB/s (**-4%**) | 880 -> 536 MiB/s (-39%) | 260 -> 119 MiB/s (-54%) |
+| `hot`   | 981 -> 976 MiB/s (**-1%**)   | 159 -> 86 MiB/s (-46%)  | 43 -> 23 MiB/s (-47%)   |
+| `heavy` | 806 -> 808 MiB/s (**0%**)    | 115 -> 70 MiB/s (-39%)  | 32 -> 19 MiB/s (-41%)   |
 
 Single-kind extraction on the same big corpora runs at `memchr` speed over
-that kind's markers: `find_headings` at 7-14 GiB/s on `hot` / `heavy`,
-`find_bolds` at 3.2-4.8 GiB/s. Neither CommonMark parser has an equivalent —
+that kind's markers: `find_headings` at 7-17 GiB/s on `hot` / `heavy`,
+`find_bolds` at 3.3-4.9 GiB/s. Neither CommonMark parser has an equivalent —
 pulling one kind out of them means a full parse.
 
 `meon-md` is a Markdown subset and does not aim at CommonMark compliance, so
