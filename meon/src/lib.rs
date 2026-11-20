@@ -28,10 +28,11 @@
 //! Their type defaults to `u32` and can be selected per grammar with
 //! `limits { offset = u8 | u16 | u32 | u64; }`.
 //! A grammar can set `max_input_bytes` in its `limits` section to reject a
-//! source longer than the limit with [`InputBytesTooLarge`]; `0` and
-//! `u32::MAX` mean the maximum (`u32::MAX`), while an absent key or `_` means
-//! no check. Without a check, input longer than [`span::MAX_INPUT_LEN`]
-//! (4 GiB) silently truncates span endpoints.
+//! source longer than the limit with [`InputBytesTooLarge`]. `0` and the
+//! selected offset type's maximum mean that maximum; an absent key or `_`
+//! means no check. Without a check, the parser reads only the prefix that
+//! fits the selected offset type. [`span::MAX_INPUT_LEN`] is the default
+//! `u32` bound.
 //!
 //! # Quick start
 //!

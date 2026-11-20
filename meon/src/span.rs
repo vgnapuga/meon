@@ -7,8 +7,9 @@
 ///
 /// Spans are stored as `u32` offsets by default, so any input larger than
 /// this value would silently truncate span endpoints. A grammar can select a
-/// different offset type with `limits { offset = u8 | u16 | u32 | u64; }`; its
-/// checked methods reject an input that does not fit the selected type.
+/// different offset type with `limits { offset = u8 | u16 | u32 | u64; }`.
+/// Its checked methods reject an input that does not fit only when the
+/// grammar sets `max_input_bytes`; otherwise they read the prefix that fits.
 ///
 /// In practice the default limit is 4 GiB, which exceeds any realistic
 /// document size.

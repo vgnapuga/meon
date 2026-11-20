@@ -131,9 +131,9 @@ Optional. Settings may be written in any order; `;` and `,` are optional.
 
 `offset` selects the type of every generated `Span` and the hard upper bound
 on the input. `u8`/`u16`/`u32` use that type for span offsets; `u64` uses
-`usize` internally. The checked methods reject input longer than the selected
-type; when no `max_input_bytes` is set, the parser reads only the prefix that
-fits.
+`u64` spans with `usize` positions internally. The checked methods reject
+input longer than the selected type only when `max_input_bytes` is set;
+otherwise the parser reads only the prefix that fits.
 
 The span caps are measured on the clean span — `end - start` of the stored
 `Span`, without delimiters. `0` and the offset type's maximum mean absent:

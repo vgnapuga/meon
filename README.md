@@ -37,7 +37,8 @@ You describe a grammar once with `define_parser!` and get back a content struct
 where every element kind lives in its own flat `Vec`. Headings in one vec,
 bold spans in another, links in a third. No tree traversal, no allocator
 pressure from node objects, no virtual dispatch. Just contiguous arrays of
-`u32` byte-offset pairs that you iterate at native speed.
+byte-offset pairs (the offset type defaults to `u32`) that you iterate at
+native speed.
 
 ---
 
@@ -250,7 +251,7 @@ vtable, no grammar interpreter.
 
 ### Limits
 
-`limits { ... }` is optional. `offset` selects the span offset type (`u8`, `u16`, `u32`, default `u32`). `max_nest` sets the shared nesting cap;
+`limits { ... }` is optional. `offset` selects the span offset type (`u8`, `u16`, `u32`, `u64`, default `u32`). `max_nest` sets the shared nesting cap;
 `max_inline_span`, `max_line_span` and `max_block_span` cap the length of an
 emitted span in bytes, measured on the clean span without delimiters. `0` and
 the offset type's maximum mean absent: no check and no fallback code is

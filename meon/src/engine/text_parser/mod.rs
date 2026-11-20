@@ -144,8 +144,9 @@ pub use crate::parse_block;
 ///
 /// The three `max_*_span` values are optional tokens: `[]` means no cap and
 /// generates no check, fallback or reparse code; `[N]` enables the cap.
-/// `define_parser!` normalizes `0` and `u32::MAX` to `[]`. A cap is measured
-/// on the clean span, `end - start` without delimiters.
+/// `define_parser!` normalizes `0` and the selected offset type's maximum to
+/// `[]`. A cap is measured on the clean span, `end - start` without
+/// delimiters.
 ///
 /// A span longer than its cap is not emitted. An inline transparent span
 /// keeps its inner spans and text; an inline `parse_inside = false` span and a

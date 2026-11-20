@@ -124,21 +124,21 @@ use crate::strip::{flatten_invisible, strip};
 ///
 /// `offset` selects the type of every generated `Span` and the hard upper
 /// bound on the input. `u8`/`u16`/`u32` use that type for span offsets; `u64`
-/// uses `usize` internally. The checked methods reject input longer than the
-/// selected type; when no `max_input_bytes` is set, the parser reads only the
-/// prefix that fits.
+/// uses `u64` spans with `usize` positions internally. The checked methods
+/// reject input longer than the selected type only when `max_input_bytes` is
+/// set; otherwise they read the prefix that fits.
 ///
 /// The span caps are measured on the clean span — `end - start` of the
-/// stored `Span`, without delimiters. `0` and `u32::MAX` mean absent: no
-/// check is generated. A value above `u32::MAX` is a compile error. When a
-/// cap is absent, the corresponding checks and fallback code are not
-/// generated.
+/// stored `Span`, without delimiters. `0` and the selected offset type's
+/// maximum mean absent: no check is generated. A value above that maximum is
+/// a compile error. When a cap is absent, the corresponding checks and
+/// fallback code are not generated.
 ///
-/// `max_input_bytes` follows different rules. `0` and `u32::MAX` mean the
-/// maximum (`u32::MAX`): the checked methods reject a source longer than
-/// 4 GiB. `_` or an absent key means no check at all. A value above
-/// `u32::MAX` is a compile error. The check runs before any parser state or
-/// `Vec` is allocated.
+/// `max_input_bytes` follows different rules. `0` and the selected offset
+/// type's maximum mean that maximum: the checked methods reject a larger
+/// source. `_` or an absent key means no check at all. A value above the
+/// selected maximum is a compile error. The check runs before any parser
+/// state or `Vec` is allocated.
 ///
 /// A span longer than its cap is not emitted:
 ///
