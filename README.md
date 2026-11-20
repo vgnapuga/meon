@@ -110,7 +110,7 @@ is copied. Nothing is decoded unless you ask for it.
 
 ```rust
 let src = b"**bold** and *italic*\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 
 // Resolve a span to a string slice — zero copy, borrow from source.
 // Returns `None` on invalid UTF-8 instead of panicking.
@@ -140,20 +140,20 @@ escapes, balancing, nesting and blank-line limits still apply.
 
 ```rust
 // Full parse — all element kinds in one pass
-let content = MarkdownParser::parse(src);
+let content = MarkdownParser::parse(src).unwrap();
 
 // Standalone — only bold spans, nothing else computed
-for span in MarkdownParser::find_bolds(src) {
+for span in MarkdownParser::find_bolds(src).unwrap() {
     println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 
 // Headings with metadata — level and content span
-for (heading, span) in MarkdownParser::find_headings(src) {
+for (heading, span) in MarkdownParser::find_headings(src).unwrap() {
     println!("h{}: {}", heading.level, std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 
 // Links and images — structured type, two spans inside
-for link in MarkdownParser::find_links(src) {
+for link in MarkdownParser::find_links(src).unwrap() {
     let text = std::str::from_utf8(&src[link.text.start as usize..link.text.end as usize]).unwrap();
     let url  = std::str::from_utf8(&src[link.url.start  as usize..link.url.end  as usize]).unwrap();
     println!("[{}]({})  image={}", text, url, link.is_image);
@@ -170,8 +170,8 @@ the full parser. This divergence is by design and documented — and closable:
 ```rust
 // Build the opaque-region map once (fenced blocks, code spans, autolinks),
 // then run any number of context-aware finders over it.
-let ctx = MarkdownParser::context(src);
-for span in MarkdownParser::find_context_bolds(src, &ctx) {
+let ctx = MarkdownParser::context(src).unwrap();
+for span in MarkdownParser::find_context_bolds(src, &ctx).unwrap() {
     // bold markers inside code spans and fenced blocks are skipped,
     // matching the full parse
 }

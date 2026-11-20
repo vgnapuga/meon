@@ -167,15 +167,15 @@ use meon_md::MarkdownParser;
 let src = long_document.as_bytes();
 
 // ~2–5× faster than a full parse for a single element kind
-for span in MarkdownParser::find_bolds(src) {
+for span in MarkdownParser::find_bolds(src).unwrap() {
     println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 
-for link in MarkdownParser::find_links(src) {
+for link in MarkdownParser::find_links(src).unwrap() {
     // link.text, link.url, link.is_image
 }
 
-for (heading, span) in MarkdownParser::find_headings(src) {
+for (heading, span) in MarkdownParser::find_headings(src).unwrap() {
     println!("h{}: {}", heading.level, std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 ```
@@ -190,9 +190,9 @@ To close the opacity gap, build the context map once and use the
 `find_context_*` variants:
 
 ```rust
-let ctx = MarkdownParser::context(src);
-// Bold markers inside code spans, autolinks and fenced blocks are skipped:
-for span in MarkdownParser::find_context_bolds(src, &ctx) { /* ... */ }
+let ctx = MarkdownParser::context(src).unwrap();
+// Bold markers inside code spans, autolinks, links and fenced blocks are skipped:
+for span in MarkdownParser::find_context_bolds(src, &ctx).unwrap() { /* ... */ }
 ```
 
 Every non-opaque element kind has one (`find_context_bolds`,

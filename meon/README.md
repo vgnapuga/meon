@@ -48,7 +48,7 @@ define_parser!(Plain {
     }
 });
 
-let content = PlainParser::parse(b"hello world\n");
+let content = PlainParser::parse(b"hello world\n").unwrap();
 assert_eq!(content.paragraphs.len(), 1);
 assert_eq!(content.texts.len(), 1);
 ```
@@ -522,8 +522,8 @@ finders only:
 ```rust
 // One streaming pass builds the opaque-region map (fences plus every
 // parse_inside = false rule), shared by all context-aware finders.
-let ctx = MyParser::context(source);
-for span in MyParser::find_context_italics(source, &ctx) {
+let ctx = MyParser::context(source).unwrap();
+for span in MyParser::find_context_italics(source, &ctx).unwrap() {
     // candidates inside fences, code spans, etc. are skipped
 }
 ```

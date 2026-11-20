@@ -224,7 +224,7 @@ from a large document — extracting every string, say:
 use meon_json::JsonParser;
 
 let src = document.as_bytes();
-for span in JsonParser::find_strings(src) {
+for span in JsonParser::find_strings(src).unwrap() {
     println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 ```
@@ -246,8 +246,8 @@ a map of every string region in one streaming pass, and the
 string value no longer counts as an object opener:
 
 ```rust
-let ctx = JsonParser::context(src);
-for span in JsonParser::find_context_objects(src, &ctx) { /* ... */ }
+let ctx = JsonParser::context(src).unwrap();
+for span in JsonParser::find_context_objects(src, &ctx).unwrap() { /* ... */ }
 ```
 
 See
