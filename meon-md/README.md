@@ -158,8 +158,10 @@ for raw in c.bolds_raw() {
 
 ## Standalone iterators
 
-Every element kind has a `find_*` method that scans the source without a full
-parse. Use it when you only need one element kind from a large document:
+Every standalone-capable element kind has a `find_*` method that scans the
+source without a full parse. Fallback fields (`texts`, `paragraphs`) and
+`hard_breaks` have no finder. Use it when you only need one element kind from
+a large document:
 
 ```rust
 use meon_md::MarkdownParser;
@@ -195,10 +197,11 @@ let ctx = MarkdownParser::context(src).unwrap();
 for span in MarkdownParser::find_context_bolds(src, &ctx).unwrap() { /* ... */ }
 ```
 
-Every non-opaque element kind has one (`find_context_bolds`,
-`find_context_headings`, `find_context_blockquotes`, ...); code spans,
-autolinks and fenced blocks are the context sources and keep only their
-context-free `find_*`. See
+Every non-opaque standalone-capable element kind has one
+(`find_context_bolds`, `find_context_headings`, `find_context_blockquotes`,
+...); code spans, autolinks, links and fenced blocks are the context sources
+and keep only their context-free `find_*`. Fallback fields and `hard_breaks`
+have no context-aware finder either. See
 [`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*
 for details.
 

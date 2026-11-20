@@ -121,8 +121,9 @@ assert_eq!(text, "bold");
 // Or work with raw bytes, no UTF-8 check
 let bytes: &[u8] = c.bytes(c.italics[0]);
 
-// Every field also gets a generated `_clean` (delimiters stripped) and
-// `_raw` (delimiters included) accessor — zero-copy byte-slice iterators.
+// Fields backed by a standalone rule also get a generated `_clean`
+// (delimiters stripped) and `_raw` (delimiters included) accessor —
+// zero-copy byte-slice iterators. Fallback fields get `_clean` only.
 let raw: &[u8] = c.bolds_raw().next().unwrap();
 assert_eq!(raw, b"**bold**");
 ```
@@ -169,8 +170,8 @@ inside a fenced code block will be matched by `find_bolds` but suppressed by
 the full parser. This divergence is by design and documented — and closable:
 
 ```rust
-// Build the opaque-region map once (fenced blocks, code spans, autolinks),
-// then run any number of context-aware finders over it.
+// Build the opaque-region map once (fenced blocks, code spans, autolinks,
+// links), then run any number of context-aware finders over it.
 let ctx = MarkdownParser::context(src).unwrap();
 for span in MarkdownParser::find_context_bolds(src, &ctx).unwrap() {
     // bold markers inside code spans and fenced blocks are skipped,

@@ -216,9 +216,10 @@ what the engine saw.
 
 ## Standalone iterators
 
-Inherited from the engine: every structural rule generates a `find_*` method
-that scans the source without a full parse. Useful when you only need one kind
-from a large document — extracting every string, say:
+Inherited from the engine: every standalone-capable structural rule generates
+a `find_*` method that scans the source without a full parse. The fallback
+fields `scalars` and `loose` have no finder. Useful when you only need one
+kind from a large document — extracting every string, say:
 
 ```rust
 use meon_json::JsonParser;

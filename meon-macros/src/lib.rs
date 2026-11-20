@@ -273,7 +273,7 @@ use crate::strip::{flatten_invisible, strip};
 ///
 /// A malformed grammar emits a located `compile_error!` at the offending token
 /// rather than panicking. The error message includes the parsing context
-/// (e.g. `"expected literal (fence min)"`).
+/// (e.g. `` "`fence` rule needs `min = N`" ``).
 ///
 /// # Cross-crate hygiene
 ///

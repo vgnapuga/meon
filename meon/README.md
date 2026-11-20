@@ -65,8 +65,9 @@ assert_eq!(content.texts.len(), 1);
   - `parse_unchecked(source: &[u8]) -> NameContent<'_>` — the same parse
     without the `max_input_bytes` check.
   - `find_*(source: &[u8]) -> Result<impl Iterator, InputBytesTooLarge>` and
-    `find_*_unchecked` — one pair per rule, context-free, faster when you only
-    need one element kind.
+    `find_*_unchecked` — one pair per standalone-capable rule, context-free,
+    faster when you only need one element kind. Fallback fields and
+    `hard_break` have no finder.
   - `context(source: &[u8]) -> Result<ParseContext, InputBytesTooLarge>` and
     `context_unchecked` — the opaque-region map (fences plus opaque
     symmetric/asymmetric and fully opaque chained rules), built by a forward
@@ -77,6 +78,8 @@ assert_eq!(content.texts.len(), 1);
     regions skipped.
 - `str(span) -> Option<&str>` / `bytes(span) -> &[u8]` and `_clean` / `_raw`
   accessor methods on `NameContent` for ergonomic span-to-slice conversion.
+  `_raw` is generated only for fields backed by a standalone rule; fallback
+  and `hard_break` fields get `_clean` only.
 
 Spans are byte offsets; their type defaults to `u32` and is selected by
 `limits { offset = ...; }`. Set `max_input_bytes = 0` (or the offset type's
@@ -261,8 +264,9 @@ on_trigger(b'[') {
 Matches the pattern `[prefix]open1...close1 open2...close2`.
 
 - Two `| open, close |` pairs define the two components.
-- `prefix | byte |` declares an optional single byte immediately before `open1`
-  that sets a boolean field (`is_image` in the example).
+- The `prefix | byte | => field` clause is required; the byte it matches is
+  optional at match time. A prefix immediately before `open1` sets a boolean
+  field (`is_image` in the example).
 - `parse_inside = true` on either component makes that component
   transparent — other rules can fire on the bytes scanned over for it —
   instead of the self-contained forward search an opaque component uses.
@@ -517,7 +521,8 @@ opaque balanced asymmetric rules count nested opening and closing bytes.
 
 For transparent symmetric/asymmetric and non-fence line/block rules, a
 context-aware variant is also generated. `key_value` and `chained` have raw
-finders only:
+finders only. The context map itself includes fences, opaque
+symmetric/asymmetric rules and `chained` rules with both components opaque:
 
 ```rust
 // One streaming pass builds the opaque-region map (fences plus every

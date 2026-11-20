@@ -103,9 +103,11 @@ all borrowing from the original source slice via byte-offset spans whose type de
 - `bytes(span) -> &[u8]` — span to byte slice.
 - `<field>_clean()` — iterator over inner content slices (between delimiters).
 - `<field>_raw()` — iterator over full slices including delimiter bytes.
-  For numbered blocks, the number is recovered with the grammar's declared
-  digit pattern, including ranges and alternatives. `AB: x` therefore stays
-  intact for `num(b'A'..=b'F', end = b':')`; `_clean()` returns `x`.
+  `_raw` is generated only for fields backed by a standalone rule; fallback
+  and `hard_break` fields get `_clean` only. For numbered blocks, the number
+  is recovered with the grammar's declared digit pattern, including ranges and
+  alternatives. `AB: x` therefore stays intact for
+  `num(b'A'..=b'F', end = b':')`; `_clean()` returns `x`.
 
 ---
 
@@ -144,10 +146,12 @@ All runtime behaviour lives in `meon` (the `parse_text!`, `parse_inline!`,
 macros). `meon-macros` only produces tokens; it has no runtime footprint.
 
 The front-end is the single authority on the shape a grammar may take. It
-reads the grammar by keyword, so sub-rules and settings can be written in any
-order and a trailing `;` or `,` is optional; the normalize pass then rewrites
-what it accepted into the fixed shape the runtime patterns require. Whatever
-`define_parser!` accepts, the runtime macros accept.
+reads the grammar by keyword, so sub-rules and settings within a section can
+be written in any order and a trailing `;` or `,` is optional; the normalize
+pass then rewrites what it accepted into the fixed shape the runtime patterns
+require. The four context bytes in the header keep their fixed order
+(`sep`, `eol`, `tab`, `escape`), with the optional `max_nest` and `crlf`
+after them. Whatever `define_parser!` accepts, the runtime macros accept.
 
 For a detailed description of each stage see
 [`ARCHITECTURE.md §4`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#4-grammar-compilation-pipeline) - *GitHub*.
@@ -160,7 +164,7 @@ A malformed grammar emits a located `compile_error!` spanned at the offending
 token rather than a proc-macro panic. Example:
 
 ```
-error: expected literal (fence min)
+error: `fence` rule needs `min = N`
  --> src/lib.rs:7:35
   |
 7 |     blocks { block_simple { fence(b'`') => fenced_codes [400]; } }
