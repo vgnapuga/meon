@@ -91,7 +91,7 @@ macro_rules! parse_line {
                 let $n    = _c;
                 let _meta = $meta;
                 $crate::parse_line!(@push $max_line, $st, $field, $para, _meta,
-                    __span!(_i as u32, $le as u32));
+                    __span!(_i, $le));
                 $res = Some(_i);
             }
         }
@@ -116,7 +116,7 @@ macro_rules! parse_line {
                     let $b    = _delim;
                     let _meta = $meta;
                     $crate::parse_line!(@push $max_line, $st, $field, $para, _meta,
-                        __span!($pos as u32, $le as u32));
+                        __span!($pos, $le));
                     $res = Some($le);
                 }
             }

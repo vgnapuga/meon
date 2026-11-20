@@ -491,7 +491,7 @@ macro_rules! parse_block {
                     let cs    = next + 1;
                     let $b    = $src[_p];
                     let _meta = $meta;
-                    let _span = __span!(cs as u32, $le as u32);
+                    let _span = __span!(cs, $le);
                     $crate::parse_block!(@push_block $max_block, $st, $field, $para, _meta, _span);
                     $res = Some((true, cs));
                 }
@@ -529,7 +529,7 @@ macro_rules! parse_block {
                         let $n    = _num;
                         let $k    = _end;
                         let _meta = $meta;
-                        let _span = __span!(cs as u32, $le as u32);
+                        let _span = __span!(cs, $le);
                         $crate::parse_block!(@push_block $max_block, $st, $field, $para, _meta, _span);
                         $res = Some((true, cs));
                     }

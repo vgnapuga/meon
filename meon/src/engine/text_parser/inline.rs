@@ -912,11 +912,11 @@ macro_rules! parse_inline {
                         $hb_esc, $sp, $sp_min);
                     let _ehb = _ep < _ce;
                     if text_start < _ep {
-                        push_il!($tx, __span!(text_start as u32, _ep as u32));
+                        push_il!($tx, __span!(text_start, _ep));
                     }
                     if _ehb {
                         $crate::paste::paste! {
-                            $state.[<push_ $hb>](__span!(_ep as u32, _ep as u32));
+                            $state.[<push_ $hb>](__span!(_ep, _ep));
                         }
                     }
                     pos += 1;
@@ -935,7 +935,7 @@ macro_rules! parse_inline {
             if _cd > 0 && src[pos] == $eol && !(_top_is_kv && _KV_EOL) {
                 let _ce = content_end!(pos);
                 if text_start < _ce {
-                    push_il!($tx, __span!(text_start as u32, _ce as u32));
+                    push_il!($tx, __span!(text_start, _ce));
                 }
                 pos += 1;
                 skip_markers!(pos);
@@ -953,7 +953,7 @@ macro_rules! parse_inline {
             }
 
             let delim: u8 = src[pos];
-            let delim_start: u32 = pos as u32;
+            let delim_start: usize = pos;
             let mut count: u32 = 0;
             while pos < parse_end && src[pos] == delim { count += 1; pos += 1; }
             // A run that reaches an internal `eol` stops at that eol's
@@ -1069,11 +1069,11 @@ macro_rules! parse_inline {
                         // until its frame closes, and one the stack refuses
                         // stays literal text.
                         if text_start < delim_start as usize {
-                            push_il!($tx, __span!(text_start as u32, delim_start));
+                            push_il!($tx, __span!(text_start, delim_start));
                         }
                         text_start = delim_start as usize;
                         for _k in 0..count {
-                            let _char_pos = delim_start + _k;
+                            let _char_pos = delim_start + _k as usize;
                             // `balanced = false`: one frame of the rule at a
                             // time, at any depth the stack has room for.
                             if fdepth < $maxn
@@ -1111,7 +1111,7 @@ macro_rules! parse_inline {
 
                     if _asym_is_close_byte {
                         for _k in 0..count {
-                            let _close_char_pos = delim_start + _k;
+                            let _close_char_pos = delim_start + _k as usize;
 
                             // A key_value frame directly above the closing container is
                             // committed first, before the container pops. Recomputed per
@@ -1143,7 +1143,7 @@ macro_rules! parse_inline {
                                                         if !over_limit!(
                                                             $max_inline,
                                                             _ks,
-                                                            _close_char_pos as u32
+                                                            _close_char_pos
                                                         ) {
                                                             $crate::paste::paste! {
                                                                 $state.[<push_ $kv_f>]($kv_ty {
@@ -1200,7 +1200,7 @@ macro_rules! parse_inline {
                                                                     {
                                                                         push_il!($tx,
                                                                             __span!(
-                                                                                text_start as u32,
+                                                                                text_start,
                                                                                 _close_char_pos + 1,
                                                                             ));
                                                                     }
@@ -1278,7 +1278,7 @@ macro_rules! parse_inline {
                     if count <= ch_first_depth {
                         ch_first_depth -= count;
                     } else {
-                        let _ct_end = delim_start + ch_first_depth;
+                        let _ct_end = delim_start + ch_first_depth as usize;
                         let _next = _ct_end as usize + 1;
                         ch_first_depth = 0;
                         ch_in_first = false;
@@ -1305,7 +1305,7 @@ macro_rules! parse_inline {
                     if count <= ch_second_depth {
                         ch_second_depth -= count;
                     } else {
-                        let _cu_end = delim_start + ch_second_depth;
+                        let _cu_end = delim_start + ch_second_depth as usize;
                         ch_second_depth = 0;
                         ch_in_second = false;
                         pos = _cu_end as usize + 1;
@@ -1320,7 +1320,7 @@ macro_rules! parse_inline {
                                 release_held!(_ch_base);
                                 if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
                                     push_il!($tx, __span!(
-                                        _ch_text_start as u32, ch_real_start));
+                                        _ch_text_start, ch_real_start));
                                 }
                                 let _after = hold_base!();
                                 for _k in _ch_low..fdepth {
@@ -1336,12 +1336,12 @@ macro_rules! parse_inline {
                                 text_start = pos;
                             },
                             {
-                                if over_limit!($max_inline, ch_real_start, pos as u32) {
+                                if over_limit!($max_inline, ch_real_start, pos) {
                                     if text_start < pos {
                                         push_il!($tx,
                                             __span!(
-                                                text_start as u32,
-                                                pos as u32,
+                                                text_start,
+                                                pos,
                                             ));
                                     }
                                     let _after = hold_base!();
@@ -1354,7 +1354,7 @@ macro_rules! parse_inline {
                                     release_held!(_ch_base);
                                     if _ch_low >= _ch_depth && _ch_text_start < ch_real_start as usize {
                                         push_il!($tx, __span!(
-                                            _ch_text_start as u32, ch_real_start));
+                                            _ch_text_start, ch_real_start));
                                     }
                                     let _after = hold_base!();
                                     for _k in _ch_low..fdepth {
@@ -1429,33 +1429,33 @@ macro_rules! parse_inline {
                             let real_start = if is_prefix { _open - 1 } else { _open };
                             if text_start < real_start {
                                 push_il!($tx, __span!(
-                                    text_start as u32, real_start as u32));
+                                    text_start, real_start));
                             }
                             $crate::parse_inline!(@choose $max_inline,
                                 {
                                     $crate::paste::paste! {
                                         $state.[<push_ $cf>]($ch_ty {
                                             $cpi: is_prefix,
-                                            $ct: __span!(pos as u32, ct_end as u32),
-                                            $cu: __span!((ct_end + 2) as u32, cu_end as u32),
+                                            $ct: __span!(pos, ct_end),
+                                            $cu: __span!(ct_end + 2, cu_end),
                                         });
                                     }
                                     _kv_opaque = Some((real_start, cu_end + 1));
                                 },
                                 {
-                                    if over_limit!($max_inline, real_start as u32, (cu_end + 1) as u32) {
+                                    if over_limit!($max_inline, real_start, cu_end + 1) {
                                         push_il!($tx, __span!(
-                                            real_start as u32, pos as u32));
+                                            real_start, pos));
                                         call_reparse!($reparse, &mut *$state, $src, pos, cu_end,
                                                       $depth);
                                         push_il!($tx, __span!(
-                                            cu_end as u32, (cu_end + 1) as u32));
+                                            cu_end, cu_end + 1));
                                     } else {
                                         $crate::paste::paste! {
                                             $state.[<push_ $cf>]($ch_ty {
                                                 $cpi: is_prefix,
-                                                $ct: __span!(pos as u32, ct_end as u32),
-                                                $cu: __span!((ct_end + 2) as u32, cu_end as u32),
+                                                $ct: __span!(pos, ct_end),
+                                                $cu: __span!(ct_end + 2, cu_end),
                                             });
                                         }
                                         _kv_opaque = Some((real_start, cu_end + 1));
@@ -1499,8 +1499,8 @@ macro_rules! parse_inline {
                                                 if text_start < pos {
                                                     push_il!($tx,
                                                         __span!(
-                                                            text_start as u32,
-                                                            pos as u32,
+                                                            text_start,
+                                                            pos,
                                                         ));
                                                 }
                                             } else {
@@ -1522,10 +1522,10 @@ macro_rules! parse_inline {
                                 $( $sn => {
                                     if text_start < delim_start as usize {
                                         push_il!($tx, __span!(
-                                        text_start as u32, delim_start));
+                                        text_start, delim_start));
                                     }
                                     let _vidx = $state.$sf.len() as $off;
-                                    push_il!($sf, __span!(pos as u32, pos as u32));
+                                    push_il!($sf, __span!(pos, pos));
                                     frames[fdepth] = ($sb, count as u8, _vidx);
                                     held_base[fdepth] = hold_base!();
                                     fdepth += 1;
@@ -1570,9 +1570,9 @@ macro_rules! parse_inline {
                         if let Some((p, end)) = close {
                             if text_start < delim_start as usize {
                                 push_il!($tx, __span!(
-                                text_start as u32, delim_start));
+                                text_start, delim_start));
                             }
-                            let clean = __span!(cs as u32, p as u32);
+                            let clean = __span!(cs, p);
                             $crate::parse_inline!(@choose $max_inline,
                                 {
                                     match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
@@ -1581,9 +1581,9 @@ macro_rules! parse_inline {
                                 {
                                     if over_limit!($max_inline, clean.start, clean.end) {
                                         push_il!($tx, __span!(
-                                            delim_start, cs as u32));
+                                            delim_start, cs));
                                         call_reparse!($reparse, &mut *$state, $src, cs, p, $depth);
-                                        push_il!($tx, __span!(p as u32, end as u32));
+                                        push_il!($tx, __span!(p, end));
                                     } else {
                                         match count { $( $sn => { push_il!($sf, clean); } )* _ => {} }
                                         _kv_opaque = Some((delim_start as usize, end));
@@ -1694,9 +1694,9 @@ macro_rules! parse_inline {
                     }
                     if let Some((_o, cp)) = _ring {
                         if text_start < _o {
-                            push_il!($tx, __span!(text_start as u32, _o as u32));
+                            push_il!($tx, __span!(text_start, _o));
                         }
-                        let clean = __span!((_o + 1) as u32, cp as u32);
+                        let clean = __span!(_o + 1, cp);
                         $crate::parse_inline!(@choose $max_inline,
                             {
                                 match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
@@ -1704,9 +1704,9 @@ macro_rules! parse_inline {
                             },
                             {
                                 if over_limit!($max_inline, clean.start, clean.end) {
-                                    push_il!($tx, __span!(_o as u32, (_o + 1) as u32));
+                                    push_il!($tx, __span!(_o, _o + 1));
                                     call_reparse!($reparse, &mut *$state, $src, _o + 1, cp, $depth);
-                                    push_il!($tx, __span!(cp as u32, (cp + 1) as u32));
+                                    push_il!($tx, __span!(cp, cp + 1));
                                 } else {
                                     match 1u32 { $( $an => { push_il!($af, clean); } )* _ => {} }
                                     _kv_opaque = Some((_o, cp + 1));
@@ -1753,9 +1753,9 @@ macro_rules! parse_inline {
                     if let Some(cp) = close_pos {
                         if text_start < delim_start as usize {
                             push_il!($tx, __span!(
-                            text_start as u32, delim_start));
+                            text_start, delim_start));
                         }
-                        let clean = __span!(cs as u32, cp as u32);
+                        let clean = __span!(cs, cp);
                         $crate::parse_inline!(@choose $max_inline,
                             {
                                 match count { $( $an => { push_il!($af, clean); } )* _ => {} }
@@ -1764,9 +1764,9 @@ macro_rules! parse_inline {
                             {
                                 if over_limit!($max_inline, clean.start, clean.end) {
                                     push_il!($tx, __span!(
-                                        delim_start, cs as u32));
+                                        delim_start, cs));
                                     call_reparse!($reparse, &mut *$state, $src, cs, cp, $depth);
-                                    push_il!($tx, __span!(cp as u32, (cp + 1) as u32));
+                                    push_il!($tx, __span!(cp, cp + 1));
                                 } else {
                                     match count { $( $an => { push_il!($af, clean); } )* _ => {} }
                                     _kv_opaque = Some((delim_start as usize, cp + 1));
@@ -1827,7 +1827,7 @@ macro_rules! parse_inline {
                             }
                         }
                         if text_start < ks {
-                            push_il!($tx, __span!(text_start as u32, ks as u32));
+                            push_il!($tx, __span!(text_start, ks));
                         }
                         kv_pending[fdepth] = (ks as $off, key_end as $off, val_start as $off);
                         frames[fdepth] = ($kv_end, 0u8, 0 as $off);
@@ -1865,16 +1865,16 @@ macro_rules! parse_inline {
                             $crate::paste::paste! {
                                 $state.[<push_ $kv_f>]($kv_ty {
                                     $kv_kf: __span!(_ks, _ke),
-                                    $kv_vf: __span!(_vs, parse_end as u32),
+                                    $kv_vf: __span!(_vs, parse_end),
                                 });
                             }
                         },
                         {
-                            if !over_limit!($max_inline, _ks, parse_end as u32) {
+                            if !over_limit!($max_inline, _ks, parse_end) {
                                 $crate::paste::paste! {
                                     $state.[<push_ $kv_f>]($kv_ty {
                                         $kv_kf: __span!(_ks, _ke),
-                                        $kv_vf: __span!(_vs, parse_end as u32),
+                                        $kv_vf: __span!(_vs, parse_end),
                                     });
                                 }
                             }
@@ -1915,12 +1915,12 @@ macro_rules! parse_inline {
 
         // Flush any remaining plain text before the scanned span's end.
         if text_start < parse_end {
-            push_il!($tx, __span!(text_start as u32, parse_end as u32));
+            push_il!($tx, __span!(text_start, parse_end));
         }
         // Emit hard-break marker if detected.
         $( if _hb {
             $crate::paste::paste! {
-                $state.[<push_ $hb>](__span!(parse_end as u32, parse_end as u32));
+                $state.[<push_ $hb>](__span!(parse_end, parse_end));
             }
         } )*
 
