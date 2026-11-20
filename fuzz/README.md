@@ -42,9 +42,9 @@ fuzz_target!(|data: &[u8]| {
     if data.len() > MAX_INPUT_LEN {
         return;
     }
-    // Fuzz-only grammar: meon-md verbatim + one `key_value` rule sharing the
-    // unified frames/fdepth stack (see "Why a fuzz-only grammar" below).
-    let c = MdKvFuzzParser::parse(data);
+    // Fuzz-only grammar: meon-md-shaped rules + one `key_value` rule sharing
+    // the unified frames/fdepth stack (see "Why a fuzz-only grammar" below).
+    let c = MdKvFuzzParser::parse(data).unwrap();
 
     let check = |start: u32, end: u32| {
         assert!(start <= end);
@@ -73,10 +73,12 @@ fuzz_target!(|data: &[u8]| {
 
 ### Why a fuzz-only grammar
 
-The grammar is **not** `meon-md`'s published grammar. It is `meon-md`'s rule
-set copied verbatim plus exactly one addition: a `key_value` rule inside the
-same `on_trigger` block as `*` / `` ` `` / `<` / `[`, with `:` as its `eq`
-trigger (the `,` `end` byte is auto-added by the engine).
+The grammar is **not** `meon-md`'s published grammar. It uses the same rule
+shapes plus one addition: a `key_value` rule inside the same `on_trigger`
+block as `*` / `` ` `` / `<` / `[`, with `:` as its `eq` trigger (the `,`
+`end` byte is auto-added by the engine). It deliberately leaves `crlf`
+disabled, makes both `chained` components unbalanced, and writes `max_nest`
+in the header.
 
 The reason is coverage, not realism. `meon-md` declares no `key_value` rule, so
 the most intricate machinery in the engine — `key_value` frames sharing the

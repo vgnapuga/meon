@@ -186,8 +186,8 @@ fuzz_target!(|data: &[u8]| {
     // iterator to completion is the whole check; the items are already   //
     // bounded `&[u8]` slices by construction, so just consuming them is  //
     // enough to force the arithmetic. Only the delimiter-bearing inline  //
-    // fields are exercised (their `_raw` actually moves the bounds); a   //
-    // fallback like `texts` has `_raw == _clean == identity`.            //
+    // fields are exercised (their `_raw` actually moves the bounds);     //
+    // fallback fields like `texts` have `_clean` only, no `_raw`.        //
     // ------------------------------------------------------------------ //
     macro_rules! drain {
         ($it:expr) => {{ for _x in $it {} }};
