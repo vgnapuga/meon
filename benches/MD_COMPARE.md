@@ -162,7 +162,7 @@ by the `small` / `big` Cargo features of the `benches` package.
 
 ### Corpus composition
 
-**small (REPEAT_COUNT = 10)**
+**small (`--features benches/small`):**
 
 ```
 ┌─ corpus: plain
@@ -202,7 +202,7 @@ by the `small` / `big` Cargo features of the `benches` package.
 └─
 ```
 
-**big (REPEAT_COUNT = 1000, exceeds L3 cache)**
+**big (`--features benches/big`):**
 
 ```
 ┌─ corpus: plain
