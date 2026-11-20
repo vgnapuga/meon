@@ -249,7 +249,7 @@ fn fence_02_open_stores_byte_backtick() {
     let src = b"```";
     let mut active = None;
     run_block!(&mut active, src, 0, src.len());
-    assert_eq!(src[active.unwrap().1 as usize], b'`');
+    assert_eq!(src[active.unwrap().1], b'`');
 }
 
 // 03. The active state stores the correct consecutive marker count of three
@@ -396,7 +396,7 @@ fn cont_01_open_sets_active_disc_and_byte() {
     run_block!(&mut active, src, 0, src.len());
     let (count, start) = active.unwrap();
     assert_eq!(count, 0);
-    assert_eq!(src[start as usize], b'>');
+    assert_eq!(src[start], b'>');
 }
 
 // 02. Opening a continuation returns an opened state of true
@@ -512,8 +512,8 @@ fn nest_02_double_cont_stack_bytes() {
     let mut stack = [(0usize, 0usize); 4];
     let mut depth = 0;
     run_block_nested!(stack, depth, src, 0, src.len(), 4);
-    assert_eq!((stack[0].0, src[stack[0].1 as usize]), (0, b'>'));
-    assert_eq!((stack[1].0, src[stack[1].1 as usize]), (0, b'>'));
+    assert_eq!((stack[0].0, src[stack[0].1]), (0, b'>'));
+    assert_eq!((stack[1].0, src[stack[1].1]), (0, b'>'));
 }
 
 // 03. Continuing a double blockquote maintains the nesting depth

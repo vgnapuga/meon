@@ -296,8 +296,6 @@ impl Iterator for AsymmetricBalancedIter<'_> {
     }
 }
 
-/// End of a placeholder span: its frame is open, or was dropped unclosed.
-
 /// The frames one asymmetric rule keeps on the full parse's stack, and the
 /// spans they open, in open order.
 ///

@@ -16,7 +16,7 @@
 //! `to_tape` unescapes in place, so simd-json gets a fresh clone per iteration
 //! (excluded from the timed region via `iter_batched`); the other three read
 //! the original immutable bytes.
-
+//!
 //! Scenario: **warmed multi-parser process.** A one-time validation gate runs
 //! `simd-json` and `sonic-rs` before timing, so the allocator, pages and caches
 //! are shared and already warm. `meon-json_parse` is the isolated

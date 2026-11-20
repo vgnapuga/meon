@@ -467,7 +467,7 @@ fn expand(input: TS2) -> Result<TS2> {
             .clone()
             .unwrap_or_else(|| Ident::new("false", PS::call_site()));
         quote! {
-            #[allow(dead_code, non_snake_case)]
+            #[allow(dead_code, non_snake_case, clippy::too_many_arguments)]
             fn #reparse_helper(
                 state: &mut ParseState,
                 src: &[u8],

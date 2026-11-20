@@ -26,7 +26,7 @@
 //! - The `&str` view of each corpus is taken once, outside the timed region.
 //! - `Throughput::Bytes` reports GiB/s, comparable across builds on the *same*
 //!   corpora.
-
+//!
 //! Scenario: **warmed multi-parser process.** A one-time sanity pass runs
 //! meon-md, pulldown-cmark and comrak before timing, so the allocator, pages
 //! and caches are shared and already warm. `meon-md_parse` is the isolated

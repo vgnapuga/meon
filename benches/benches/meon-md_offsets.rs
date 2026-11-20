@@ -192,7 +192,7 @@ fn large_corpora() -> Vec<(&'static str, String)> {
     ]
     .into_iter()
     .map(|(label, base)| {
-        let reps = (LARGE_TARGET_BYTES + base.len() - 1) / base.len();
+        let reps = LARGE_TARGET_BYTES.div_ceil(base.len());
         (label, base.repeat(reps))
     })
     .collect()

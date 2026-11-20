@@ -131,7 +131,8 @@ pub fn corpora_u16() -> Vec<(&'static str, String)> {
 
 /// The same three JSON documents, grown until each reaches `target` bytes.
 pub fn corpora_large(target: usize) -> Vec<(&'static str, String)> {
-    let makers: [(&'static str, fn(usize) -> String); 3] = [
+    type Maker = (&'static str, fn(usize) -> String);
+    let makers: [Maker; 3] = [
         ("numbers", doc_numbers_with),
         ("objects", doc_objects_with),
         ("nested", doc_nested_with),

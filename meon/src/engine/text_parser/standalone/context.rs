@@ -1051,6 +1051,7 @@ impl<T: crate::span::SpanIndex> ParseContext<T> {
     /// Build the context with optional span caps. Over-long opaque regions
     /// are left out, so a context-aware finder can see the content inside
     /// them; the full parser reparses those regions.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_with_limits_offset(
         source: &[u8],
         escape: u8,
@@ -1072,6 +1073,7 @@ impl<T: crate::span::SpanIndex> ParseContext<T> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_inner(
         source: &[u8],
         escape: u8,
@@ -1312,9 +1314,9 @@ impl<T: crate::span::SpanIndex> ParseContext<T> {
         };
         for i in 0..spans.len() {
             let over = if is_fence[i] {
-                max_block.map_or(false, |l| clean_len[i] > l as usize)
+                max_block.is_some_and(|l| clean_len[i] > l as usize)
             } else {
-                max_inline.map_or(false, |l| clean_len[i] > l as usize)
+                max_inline.is_some_and(|l| clean_len[i] > l as usize)
             };
             if !over {
                 out.spans.push(spans[i]);
@@ -1376,6 +1378,7 @@ impl ParseContext<u32> {
     }
 
     /// Build the context with optional span caps and `u32` offsets.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_with_limits(
         source: &[u8],
         escape: u8,

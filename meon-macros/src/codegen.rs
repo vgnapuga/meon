@@ -47,6 +47,7 @@ pub(crate) fn build_define_content(name: &Ident, off: &TS2, cf: &CF, mc: &TS2) -
 
 /// Emit the rule list consumed by `define_standalone_fns!`, prefixed with the
 /// `sep`/`eol`/`tab`/`escape` context.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_standalone_dsl(
     sep: &Literal,
     eol: &Literal,

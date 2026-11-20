@@ -621,7 +621,7 @@ where
                         self.pos = cu + 1;
                         return Some((self.make)(
                             prefix,
-                            Span::<O>::from_usize(first.0 as usize, first.1 as usize),
+                            Span::<O>::from_usize(first.0, first.1),
                             Span::<O>::from_usize(start, cu),
                         ));
                     }
