@@ -55,6 +55,22 @@ handed a fresh clone per iteration; that clone is `iter_batched` setup and is
 The same per-corpus composition report (structural + typed counts) as the
 intra-engine benches is printed before timing.
 
+### Cold and warmed scenarios
+
+`meon-json_parse` is the **isolated** scenario: only `meon-json` is timed, and
+no cross-parser validation gate or other parser's timed benchmark runs before
+it. The shared composition report still runs before timing.
+
+`meon-json_compare` is the **warmed** scenario: all four parsers run in the same
+process, and a one-time validation gate runs `simd-json` and `sonic-rs` before
+timing. The allocator, pages and caches are therefore shared and already warm.
+`simd-json` and `sonic-rs` are measured under the same warmed conditions as the
+two `meon-json` lines, so the four-way comparison inside `_compare` is
+internally consistent.
+
+Absolute numbers from `_parse` and `_compare` answer different questions and are
+not interchangeable.
+
 ---
 
 ## Two different jobs

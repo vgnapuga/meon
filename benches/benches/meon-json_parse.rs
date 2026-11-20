@@ -9,6 +9,11 @@
 //! This is an intra-engine benchmark (meon-json against itself). For the
 //! cross-parser comparison against simd-json and others see `meon-json_compare`.
 
+//! Scenario: **isolated single-parser run.** Only `meon-json` is timed; there
+//! is no cross-parser validation gate or other parser's timed benchmark before
+//! it. `meon-json_compare` is the warmed multi-parser scenario; absolute
+//! numbers across the two are not interchangeable.
+//!
 mod docs_json;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};

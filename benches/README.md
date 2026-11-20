@@ -16,6 +16,19 @@ output shapes (see [Scope & fairness](#scope--fairness)).
 | `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — structural / typed parse.   |
 | `meon-json_compare`   | meon-json vs `simd-json` / `sonic-rs` — cross-parser throughput.     |
 
+### Cold and warmed scenarios
+
+- `meon-md_parse` and `meon-json_parse` — **isolated**: only the engine parser
+  is timed; no cross-parser sanity pass or other parser's timed benchmark runs
+  before it.
+- `meon-md_compare` and `meon-json_compare` — **warmed**: all compared parsers
+  run in one process after a one-time sanity/validation pass, so the allocator,
+  pages and caches are shared and already warm. `pulldown-cmark`, `comrak`,
+  `simd-json` and `sonic-rs` are measured under the same conditions as the
+  corresponding meon parser.
+- Absolute numbers from `_parse` and `_compare` answer different questions and
+  are not interchangeable.
+
 Per-corpus composition reports, full result tables, and the cross-parser
 numbers live in their own documents — this file is the overview, how-to-run,
 fairness frame and test hardware. For the cross-parser comparisons see

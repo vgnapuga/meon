@@ -17,6 +17,12 @@
 //! (excluded from the timed region via `iter_batched`); the other three read
 //! the original immutable bytes.
 
+//! Scenario: **warmed multi-parser process.** A one-time validation gate runs
+//! `simd-json` and `sonic-rs` before timing, so the allocator, pages and caches
+//! are shared and already warm. `meon-json_parse` is the isolated
+//! single-parser scenario; absolute numbers across the two are not
+//! interchangeable.
+//!
 mod docs_json;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};

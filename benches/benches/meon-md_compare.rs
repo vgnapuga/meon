@@ -27,6 +27,12 @@
 //! - `Throughput::Bytes` reports GiB/s, comparable across builds on the *same*
 //!   corpora.
 
+//! Scenario: **warmed multi-parser process.** A one-time sanity pass runs
+//! meon-md, pulldown-cmark and comrak before timing, so the allocator, pages
+//! and caches are shared and already warm. `meon-md_parse` is the isolated
+//! single-parser scenario; absolute numbers across the two are not
+//! interchangeable.
+//!
 mod docs_md;
 
 use comrak::{Arena, Options, parse_document};

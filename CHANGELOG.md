@@ -73,6 +73,10 @@ every entry below is labelled with the crate(s) it applies to.
   `offset`, `Span<T>`, the per-type input bound and the checked/unchecked API.
 - `benches/README.md`, `MD_COMPARE.md` and `JSON_COMPARE.md` document the
   `small`/`big` Cargo features.
+- `benches/README.md`, `MD_COMPARE.md`, `JSON_COMPARE.md`, `meon-md_parse.rs`,
+  `meon-md_compare.rs`, `meon-json_parse.rs` and `meon-json_compare.rs` document
+  the isolated (`_parse`) and warmed (`_compare`) scenarios; absolute numbers
+  across them are not interchangeable.
 
 ### Benchmarks
 

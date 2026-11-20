@@ -53,6 +53,23 @@ stream, no owned tree). `comrak` is the upper bound: it builds an owned AST.
 The same per-corpus composition report as the intra-engine benches is printed
 before timing.
 
+### Cold and warmed scenarios
+
+`meon-md_parse` is the **isolated** scenario: only `meon-md` is timed, and no
+cross-parser sanity pass or other parser's timed benchmark runs before it. The
+shared composition report still runs before timing, but the measured process is
+otherwise meon-only.
+
+`meon-md_compare` is the **warmed** scenario: all three parsers run in the same
+process, and a one-time sanity pass runs all three before timing. The allocator,
+pages and caches are therefore shared and already warm. `pulldown-cmark` and
+`comrak` are measured under the same warmed conditions as `meon-md`, so the
+three-way comparison inside `_compare` is internally consistent.
+
+Absolute numbers from `_parse` and `_compare` answer different questions and are
+not interchangeable. Use `_parse` for an isolated single-parser run and
+`_compare` for the warmed multi-parser scenario.
+
 ---
 
 ## Two different jobs
