@@ -7,6 +7,13 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [1.0.1] - 2026.11.21
+
+### Fixed
+- **`meon`** — replaced the unmaintained `paste` dependency with `pastey`.
+- **`benches`** — updated `criterion` and `pulldown-cmark`; the lockfile
+  updates `crossbeam-epoch`.
+
 ## [1.0.0] - 2026.11.20
 
 ### Added
