@@ -14,6 +14,7 @@ output shapes (see [Scope & fairness](#scope--fairness)).
 | `meon-md_compare`     | meon-md vs `pulldown-cmark` / `comrak` — cross-parser throughput.    |
 | `meon-md_offsets`     | small corpora with `Span<u16/u32/u64>`; 32 MiB corpora with `u32/u64`. |
 | `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — structural / typed parse.   |
+| `meon-json_standalone`| `find_*` iterators, the `context()` map and `find_context_*` variants. |
 | `meon-json_offsets`   | small corpora with `Span<u16/u32/u64>`; 32 MiB corpora with `u32/u64`. |
 | `meon-json_compare`   | meon-json vs `simd-json` / `sonic-rs` — cross-parser throughput.     |
 
@@ -122,6 +123,7 @@ cargo bench --bench meon-md_standalone
 cargo bench --bench meon-md_compare
 cargo bench --bench meon-md_offsets
 cargo bench --bench meon-json_parse
+cargo bench --bench meon-json_standalone
 cargo bench --bench meon-json_offsets
 cargo bench --bench meon-json_compare
 
@@ -129,7 +131,10 @@ cargo bench --bench meon-json_compare
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_parse        --features avx2
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_standalone   --features avx2
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_compare      --features avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_offsets      --features avx2
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_parse      --features avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_standalone --features avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_offsets    --features avx2
 RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_compare    --features avx2
 
 # Working-set size: `small` (default) or `big` (100x larger).

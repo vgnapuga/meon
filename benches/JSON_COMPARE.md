@@ -139,10 +139,10 @@ and the knobs in `benches/benches/docs_json.rs`.
 
 ## Corpora
 
-Each corpus is one valid top-level JSON array, scaled by `COUNT`
+Each corpus is one valid top-level JSON array, scaled by `REPEAT_COUNT`
 (`benches/benches/docs_json.rs`). The `small` and `big` runs differ only in
-`COUNT`, selected by the `small` / `big` Cargo features of the `benches`
-package.
+`REPEAT_COUNT`, selected by the `small` / `big` Cargo features of the
+`benches` package.
 
 | Corpus    | Shape                                                                                     | Stresses                                                                 |
 |-----------|-------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
@@ -697,15 +697,14 @@ pulling just the strings from them means materialising the whole tape / owned
 single-kind extraction is part of the architecture difference this document is
 about.
 
-Each line reports `full` vs `standalone` counts. For JSON they diverge more than
-for a flat format, because `find_*` is **nesting-insensitive**: `find_objects`
-matches only the literal `{` delimiter and does not track depth, so on `nested`
-it sees the 2M / 20k top-level objects rather than the 5M / 50k a full parse
-resolves, and `find_members` under-counts the same way. `find_strings` is exact
-(string content has no nesting), which is why it is the recommended single-sweep
-use. This is the documented trade-off — reach for `find_*` only for a
-nesting-insensitive sweep; use the full `parse` when you need correct
-containment (see
+Each line reports `full` vs `standalone` counts. For JSON the remaining
+divergence comes from rules that do not see other rules: `find_objects` and
+`find_arrays` track their own bracket nesting, but a bracket inside a string
+is still a bracket to them, and `find_members` does not see surrounding
+containers, so nested members are not found. `find_strings` is exact (string
+content has no nesting), which is why it is the recommended single-sweep use.
+Use the full `parse` or the context-aware finders when containment matters
+(see
 [`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators)).
 Shown for both `small` and `big`.
 

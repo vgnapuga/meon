@@ -16,7 +16,7 @@
 //! resolution, no rendering); pulldown-cmark/comrak parse full CommonMark. meon
 //! will look faster because it does less. `Throughput::Bytes` measures *ingest
 //! of different work*, not "equivalent result per second". See
-//! `benches/COMPARISON.md` for the full fairness frame (feature delta, corpus
+//! `benches/MD_COMPARE.md` for the full fairness frame (feature delta, corpus
 //! bias, SIMD/build-flag parity).
 //!
 //! Fairness knobs, identical to the intra-engine benches:
