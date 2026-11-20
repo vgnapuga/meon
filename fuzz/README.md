@@ -219,6 +219,7 @@ cargo fuzz run parse_text fuzz/corpus/parse_text -- -runs=0
 | v0.5.0          | 2026-07-18 | nightly-2026-05-22 | ~120M      | 4196 | 26488 | 6641/1610Kb | ~8k    | 650Mb |
 | v0.6.0          | 2026-10-02 | nightly-2026-05-22 | ~200M      | 4497 | 28312 | 7282/1793Kb | ~6k    | 638Mb |
 | v0.7.0          | 2026-11-17 | nightly-2026-05-22 | ~30M       | 4980 | 30787 | 6775/2134Kb | ~5k    | 639Mb |
+| v1.0.0          | 2026-11-20 | nightly-2026-05-22 | ~220M      | 5115 | 31657 | 7175/1728Kb | ~6k    | 808Mb |
 
 **Coverage saturation** at `cov: 3529 ft: 22591 corp: 6641/1610Kb` means
 libFuzzer exhausted reachable branches on random inputs without seeds. Adding

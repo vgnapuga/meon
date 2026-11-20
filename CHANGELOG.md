@@ -91,11 +91,35 @@ every entry below is labelled with the crate(s) it applies to.
   size; `big` is 100× `small`. Benchmarks call the checked parser APIs with
   `unwrap`. New `meon-md_offsets` and `meon-json_offsets` targets parse their
   respective small corpora with `Span<u16>`, `Span<u32>` and `Span<u64>`
-  offsets, and 32 MiB corpora with `Span<u32>` and `Span<u64>`. No throughput
-  numbers were re-measured for this entry.
+  offsets, and 32 MiB corpora with `Span<u32>` and `Span<u64>`.
+
+Median full-parse throughput from the comparison runs, `small → big`:
+
+| Corpus                     | Stable            | Nightly + AVX2          |
+|----------------------------|-------------------|-------------------------|
+| Markdown `plain`           | 3.07 → 2.96 GiB/s | 4.41 → 4.18 GiB/s       |
+| Markdown `hot`             | 981 → 976 MiB/s   | 1.228 → 1.229 GiB/s     |
+| Markdown `heavy`           | 806 → 808 MiB/s   | 930 → 950 MiB/s         |
+| JSON `numbers`, structural | 854 → 904 MiB/s   | 962 MiB/s → 1.043 GiB/s |
+| JSON `objects`, structural | 401 → 303 MiB/s   | 424 → 315 MiB/s         |
+| JSON `nested`, structural  | 248 → 193 MiB/s   | 269 → 202 MiB/s         |
+
+The Markdown composition report agrees with pulldown-cmark on the three
+generated corpora under its mapping of element counts and plain-text byte
+coverage. On the large JSON `nested` corpus, the structural pass reaches
+193 MiB/s on stable and the parse with scalar typing reaches 161 MiB/s.
+The corresponding nightly + AVX2 figures are 202 and 160 MiB/s. On the
+small stable corpora, Markdown `find_links` reaches 5.77 GiB/s on `heavy`,
+and JSON `find_objects` reaches 1.56 GiB/s on `nested`. The JSON
+`find_context_objects` pass reaches 1.22 GiB/s with a prebuilt context and
+130 MiB/s when building the context is included.
 
 ### Testing
 
+- **Fuzzing (`v1.0.0` campaign, 2026-11-20).** The `parse_text` target ran
+  ~220M executions on nightly-2026-05-22 at ~6k exec/s and 808 MB RSS. The
+  campaign log reports `cov` 4980 → 5115, `ft` 30787 → 31657 and corpus
+  6775/2134 KB → 7175/1728 KB compared with the `v0.7.0` entry.
 - Unit, UI (`trybuild`) and mechanism tests cover the `limits` section,
   `max_input_bytes`, and `offset = u8/u16/u32/u64`; the full workspace test
   suite passes.
