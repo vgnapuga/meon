@@ -7,7 +7,7 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
-## [Unreleased]
+## [1.0.0] - 2026.11.20
 
 ### Added
 
