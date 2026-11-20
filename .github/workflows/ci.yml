@@ -45,6 +45,22 @@ jobs:
           cargo clippy --workspace --exclude fuzz --all-targets --locked
           -- -D warnings -A clippy::manual_is_multiple_of
 
+      - name: Documentation
+        run: >
+          RUSTDOCFLAGS="-D warnings" cargo doc
+          --workspace --exclude fuzz --no-deps --locked
+
+      # meon-md/meon-json depend on the published `meon`; their verification
+      # against crates.io only works after `meon` itself is released. The
+      # package contents and manifests are still checked here, and compilation
+      # is covered by Build/Test.
+      - name: Package
+        run: |
+          cargo package -p meon-macros --locked
+          cargo package -p meon --locked
+          cargo package -p meon-md --locked --no-verify
+          cargo package -p meon-json --locked --no-verify
+
       - name: Build
         run: cargo build --workspace --exclude fuzz --locked
 
