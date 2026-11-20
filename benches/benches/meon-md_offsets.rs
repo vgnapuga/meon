@@ -181,6 +181,70 @@ fn report_output(label: &str, bytes: &[u8]) {
     println!("│  output elements: u16 {n16}, u32 {n32}, u64 {n64}  ({label})");
 }
 
+const LARGE_TARGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// The same three base documents, repeated past a typical L3 cache.
+fn large_corpora() -> Vec<(&'static str, String)> {
+    [
+        ("plain", docs_md::doc_plain()),
+        ("hot", docs_md::doc_hot()),
+        ("heavy", docs_md::doc_heavy()),
+    ]
+    .into_iter()
+    .map(|(label, base)| {
+        let reps = (LARGE_TARGET_BYTES + base.len() - 1) / base.len();
+        (label, base.repeat(reps))
+    })
+    .collect()
+}
+
+fn report_large(label: &str, bytes: &[u8]) {
+    let c32 = u32::MarkdownU32Parser::parse(bytes).unwrap();
+    let c64 = u64::MarkdownU64Parser::parse(bytes).unwrap();
+
+    let (m32, n32) = output_mem!(&c32, u32, LinkU32);
+    let (m64, n64) = output_mem!(&c64, u64, LinkU64);
+    let pct = |m: usize| 100.0 * m as f64 / bytes.len() as f64;
+
+    println!(
+        "│  large {label}: {:.1} MiB, output heap u32 {} B ({:.1}%), u64 {} B ({:.1}%); elements u32 {n32}, u64 {n64}",
+        bytes.len() as f64 / (1024.0 * 1024.0),
+        m32,
+        pct(m32),
+        m64,
+        pct(m64)
+    );
+}
+
+fn bench_large(c: &mut Criterion) {
+    for (label, doc) in large_corpora() {
+        let bytes = doc.as_bytes();
+
+        report_large(label, bytes);
+
+        let mut group = c.benchmark_group(format!("offsets-large/{label}"));
+        group.throughput(Throughput::Bytes(bytes.len() as u64));
+        group.sample_size(docs_md::SAMPLE_SIZE);
+        group.measurement_time(Duration::from_secs(docs_md::SAMPLE_TIME));
+        group.warm_up_time(Duration::from_secs(docs_md::WARMUP_TIME));
+
+        group.bench_function("u32", |b| {
+            b.iter(|| {
+                let content = u32::MarkdownU32Parser::parse(black_box(bytes)).unwrap();
+                black_box(content);
+            });
+        });
+        group.bench_function("u64", |b| {
+            b.iter(|| {
+                let content = u64::MarkdownU64Parser::parse(black_box(bytes)).unwrap();
+                black_box(content);
+            });
+        });
+
+        group.finish();
+    }
+}
+
 fn bench_offsets(c: &mut Criterion) {
     for (label, doc) in docs_md::corpora_u16() {
         let bytes = doc.as_bytes();
@@ -217,5 +281,5 @@ fn bench_offsets(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_offsets);
+criterion_group!(benches, bench_offsets, bench_large);
 criterion_main!(benches);
