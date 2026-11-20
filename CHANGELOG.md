@@ -24,17 +24,19 @@ every entry below is labelled with the crate(s) it applies to.
   check and the parser reads only the prefix that fits. The checked methods
   reject an over-limit source with `InputBytesTooLarge` before allocating any
   parser state; when no limit is set, no check code is generated.
-- Span caps are measured on the clean span, `end - start` without delimiters.
-  `0` and the offset type's maximum mean absent; a value above the offset
-  maximum is a compile error. When a cap is absent, no comparison, fallback or
-  reparse code is generated for that level.
-- An over-limit span is not emitted: a transparent inline span keeps its text
-  and inner spans; an opaque inline span and a `chained` element are reparsed
-  inside; a `key_value` pair is dropped without reparse; a line or block item
-  span goes to `blocks { fallback => ... }`; an over-long fence is reparsed as
-  paragraph runs, skipping the `cont` markers of the frames that held it.
-- `find_*` and `find_context_*` apply the caps. `ParseContext` drops an
-  over-limit opaque region and rescans its interior for nested regions.
+- **`meon`** — span caps are measured on the clean span, `end - start`
+  without delimiters. `0` and the offset type's maximum mean absent; a value
+  above the offset maximum is a compile error. When a cap is absent, no
+  comparison, fallback or reparse code is generated for that level.
+- **`meon`** — an over-limit span is not emitted: a transparent inline span
+  keeps its text and inner spans; an opaque inline span and a `chained`
+  element are reparsed inside; a `key_value` pair is dropped without reparse;
+  a line or block item span goes to `blocks { fallback => ... }`; an over-long
+  fence is reparsed as paragraph runs, skipping the `cont` markers of the
+  frames that held it.
+- **`meon`** — `find_*` and `find_context_*` apply the caps. `ParseContext`
+  drops an over-limit opaque region and rescans its interior for nested
+  regions.
 
 ### Changed
 
@@ -62,10 +64,15 @@ every entry below is labelled with the crate(s) it applies to.
 
 ### Fixed
 
-- A `chained` over-limit match keeps its delimiters in source order.
-- An opaque key keeps its full span through the key-value parser.
-- Context caps are measured on the clean span, not on the delimiter-inclusive
-  region.
+- **`meon`** — a `chained` over-limit match keeps its delimiters in source
+  order.
+- **`meon`** — an opaque key keeps its full span through the key-value parser.
+- **`meon`** — context caps are measured on the clean span, not on the
+  delimiter-inclusive region.
+- **`meon`** — chained and key-value close offsets are stored in the selected
+  span type.
+- **`meon`** — the no-limit inline scan keeps its state by value instead of a
+  redundant mutable borrow.
 - **`meon`** — full-parse span construction keeps positions in `usize`/the
   selected offset type, so `offset = u64` no longer truncates inline, line or
   block spans above the `u32` range.
@@ -76,14 +83,14 @@ every entry below is labelled with the crate(s) it applies to.
 
 ### Documentation
 
-- `README.md`, crate `README.md`s, `ARCHITECTURE.md` §19 and rustdoc describe
-  `offset`, `Span<T>`, the per-type input bound and the checked/unchecked API.
+- `README.md`, crate `README.md`s, `ARCHITECTURE.md` and rustdoc describe
+  `offset`, `Span<T>`, the per-type input bound, the checked/unchecked API,
+  block and inline internals, accessor/finder/context coverage and the DSL
+  requirements.
 - `benches/README.md`, `MD_COMPARE.md` and `JSON_COMPARE.md` document the
-  `small`/`big` Cargo features.
-- `benches/README.md`, `MD_COMPARE.md`, `JSON_COMPARE.md`, `meon-md_parse.rs`,
-  `meon-md_compare.rs`, `meon-json_parse.rs` and `meon-json_compare.rs` document
-  the isolated (`_parse`) and warmed (`_compare`) scenarios; absolute numbers
-  across them are not interchangeable.
+  `small`/`big` Cargo features, the isolated (`_parse`) and warmed
+  (`_compare`) scenarios, and the current benchmark targets.
+- `FAQ.md` and `fuzz/README.md` are updated to the current behavior.
 
 ### Benchmarks
 
@@ -91,7 +98,8 @@ every entry below is labelled with the crate(s) it applies to.
   size; `big` is 100× `small`. Benchmarks call the checked parser APIs with
   `unwrap`. New `meon-md_offsets` and `meon-json_offsets` targets parse their
   respective small corpora with `Span<u16>`, `Span<u32>` and `Span<u64>`
-  offsets, and 32 MiB corpora with `Span<u32>` and `Span<u64>`.
+  offsets, and 32 MiB corpora with `Span<u32>` and `Span<u64>`; the offset
+  benchmarks also report output heap.
 
 Median full-parse throughput from the comparison runs, `small → big`:
 
@@ -123,6 +131,15 @@ and JSON `find_objects` reaches 1.56 GiB/s on `nested`. The JSON
 - Unit, UI (`trybuild`) and mechanism tests cover the `limits` section,
   `max_input_bytes`, and `offset = u8/u16/u32/u64`; the full workspace test
   suite passes.
+
+### CI
+
+- The lint job runs formatting, clippy, rustdoc with warnings denied, and
+  package checks with locked dependencies.
+- Tests run on Linux, macOS and Windows, plus MSRV and 32-bit checks; nightly
+  covers all features and both bench feature sets.
+- Security covers advisories and dependency review; Dependabot keeps
+  dependencies current, and a coverage job publishes an lcov artifact.
 
 ## [0.7.0] - 2026-11-19
 
