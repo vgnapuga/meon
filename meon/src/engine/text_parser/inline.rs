@@ -1011,7 +1011,7 @@ macro_rules! parse_inline {
                     let _ve = if delim == $eol {
                         (content_end!(delim_start as usize) as $off).max(_vs)
                     } else {
-                        delim_start
+                        delim_start as $off
                     };
                     $crate::parse_inline!(@choose $max_inline,
                         {
