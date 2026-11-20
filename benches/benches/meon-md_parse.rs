@@ -26,8 +26,9 @@
 //!
 mod docs_md;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon_md::MarkdownParser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_parse(c: &mut Criterion) {

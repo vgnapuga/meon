@@ -25,8 +25,9 @@
 //!
 mod docs_json;
 
-use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use meon_json::JsonParser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_compare(c: &mut Criterion) {

@@ -12,12 +12,13 @@
 
 mod docs_md;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon::span::Span;
 use meon_md::types::{
     block::{BulletItem, OrderedItem},
     line::{Heading, ThematicBreak},
 };
+use std::hint::black_box;
 use std::num::NonZeroU8;
 use std::time::Duration;
 

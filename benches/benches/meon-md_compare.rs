@@ -36,9 +36,10 @@
 mod docs_md;
 
 use comrak::{Arena, Options, parse_document};
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon_md::MarkdownParser;
 use pulldown_cmark::Parser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_compare(c: &mut Criterion) {
