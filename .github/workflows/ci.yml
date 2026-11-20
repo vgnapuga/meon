@@ -87,6 +87,46 @@ jobs:
       - name: Test
         run: cargo test --workspace --exclude fuzz --locked
 
+  msrv:
+    name: msrv (1.86)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.86
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.86.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check MSRV
+        run: cargo check --workspace --exclude fuzz --locked
+
+  32bit:
+    name: 32-bit (i686)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain with i686 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check 32-bit
+        run: >
+          cargo check --workspace --exclude fuzz
+          --target i686-unknown-linux-gnu --locked
+
   nightly:
     name: nightly
     runs-on: ubuntu-latest
