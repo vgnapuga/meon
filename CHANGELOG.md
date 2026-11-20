@@ -66,6 +66,13 @@ every entry below is labelled with the crate(s) it applies to.
 - An opaque key keeps its full span through the key-value parser.
 - Context caps are measured on the clean span, not on the delimiter-inclusive
   region.
+- **`meon`** — full-parse span construction keeps positions in `usize`/the
+  selected offset type, so `offset = u64` no longer truncates inline, line or
+  block spans above the `u32` range.
+- **`meon-macros`** — the front-end rejects a non-integer header `max_nest`,
+  an unknown top-level section, invalid `merge_simple` values, malformed
+  `hard_break`/`on_trigger` argument lists, a non-`max` second `line`
+  argument, and a stacked `asymmetric` rule with no `1 => field` arm.
 
 ### Documentation
 
