@@ -150,7 +150,16 @@ jobs:
       - name: Test (avx2)
         run: cargo test --workspace --exclude fuzz --features avx2 --locked
 
-      - name: Clippy (nightly, avx2)
+      - name: Check all features
+        run: cargo check --workspace --exclude fuzz --all-features --locked
+
+      - name: Check bench features (small)
+        run: cargo check -p benches --benches --features small --locked
+
+      - name: Check bench features (big)
+        run: cargo check -p benches --benches --features big --locked
+
+      - name: Clippy (nightly, all features)
         run: >
-          cargo clippy --workspace --exclude fuzz --all-targets --features avx2 --locked
+          cargo clippy --workspace --exclude fuzz --all-targets --all-features --locked
           -- -D warnings -A clippy::manual_is_multiple_of
