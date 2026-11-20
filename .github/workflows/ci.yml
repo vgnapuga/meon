@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,6 +21,7 @@ jobs:
   stable:
     name: stable
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -33,20 +42,21 @@ jobs:
       # so it is excluded from every stable step.
       - name: Clippy
         run: >
-          cargo clippy --workspace --exclude fuzz --all-targets
+          cargo clippy --workspace --exclude fuzz --all-targets --locked
           -- -D warnings -A clippy::manual_is_multiple_of
 
       - name: Build
-        run: cargo build --workspace --exclude fuzz
+        run: cargo build --workspace --exclude fuzz --locked
 
       # --workspace runs meon's own lib unit tests (standalone iterators, swar,
       # span, common) that the previous per-target list silently skipped.
       - name: Test
-        run: cargo test --workspace --exclude fuzz
+        run: cargo test --workspace --exclude fuzz --locked
 
   nightly:
     name: nightly
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -61,12 +71,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build (avx2)
-        run: cargo build --workspace --exclude fuzz --features avx2
+        run: cargo build --workspace --exclude fuzz --features avx2 --locked
 
       - name: Test (avx2)
-        run: cargo test --workspace --exclude fuzz --features avx2
+        run: cargo test --workspace --exclude fuzz --features avx2 --locked
 
       - name: Clippy (nightly, avx2)
         run: >
-          cargo clippy --workspace --exclude fuzz --all-targets --features avx2
+          cargo clippy --workspace --exclude fuzz --all-targets --features avx2 --locked
           -- -D warnings -A clippy::manual_is_multiple_of
