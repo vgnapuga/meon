@@ -16,11 +16,18 @@
 //! `to_tape` unescapes in place, so simd-json gets a fresh clone per iteration
 //! (excluded from the timed region via `iter_batched`); the other three read
 //! the original immutable bytes.
-
+//!
+//! Scenario: **warmed multi-parser process.** A one-time validation gate runs
+//! `simd-json` and `sonic-rs` before timing, so the allocator, pages and caches
+//! are shared and already warm. `meon-json_parse` is the isolated
+//! single-parser scenario; absolute numbers across the two are not
+//! interchangeable.
+//!
 mod docs_json;
 
-use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use meon_json::JsonParser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_compare(c: &mut Criterion) {
@@ -54,7 +61,7 @@ fn bench_compare(c: &mut Criterion) {
         // meon-json: structural span table only.
         group.bench_function("meon-structural", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });
@@ -62,7 +69,7 @@ fn bench_compare(c: &mut Criterion) {
         // meon-json: structural + first-byte scalar typing.
         group.bench_function("meon-typed", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 let typed = content.type_scalars();
                 black_box(typed);
             });

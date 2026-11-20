@@ -61,7 +61,7 @@ fn bounds(spans: &[Span]) -> Vec<(u32, u32)> {
 #[test]
 fn test_01_single_number_member_typed() {
     let src = br#"{"a":1}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(texts(src, &t.nums), vec!["1"]);
     assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
@@ -71,7 +71,7 @@ fn test_01_single_number_member_typed() {
 #[test]
 fn test_02_negative_number_member_typed() {
     let src = br#"{"a":-7}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["-7"]);
 }
 
@@ -79,7 +79,7 @@ fn test_02_negative_number_member_typed() {
 #[test]
 fn test_03_true_member_typed() {
     let src = br#"{"a":true}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().trues), vec!["true"]);
 }
 
@@ -87,7 +87,7 @@ fn test_03_true_member_typed() {
 #[test]
 fn test_04_false_member_typed() {
     let src = br#"{"a":false}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().falses), vec!["false"]);
 }
 
@@ -95,7 +95,7 @@ fn test_04_false_member_typed() {
 #[test]
 fn test_05_null_member_typed() {
     let src = br#"{"a":null}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nulls), vec!["null"]);
 }
 
@@ -104,7 +104,7 @@ fn test_05_null_member_typed() {
 #[test]
 fn test_06_string_member_not_typed() {
     let src = br#"{"a":"hello"}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -115,7 +115,7 @@ fn test_06_string_member_not_typed() {
 #[test]
 fn test_07_object_member_not_typed_directly() {
     let src = br#"{"a":{"b":1}}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     // Only the inner "b":1 pair types; the outer "a":{...} value does not.
     assert_eq!(texts(src, &t.nums), vec!["1"]);
@@ -126,7 +126,7 @@ fn test_07_object_member_not_typed_directly() {
 #[test]
 fn test_08_mixed_members_all_kinds_typed_correctly() {
     let src = br#"{"i":0,"n":-100,"t":true,"f":false,"z":null,"s":"hi"}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(sorted_texts(src, &t.nums), vec!["-100", "0"]);
     assert_eq!(texts(src, &t.trues), vec!["true"]);
@@ -142,7 +142,7 @@ fn test_08_mixed_members_all_kinds_typed_correctly() {
 #[test]
 fn test_09_flat_numeric_array_elements_typed() {
     let src = br#"[1, 2, -3, 42]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         sorted_texts(src, &c.type_scalars().nums),
         vec!["-3", "1", "2", "42"]
@@ -154,7 +154,7 @@ fn test_09_flat_numeric_array_elements_typed() {
 #[test]
 fn test_10_mixed_array_elements_typed() {
     let src = br#"[true, false, null, "apple", 3.14]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(texts(src, &t.trues), vec!["true"]);
     assert_eq!(texts(src, &t.falses), vec!["false"]);
@@ -171,7 +171,7 @@ fn test_10_mixed_array_elements_typed() {
 #[test]
 fn test_11_nested_array_elements_typed_via_own_entry() {
     let src = br#"[[1, 2], [3, 4]]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         sorted_texts(src, &c.type_scalars().nums),
         vec!["1", "2", "3", "4"]
@@ -184,7 +184,7 @@ fn test_11_nested_array_elements_typed_via_own_entry() {
 #[test]
 fn test_12_array_inside_object_member_elements_typed() {
     let src = br#"{"a":[1,2,3]}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         sorted_texts(src, &c.type_scalars().nums),
         vec!["1", "2", "3"]
@@ -196,7 +196,7 @@ fn test_12_array_inside_object_member_elements_typed() {
 #[test]
 fn test_13_double_comma_array_no_phantom_scalar() {
     let src = br#"[1,,2]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(sorted_texts(src, &c.type_scalars().nums), vec!["1", "2"]);
 }
 
@@ -205,7 +205,7 @@ fn test_13_double_comma_array_no_phantom_scalar() {
 #[test]
 fn test_14_array_containing_strings_and_objects_not_misrouted() {
     let src = br#"["x", {"a":1}, "y"]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     // The only number here lives one level down, inside the object element.
     assert_eq!(texts(src, &t.nums), vec!["1"]);
@@ -221,7 +221,7 @@ fn test_14_array_containing_strings_and_objects_not_misrouted() {
 #[test]
 fn test_15_bare_top_level_number_typed() {
     let src = br#"42"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["42"]);
 }
 
@@ -229,7 +229,7 @@ fn test_15_bare_top_level_number_typed() {
 #[test]
 fn test_16_bare_top_level_true_typed() {
     let src = br#"true"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().trues), vec!["true"]);
 }
 
@@ -240,7 +240,7 @@ fn test_16_bare_top_level_true_typed() {
 #[test]
 fn test_17_bare_top_level_string_not_typed() {
     let src = br#""hello""#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert!(!c.strings.is_empty());
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
@@ -251,7 +251,7 @@ fn test_17_bare_top_level_string_not_typed() {
 #[test]
 fn test_18_bare_top_level_garbage_not_typed() {
     let src = br#"xyz"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -267,7 +267,7 @@ fn test_18_bare_top_level_garbage_not_typed() {
 #[test]
 fn test_19_type_field_num_matches_type_scalars_nums() {
     let src = br#"{"a":1,"b":[2,3]}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let full = c.type_scalars();
     let only = c.type_field(ScalarKind::Num);
     assert_eq!(bounds(&full.nums), bounds(&only));
@@ -277,7 +277,7 @@ fn test_19_type_field_num_matches_type_scalars_nums() {
 #[test]
 fn test_20_type_field_true_matches_type_scalars_trues() {
     let src = br#"[true, false, true]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         bounds(&c.type_scalars().trues),
         bounds(&c.type_field(ScalarKind::True))
@@ -289,7 +289,7 @@ fn test_20_type_field_true_matches_type_scalars_trues() {
 #[test]
 fn test_21_type_field_excludes_other_kinds() {
     let src = br#"{"a":1,"b":true,"c":null,"d":false,"e":2}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let nums = c.type_field(ScalarKind::Num);
     assert_eq!(sorted_texts(src, &nums), vec!["1", "2"]);
 }
@@ -298,7 +298,7 @@ fn test_21_type_field_excludes_other_kinds() {
 #[test]
 fn test_22_type_field_sees_top_level_scalars() {
     let src = br#"true"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_field(ScalarKind::True)), vec!["true"]);
     assert!(c.type_field(ScalarKind::Num).is_empty());
 }
@@ -313,7 +313,7 @@ fn test_22_type_field_sees_top_level_scalars() {
 #[test]
 fn test_23_whitespace_trimmed_before_classification() {
     let src = br#"{ "a" : 1 , "b" : 2 }"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     // Raw member values keep the trailing space (locked down elsewhere);
     // the typed span does not.
     assert_eq!(c.str(c.members[0].value).unwrap(), "1 ");
@@ -326,7 +326,7 @@ fn test_23_whitespace_trimmed_before_classification() {
 #[test]
 fn test_24_tab_after_colon_trimmed_for_typing() {
     let src = b"{\"a\":\t5}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.str(c.members[0].value).unwrap(), "\t5");
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
 }
@@ -337,7 +337,7 @@ fn test_24_tab_after_colon_trimmed_for_typing() {
 #[test]
 fn test_25_value_spanning_newline_trimmed_for_typing() {
     let src = b"{\"a\":\n  5\n}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.str(c.members[0].value).unwrap(), "\n  5\n");
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
 }
@@ -347,7 +347,7 @@ fn test_25_value_spanning_newline_trimmed_for_typing() {
 #[test]
 fn test_26_pretty_printed_array_elements_typed_across_lines() {
     let src = b"[\n  1,\n  2,\n  3\n]";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.arrays.len(), 1);
     assert_eq!(
         sorted_texts(src, &c.type_scalars().nums),
@@ -365,7 +365,7 @@ fn test_26_pretty_printed_array_elements_typed_across_lines() {
 #[test]
 fn test_27_malformed_number_first_byte_still_typed_as_num() {
     let src = br#"{"a":1abc}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["1abc"]);
 }
 
@@ -376,7 +376,7 @@ fn test_27_malformed_number_first_byte_still_typed_as_num() {
 #[test]
 fn test_28_uppercase_keyword_not_typed() {
     let src = br#"{"a":True}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.trues.is_empty() && t.nums.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -387,7 +387,7 @@ fn test_28_uppercase_keyword_not_typed() {
 #[test]
 fn test_29_various_number_forms_all_classify_as_num() {
     let src = br#"[0, 0.5, -0.5, 1e10, -1E-10]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(sorted_texts(src, &c.type_scalars().nums), {
         let mut v = vec!["-0.5", "-1E-10", "0", "0.5", "1e10"];
         v.sort();
@@ -406,7 +406,7 @@ fn test_29_various_number_forms_all_classify_as_num() {
 #[test]
 fn test_30_typed_span_byte_equal_to_trimmed_source_slice() {
     let src = br#"{"a": 99 }"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t: TypedScalars = c.type_scalars();
     assert_eq!(t.nums.len(), 1);
     let span = t.nums[0];
@@ -426,7 +426,7 @@ fn test_30_typed_span_byte_equal_to_trimmed_source_slice() {
 #[test]
 fn test_31_escaped_quote_inside_array_element_string() {
     let src = br#"["a\"b", 1]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(texts(src, &t.nums), vec!["1"]);
     assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
@@ -442,7 +442,7 @@ fn test_31_escaped_quote_inside_array_element_string() {
 #[test]
 fn test_32_escaped_backslash_then_real_close_inside_array_element() {
     let src = br#"["a\\", 1]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["1"]);
 }
 
@@ -455,7 +455,7 @@ fn test_32_escaped_backslash_then_real_close_inside_array_element() {
 #[test]
 fn test_33_brackets_inside_array_element_string_do_not_affect_depth() {
     let src = br#"["{not real}", 1, "}another{"]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(texts(src, &t.nums), vec!["1"]);
     assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
@@ -484,7 +484,7 @@ fn test_33_brackets_inside_array_element_string_do_not_affect_depth() {
 #[test]
 fn test_34_depth_reaches_two_and_returns_to_zero_within_one_array() {
     let src = br#"[1,[2,[3,4]],5]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         sorted_texts(src, &c.type_scalars().nums),
         vec!["1", "2", "3", "4", "5"]
@@ -501,7 +501,7 @@ fn test_34_depth_reaches_two_and_returns_to_zero_within_one_array() {
 #[test]
 fn test_35_array_nested_two_levels_inside_member_value() {
     let src = br#"{"a":[1,[2,3],4]}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         sorted_texts(src, &c.type_scalars().nums),
         vec!["1", "2", "3", "4"]
@@ -518,7 +518,7 @@ fn test_35_array_nested_two_levels_inside_member_value() {
 #[test]
 fn test_36_empty_array_types_nothing_no_panic() {
     let src = br#"{"a":[]}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -528,7 +528,7 @@ fn test_36_empty_array_types_nothing_no_panic() {
 #[test]
 fn test_37_bare_top_level_empty_array_types_nothing() {
     let src = br#"[]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -542,7 +542,7 @@ fn test_37_bare_top_level_empty_array_types_nothing() {
 #[test]
 fn test_38_type_field_false_matches_type_scalars_falses() {
     let src = br#"[true, false, false, true]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         bounds(&c.type_scalars().falses),
         bounds(&c.type_field(ScalarKind::False))
@@ -553,7 +553,7 @@ fn test_38_type_field_false_matches_type_scalars_falses() {
 #[test]
 fn test_39_type_field_null_matches_type_scalars_nulls() {
     let src = br#"{"a":null,"b":1,"c":null}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(
         bounds(&c.type_scalars().nulls),
         bounds(&c.type_field(ScalarKind::Null))
@@ -573,7 +573,7 @@ fn test_39_type_field_null_matches_type_scalars_nulls() {
 #[test]
 fn test_40_carriage_return_after_colon_trimmed_for_typing() {
     let src = b"{\"a\":\r5}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.str(c.members[0].value).unwrap(), "\r5");
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
 }
@@ -597,7 +597,7 @@ fn test_40_carriage_return_after_colon_trimmed_for_typing() {
 #[test]
 fn test_41_comma_inside_array_element_string_not_split() {
     let src = br#"["x,y", 1]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(texts(src, &t.nums), vec!["1"]);
     assert!(t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
@@ -619,7 +619,7 @@ fn test_41_comma_inside_array_element_string_not_split() {
 #[test]
 fn test_42_lowercase_keyword_prefix_typed_by_first_byte() {
     let src = br#"{"a":nan,"b":txy,"c":fzz}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert_eq!(texts(src, &t.nulls), vec!["nan"]);
     assert_eq!(texts(src, &t.trues), vec!["txy"]);
@@ -634,7 +634,7 @@ fn test_42_lowercase_keyword_prefix_typed_by_first_byte() {
 #[test]
 fn test_43_plus_and_dot_leading_not_classified_as_num() {
     let src = br#"{"a":+5,"b":.5}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -646,7 +646,7 @@ fn test_43_plus_and_dot_leading_not_classified_as_num() {
 #[test]
 fn test_44_lone_minus_typed_as_num() {
     let src = br#"{"a":-}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["-"]);
 }
 
@@ -661,7 +661,7 @@ fn test_44_lone_minus_typed_as_num() {
 #[test]
 fn test_45_numeric_looking_keys_never_typed() {
     let src = br#"{"1":2,"3":4}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let nums = sorted_texts(src, &c.type_scalars().nums);
     assert_eq!(nums, vec!["2", "4"]);
     assert!(!nums.contains(&"1".to_string()));
@@ -684,7 +684,7 @@ fn test_45_numeric_looking_keys_never_typed() {
 #[test]
 fn test_46_three_source_traversal_order() {
     let src = br#"{"a":1,"b":[2,3]}4"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     // un-sorted: order is the contract under test
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["1", "2", "3", "4"]);
 }
@@ -700,7 +700,7 @@ fn test_46_three_source_traversal_order() {
 #[test]
 fn test_47_whitespace_only_member_value_types_nothing() {
     let src = br#"{"a":   }"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     let t = c.type_scalars();
     assert!(t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty());
 }
@@ -712,7 +712,7 @@ fn test_47_whitespace_only_member_value_types_nothing() {
 #[test]
 fn test_48_array_trailing_comma_no_phantom_typed_scalar() {
     let src = br#"[1,2,]"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(sorted_texts(src, &c.type_scalars().nums), vec!["1", "2"]);
 }
 
@@ -727,7 +727,7 @@ fn test_48_array_trailing_comma_no_phantom_typed_scalar() {
 #[test]
 fn test_49_bare_top_level_false_typed() {
     let src = br#"false"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().falses), vec!["false"]);
 }
 
@@ -735,7 +735,7 @@ fn test_49_bare_top_level_false_typed() {
 #[test]
 fn test_50_bare_top_level_null_typed() {
     let src = br#"null"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(texts(src, &c.type_scalars().nulls), vec!["null"]);
 }
 
@@ -753,7 +753,7 @@ fn test_50_bare_top_level_null_typed() {
 #[test]
 fn test_51_trailing_tab_trimmed_before_classification() {
     let src = b"{\"a\":5\t}";
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
     assert_eq!(c.str(c.members[0].value).unwrap(), "5\t");
     assert_eq!(texts(src, &c.type_scalars().nums), vec!["5"]);
 }
@@ -767,7 +767,7 @@ fn test_51_trailing_tab_trimmed_before_classification() {
 #[test]
 fn test_52_empty_object_and_empty_input_type_nothing() {
     for src in [&b"{}"[..], &b""[..]] {
-        let c = JsonParser::parse(src);
+        let c = JsonParser::parse_unchecked(src);
         let t = c.type_scalars();
         assert!(
             t.nums.is_empty() && t.trues.is_empty() && t.falses.is_empty() && t.nulls.is_empty()
@@ -788,7 +788,7 @@ fn test_52_empty_object_and_empty_input_type_nothing() {
 #[test]
 fn test_53_type_scalars_is_repeatable_and_non_mutating() {
     let src = br#"{"a":1,"b":[2,3]}"#;
-    let c = JsonParser::parse(src);
+    let c = JsonParser::parse_unchecked(src);
 
     let members_before = c.members.len();
     let arrays_before = c.arrays.len();
@@ -814,7 +814,7 @@ fn test_53_type_scalars_is_repeatable_and_non_mutating() {
 #[test]
 #[should_panic]
 fn test_54_out_of_range_array_span_panics() {
-    let mut c = JsonParser::parse(b"[1]");
+    let mut c = JsonParser::parse_unchecked(b"[1]");
     c.arrays[0].end = 1 << 20;
     let _ = c.type_scalars();
 }
@@ -823,7 +823,7 @@ fn test_54_out_of_range_array_span_panics() {
 #[test]
 #[should_panic]
 fn test_55_member_span_over_shorter_source_panics() {
-    let mut c = JsonParser::parse(br#"{"a":1}"#);
+    let mut c = JsonParser::parse_unchecked(br#"{"a":1}"#);
     c.source = b"";
     let _ = c.type_field(ScalarKind::Num);
 }

@@ -48,7 +48,7 @@ define_parser!(Plain {
     }
 });
 
-let content = PlainParser::parse(b"hello world\n");
+let content = PlainParser::parse(b"hello world\n").unwrap();
 assert_eq!(content.paragraphs.len(), 1);
 assert_eq!(content.texts.len(), 1);
 ```
@@ -59,20 +59,32 @@ assert_eq!(content.texts.len(), 1);
 
 - `NameContent<'a>` — the output struct. Every grammar rule produces one `pub`
   field. All fields borrow from the original source slice.
-- `NameParser` — a unit struct with:
-  - `parse(source: &[u8]) -> NameContent<'_>` — full parse with linear
-    search work per fixed grammar.
-  - `find_*(source: &[u8]) -> impl Iterator` — one per rule, context-free,
-    faster when you only need one element kind.
-  - `context(source: &[u8]) -> ParseContext` — the opaque-region map (fences
-    plus opaque symmetric/asymmetric and fully opaque chained rules), built
-    by a forward trigger scan with bounded searches.
-  - `find_context_*(source, &ctx) -> impl Iterator` — for transparent
-    symmetric/asymmetric and non-fence line/block rules; the same matcher with candidates inside opaque regions skipped.
+- `NameParser` — a unit struct with checked and unchecked methods:
+  - `parse(source: &[u8]) -> Result<NameContent<'_>, InputBytesTooLarge>` —
+    full parse with linear search work per fixed grammar.
+  - `parse_unchecked(source: &[u8]) -> NameContent<'_>` — the same parse
+    without the `max_input_bytes` check.
+  - `find_*(source: &[u8]) -> Result<impl Iterator, InputBytesTooLarge>` and
+    `find_*_unchecked` — one pair per standalone-capable rule, context-free,
+    faster when you only need one element kind. Fallback fields and
+    `hard_break` have no finder.
+  - `context(source: &[u8]) -> Result<ParseContext, InputBytesTooLarge>` and
+    `context_unchecked` — the opaque-region map (fences plus opaque
+    symmetric/asymmetric and fully opaque chained rules), built by a forward
+    trigger scan with bounded searches.
+  - `find_context_*(source, &ctx) -> Result<impl Iterator, InputBytesTooLarge>`
+    and `find_context_*_unchecked` — for transparent symmetric/asymmetric and
+    non-fence line/block rules; the same matcher with candidates inside opaque
+    regions skipped.
 - `str(span) -> Option<&str>` / `bytes(span) -> &[u8]` and `_clean` / `_raw`
   accessor methods on `NameContent` for ergonomic span-to-slice conversion.
+  `_raw` is generated only for fields backed by a standalone rule; fallback
+  and `hard_break` fields get `_clean` only.
 
-Spans are `u32` byte offsets. Input must not exceed 4 GiB (`span::MAX_INPUT_LEN`).
+Spans are byte offsets; their type defaults to `u32` and is selected by
+`limits { offset = ...; }`. Set `max_input_bytes = 0` (or the offset type's
+maximum) to reject input that does not fit; leave it unset or write
+`max_input_bytes = _` to parse only the prefix that fits.
 
 ## Grammar syntax
 
@@ -80,27 +92,67 @@ Spans are `u32` byte offsets. Input must not exceed 4 GiB (`span::MAX_INPUT_LEN`
 define_parser!(Name {
     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 
+    limits {
+        offset = u32;
+        max_nest = 4;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+    }
+
     inline  { ... }
     lines   { ... }
     blocks  { ... }
 });
 ```
 
-Four context bytes are required and apply to every rule. `max_nest` and
-`crlf` are optional grammar-wide settings:
+Four context bytes are required and apply to every rule. `crlf` is optional.
+`max_nest` is still accepted in the header for existing grammars, but the
+`limits` section is its current home; when both are present they must agree.
 
-| Key        | Meaning                                                        |
-|------------|----------------------------------------------------------------|
-| `sep`      | Word separator (typically space)                               |
-| `eol`      | Line terminator (typically `\n`)                               |
-| `tab`      | Tab character                                                  |
-| `escape`   | Escape prefix that suppresses the next byte                    |
-| `crlf`     | Optional. Recognise CR before `eol` as a line-ending byte; default `false`. |
-| `max_nest` | Optional. Bounded self-nesting depth cap, shared by            |
-|            | stack-based inline rules and `key_value`                      |
-|            | values (below) and by block-level `cont`/`fence` nesting.      |
-|            | Default `1`: no self-nesting, at most one block active.        |
-|            | `sep = ..., eol = ..., tab = ..., escape = ..., max_nest = 4;` |
+| Key      | Meaning                                                        |
+|----------|----------------------------------------------------------------|
+| `sep`    | Word separator (typically space)                               |
+| `eol`    | Line terminator (typically `\n`)                              |
+| `tab`    | Tab character                                                  |
+| `escape` | Escape prefix that suppresses the next byte                    |
+| `crlf`   | Optional. Recognise CR before `eol` as a line-ending byte; default `false`. |
+
+### `limits { ... }`
+
+Optional. Settings may be written in any order; `;` and `,` are optional.
+
+| Key               | Meaning                                                      |
+|-------------------|--------------------------------------------------------------|
+| `offset`          | Default `u32`. Span offset type: `u8`, `u16`, `u32` or `u64`. |
+| `max_nest`        | Default `1`. Shared nesting cap of the inline stack and the  |
+|                   | block stack (`cont` / `fence`). At `1` nothing nests.        |
+| `max_inline_span` | Default absent. Longest emitted inline span, in bytes.       |
+| `max_line_span`   | Default absent. Longest emitted line span, in bytes.         |
+| `max_block_span`  | Default absent. Longest emitted block span, in bytes.        |
+| `max_input_bytes` | Default absent. Longest accepted source, in bytes.           |
+
+`offset` selects the type of every generated `Span` and the hard upper bound
+on the input. `u8`/`u16`/`u32` use that type for span offsets; `u64` uses
+`u64` spans with `usize` positions internally. The checked methods reject
+input longer than the selected type only when `max_input_bytes` is set;
+otherwise the parser reads only the prefix that fits.
+
+The span caps are measured on the clean span — `end - start` of the stored
+`Span`, without delimiters. `0` and the offset type's maximum mean absent:
+no check and no fallback code is generated for that cap. A value above the
+offset maximum is a compile error.
+
+`max_input_bytes` is different: `0` and the offset type's maximum mean that
+maximum. `_` or an absent key means no check, and the parser reads only the
+prefix that fits. A value above the offset maximum is a compile error. The
+check runs before any parser state or `Vec` is allocated.
+
+When a span exceeds its cap it is not emitted: a transparent inline element
+keeps its inner spans and text; an opaque inline element and a `chained`
+element are reparsed inside; a `key_value` pair is dropped without reparse;
+a line or block item span goes to `blocks { fallback => ... }`; an over-long
+fence is reparsed as paragraph runs.
 
 The optional `crlf` setting defaults to `false`. With `crlf = true`, only a
 CR immediately followed by an actual `eol` is part of the line ending. A bare CR, including at EOF, remains content.
@@ -212,8 +264,9 @@ on_trigger(b'[') {
 Matches the pattern `[prefix]open1...close1 open2...close2`.
 
 - Two `| open, close |` pairs define the two components.
-- `prefix | byte |` declares an optional single byte immediately before `open1`
-  that sets a boolean field (`is_image` in the example).
+- The `prefix | byte | => field` clause is required; the byte it matches is
+  optional at match time. A prefix immediately before `open1` sets a boolean
+  field (`is_image` in the example).
 - `parse_inside = true` on either component makes that component
   transparent — other rules can fire on the bytes scanned over for it —
   instead of the self-contained forward search an opaque component uses.
@@ -447,10 +500,10 @@ Every rule that supports it generates a `find_*` method:
 
 ```rust
 // instead of a full parse:
-let content = MyParser::parse(source);
+let content = MyParser::parse(source).unwrap();
 
 // scan for one element kind only:
-for span in MyParser::find_italics(source) {
+for span in MyParser::find_italics(source).unwrap() {
     println!("{}", std::str::from_utf8(&source[span.start as usize..span.end as usize]).unwrap());
 }
 ```
@@ -468,13 +521,14 @@ opaque balanced asymmetric rules count nested opening and closing bytes.
 
 For transparent symmetric/asymmetric and non-fence line/block rules, a
 context-aware variant is also generated. `key_value` and `chained` have raw
-finders only:
+finders only. The context map itself includes fences, opaque
+symmetric/asymmetric rules and `chained` rules with both components opaque:
 
 ```rust
 // One streaming pass builds the opaque-region map (fences plus every
 // parse_inside = false rule), shared by all context-aware finders.
-let ctx = MyParser::context(source);
-for span in MyParser::find_context_italics(source, &ctx) {
+let ctx = MyParser::context(source).unwrap();
+for span in MyParser::find_context_italics(source, &ctx).unwrap() {
     // candidates inside fences, code spans, etc. are skipped
 }
 ```

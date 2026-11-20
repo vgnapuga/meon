@@ -43,14 +43,14 @@ use super::context::{ContextCursor, LineReader, ParseContext, Run};
 ///
 /// Obtained via the generated `Parser::find_context_*(source, &ctx)` methods;
 /// rarely constructed directly.
-pub struct ContextSymmetricExactIter<'a> {
+pub struct ContextSymmetricExactIter<'a, T: crate::span::SpanIndex> {
     src: &'a [u8],
     byte: u8,
     count: u32,
     breaks: LineBreaks,
     escape: u8,
     pos: usize,
-    cur: ContextCursor<'a>,
+    cur: ContextCursor<'a, T>,
     lines: LineReader<'a>,
     /// May the delimiter byte fall among a line's markers?
     marked: bool,
@@ -58,7 +58,7 @@ pub struct ContextSymmetricExactIter<'a> {
     straddles: bool,
 }
 
-impl<'a> ContextSymmetricExactIter<'a> {
+impl<'a, T: crate::span::SpanIndex> ContextSymmetricExactIter<'a, T> {
     /// Create a context-aware symmetric exact-delimiter iterator. Parameters
     /// as in the context-free sibling, plus the prebuilt `ctx` (borrowed for
     /// the iterator's lifetime). `ctx` splits lines with the `eol` of its
@@ -69,7 +69,7 @@ impl<'a> ContextSymmetricExactIter<'a> {
         count: u32,
         eol: u8,
         escape: u8,
-        ctx: &'a ParseContext,
+        ctx: &'a ParseContext<T>,
     ) -> Self {
         Self {
             src,
@@ -89,10 +89,10 @@ impl<'a> ContextSymmetricExactIter<'a> {
     }
 }
 
-impl Iterator for ContextSymmetricExactIter<'_> {
-    type Item = Span;
+impl<T: crate::span::SpanIndex> Iterator for ContextSymmetricExactIter<'_, T> {
+    type Item = Span<T>;
 
-    fn next(&mut self) -> Option<Span> {
+    fn next(&mut self) -> Option<Span<T>> {
         let src = self.src;
         let len = src.len();
         loop {
@@ -179,7 +179,7 @@ impl Iterator for ContextSymmetricExactIter<'_> {
             match close {
                 Some((cp, tmp)) => {
                     self.pos = tmp;
-                    return Some(Span::new(cs as u32, cp as u32));
+                    return Some(Span::<T>::from_usize(cs, cp));
                 }
                 None => {
                     self.pos = end;
@@ -199,14 +199,14 @@ impl Iterator for ContextSymmetricExactIter<'_> {
 ///
 /// Obtained via the generated `Parser::find_context_*(source, &ctx)` methods;
 /// rarely constructed directly.
-pub struct ContextAsymmetricStackIter<'a> {
+pub struct ContextAsymmetricStackIter<'a, T: crate::span::SpanIndex> {
     src: &'a [u8],
     open: u8,
     close: u8,
     breaks: LineBreaks,
     escape: u8,
     pos: usize,
-    cur: ContextCursor<'a>,
+    cur: ContextCursor<'a, T>,
     lines: LineReader<'a>,
     /// Does the grammar have line rules? Without them a run ends only at
     /// a blank line, which `empty` finds ahead of the scan.
@@ -214,14 +214,14 @@ pub struct ContextAsymmetricStackIter<'a> {
     empty: EmptyLines,
     /// May the open byte fall among a line's markers?
     marked: bool,
-    stack: FrameStack,
+    stack: FrameStack<T>,
     /// Where the outermost open frame opened, and the inline run of its
     /// line, once read: its run is the run of every open frame.
     base: usize,
     run: Option<Run>,
 }
 
-impl<'a> ContextAsymmetricStackIter<'a> {
+impl<'a, T: crate::span::SpanIndex> ContextAsymmetricStackIter<'a, T> {
     /// Create a context-aware iterator over a stack-kept asymmetric rule.
     /// Parameters as in the context-free sibling, plus the prebuilt `ctx`, as
     /// in [`ContextSymmetricExactIter::new`].
@@ -234,7 +234,7 @@ impl<'a> ContextAsymmetricStackIter<'a> {
         max_nest: usize,
         eol: u8,
         escape: u8,
-        ctx: &'a ParseContext,
+        ctx: &'a ParseContext<T>,
     ) -> Self {
         Self {
             src,
@@ -261,10 +261,10 @@ impl<'a> ContextAsymmetricStackIter<'a> {
     }
 }
 
-impl Iterator for ContextAsymmetricStackIter<'_> {
-    type Item = Span;
+impl<T: crate::span::SpanIndex> Iterator for ContextAsymmetricStackIter<'_, T> {
+    type Item = Span<T>;
 
-    fn next(&mut self) -> Option<Span> {
+    fn next(&mut self) -> Option<Span<T>> {
         let src = self.src;
         let len = src.len();
         loop {

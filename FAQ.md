@@ -37,6 +37,8 @@ is restored by merging the vectors and sorting them.
 
 No. Nesting is a span inside a span.
 
-## This is synthetic benchmarks? So this is not real numbers for real documents
+## Are these synthetic benchmarks? So the numbers are not real-document numbers?
 
-Yes, but this benchmarks more like stress-test for formats. For `meon-md` real metrics will be between `plain` and `hot` benchmarks/
+Yes. They are stress tests for the formats rather than a model of a production
+corpus. For `meon-md`, real-document throughput will typically fall between the
+`plain` and `hot` corpora.

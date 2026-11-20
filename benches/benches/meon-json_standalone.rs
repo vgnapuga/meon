@@ -65,13 +65,14 @@
 
 mod docs_json;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon_json::JsonParser;
+use std::hint::black_box;
 use std::time::Duration;
 
 macro_rules! find_bench {
     ($group:ident, $bytes:ident, $full:ident, $method:ident => $field:ident) => {{
-        let standalone_count = JsonParser::$method($bytes).count();
+        let standalone_count = JsonParser::$method($bytes).unwrap().count();
         println!(
             "    {:<14} full={:>9}  standalone={:>9}",
             stringify!($method),
@@ -80,9 +81,11 @@ macro_rules! find_bench {
         );
         $group.bench_function(stringify!($method), |b| {
             b.iter(|| {
-                JsonParser::$method(black_box($bytes)).for_each(|x| {
-                    black_box(x);
-                })
+                JsonParser::$method(black_box($bytes))
+                    .unwrap()
+                    .for_each(|x| {
+                        black_box(x);
+                    })
             })
         });
     }};
@@ -94,7 +97,7 @@ macro_rules! find_bench {
 /// as `find_bench!` so the two tables read side by side.
 macro_rules! find_context_bench {
     ($group:ident, $bytes:ident, $ctx:ident, $full:ident, $method:ident => $field:ident) => {{
-        let context_count = JsonParser::$method($bytes, &$ctx).count();
+        let context_count = JsonParser::$method($bytes, &$ctx).unwrap().count();
         println!(
             "    {:<14} full={:>9}  context-aware={:>9}",
             stringify!($method),
@@ -103,9 +106,11 @@ macro_rules! find_context_bench {
         );
         $group.bench_function(stringify!($method), |b| {
             b.iter(|| {
-                JsonParser::$method(black_box($bytes), &$ctx).for_each(|x| {
-                    black_box(x);
-                })
+                JsonParser::$method(black_box($bytes), &$ctx)
+                    .unwrap()
+                    .for_each(|x| {
+                        black_box(x);
+                    })
             })
         });
     }};
@@ -119,10 +124,12 @@ macro_rules! find_context_cold_bench {
     ($group:ident, $bytes:ident, $method:ident) => {{
         $group.bench_function(concat!(stringify!($method), "_cold"), |b| {
             b.iter(|| {
-                let ctx = JsonParser::context(black_box($bytes));
-                JsonParser::$method(black_box($bytes), &ctx).for_each(|x| {
-                    black_box(x);
-                })
+                let ctx = JsonParser::context(black_box($bytes)).unwrap();
+                JsonParser::$method(black_box($bytes), &ctx)
+                    .unwrap()
+                    .for_each(|x| {
+                        black_box(x);
+                    })
             })
         });
     }};
@@ -136,7 +143,7 @@ fn bench_standalone(c: &mut Criterion) {
         docs_json::report(label, bytes);
 
         // Reference counts from one full parse, for full-vs-standalone deltas.
-        let full = JsonParser::parse(bytes);
+        let full = JsonParser::parse(bytes).unwrap();
         println!("│  full-vs-standalone counts:");
 
         let mut group = c.benchmark_group(format!("json-standalone/{label}"));
@@ -153,11 +160,11 @@ fn bench_standalone(c: &mut Criterion) {
         // One-time context build, reused by every amortized find_context_*
         // call below. Timed on its own: this is the number the "_cold"
         // benches re-pay on every single iteration instead.
-        let ctx = JsonParser::context(bytes);
+        let ctx = JsonParser::context(bytes).unwrap();
         println!("│  context regions (strings): {}", ctx.spans().len());
         group.bench_function("context", |b| {
             b.iter(|| {
-                black_box(JsonParser::context(black_box(bytes)));
+                black_box(JsonParser::context(black_box(bytes)).unwrap());
             })
         });
 

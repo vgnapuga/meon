@@ -13,7 +13,9 @@
 //! streaming pass over the source — a single unified needle search per
 //! iteration (fence bytes and opaque-rule triggers share one deduplicated
 //! set, dispatched to `memchr`/`memchr2`/`memchr3` or, beyond three distinct
-//! bytes, to the SWAR [`crate::swar::find_any`]) — resolving every opaque
+//! bytes, to the SWAR [`crate::swar::find_any`]; a set wider than the
+//! compile-time needle buffer is scanned byte by byte through a table) —
+//! resolving every opaque
 //! construct with the same leftmost-wins semantics the full parser uses.
 //!
 //! # Lines
@@ -986,17 +988,26 @@ impl LineModel {
 /// shared (immutably) by any number of `find_context_*` iterators over the
 /// same source. See the [module documentation](self) for the construction
 /// semantics.
+#[derive(Debug)]
+struct Built<T> {
+    spans: Vec<Span<T>>,
+    is_fence: Vec<bool>,
+    clean_len: Vec<usize>,
+    inner: Vec<Option<(usize, usize)>>,
+    classes: ByteClasses,
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct ParseContext {
-    spans: Vec<Span>,
+pub struct ParseContext<T = u32> {
+    spans: Vec<Span<T>>,
     lines: LineModel,
     classes: ByteClasses,
 }
 
-impl ParseContext {
+impl<T: crate::span::SpanIndex> ParseContext<T> {
     /// The opaque regions, sorted by `start`, non-overlapping.
     #[inline]
-    pub fn spans(&self) -> &[Span] {
+    pub fn spans(&self) -> &[Span<T>] {
         &self.spans
     }
 
@@ -1008,7 +1019,7 @@ impl ParseContext {
 
     /// A fresh lookup cursor over this context.
     #[inline]
-    pub fn cursor(&self) -> ContextCursor<'_> {
+    pub fn cursor(&self) -> ContextCursor<'_, T> {
         ContextCursor {
             spans: &self.spans,
             lines: &self.lines,
@@ -1039,7 +1050,11 @@ impl ParseContext {
     ///
     /// All rule sets may be empty; with no fence and no opaque rule the
     /// context has no regions.
-    pub fn build(
+    /// Build the context with optional span caps. Over-long opaque regions
+    /// are left out, so a context-aware finder can see the content inside
+    /// them; the full parser reparses those regions.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_limits_offset(
         source: &[u8],
         escape: u8,
         lines: LineModel,
@@ -1047,11 +1062,39 @@ impl ParseContext {
         asym: &[AsymSpec],
         chained: &[ChainSpec],
         cap_hint: usize,
+        max_inline: Option<u64>,
+        max_block: Option<u64>,
     ) -> Self {
+        let built = Self::build_inner(
+            source, escape, lines, sym, asym, chained, cap_hint, max_inline, max_block, 0,
+        );
+        Self {
+            spans: built.spans,
+            lines,
+            classes: built.classes,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_inner(
+        source: &[u8],
+        escape: u8,
+        lines: LineModel,
+        sym: &[SymSpec],
+        asym: &[AsymSpec],
+        chained: &[ChainSpec],
+        cap_hint: usize,
+        max_inline: Option<u64>,
+        max_block: Option<u64>,
+        depth: usize,
+    ) -> Built<T> {
         let len = source.len();
         let eol = lines.eol;
         let breaks = lines.breaks();
-        let mut spans: Vec<Span> = Vec::with_capacity(cap_hint);
+        let mut spans: Vec<Span<T>> = Vec::with_capacity(cap_hint);
+        let mut is_fence: Vec<bool> = Vec::with_capacity(cap_hint);
+        let mut clean_len: Vec<usize> = Vec::with_capacity(cap_hint);
+        let mut inner: Vec<Option<(usize, usize)>> = Vec::with_capacity(cap_hint);
 
         // One deduplicated needle set — fence bytes and opaque triggers
         // together — so every iteration issues exactly ONE search
@@ -1101,7 +1144,15 @@ impl ParseContext {
                 let ce = lines.content_end(source, p, le);
                 if let Some((byte, count)) = lines.fence_at(source, p, ce) {
                     let end = fence_close_scan(source, le, len, byte, count, &lines);
-                    spans.push(Span::new(p as u32, end as u32));
+                    spans.push(Span::<T>::from_usize(p, end));
+                    is_fence.push(true);
+                    clean_len.push(end - p);
+                    let _cs = if le < len { le + 1 } else { len };
+                    let mut _ce = end;
+                    while _ce > _cs && source[_ce - 1] != eol {
+                        _ce -= 1;
+                    }
+                    inner.push(if _cs < _ce { Some((_cs, _ce)) } else { None });
                     pos = if end < len { end + 1 } else { len };
                     continue;
                 }
@@ -1123,7 +1174,15 @@ impl ParseContext {
                             } else {
                                 lines.nested_fence_end(source, line.ls, line.le, byte, count, depth)
                             };
-                            spans.push(Span::new(p as u32, end as u32));
+                            spans.push(Span::<T>::from_usize(p, end));
+                            is_fence.push(true);
+                            clean_len.push(end - p);
+                            let _cs = if line.le < len { line.le + 1 } else { len };
+                            let mut _ce = end;
+                            while _ce > _cs && source[_ce - 1] != eol {
+                                _ce -= 1;
+                            }
+                            inner.push(if _cs < _ce { Some((_cs, _ce)) } else { None });
                             pos = resume;
                             continue;
                         }
@@ -1174,7 +1233,13 @@ impl ParseContext {
                 Opaque::Sym => {
                     match sym_close(source, run_end, b, count, escape, breaks, enter_line) {
                         Some(close_end) => {
-                            spans.push(Span::new(p as u32, close_end as u32));
+                            spans.push(Span::<T>::from_usize(p, close_end));
+                            is_fence.push(false);
+                            clean_len.push(close_end.saturating_sub(p + 2 * count as usize));
+                            inner.push(Some((
+                                p + count as usize,
+                                close_end.saturating_sub(count as usize),
+                            )));
                             pos = close_end;
                         }
                         None => pos = run_end,
@@ -1188,7 +1253,10 @@ impl ParseContext {
                     pos = run_end;
                     for o in p..run_end {
                         if let Some(q) = rings[ri].close(source, o, bytes, &mut enter_line) {
-                            spans.push(Span::new(o as u32, (q + 1) as u32));
+                            spans.push(Span::<T>::from_usize(o, q + 1));
+                            is_fence.push(false);
+                            clean_len.push(q - o - 1);
+                            inner.push(Some((o + 1, q)));
                             pos = q + 1;
                             break;
                         }
@@ -1201,7 +1269,10 @@ impl ParseContext {
                     }
                     match asym_close(source, run_end, asym[ri].1, escape, breaks, enter_line) {
                         Ok(cp) => {
-                            spans.push(Span::new(p as u32, (cp + 1) as u32));
+                            spans.push(Span::<T>::from_usize(p, cp + 1));
+                            is_fence.push(false);
+                            clean_len.push(cp - run_end);
+                            inner.push(Some((run_end, cp)));
                             pos = cp + 1;
                         }
                         Err(stop) => {
@@ -1224,7 +1295,10 @@ impl ParseContext {
                     .map(|(_, cu)| cu + 1)
                     {
                         Some(end) => {
-                            spans.push(Span::new((run_end - 1) as u32, end as u32));
+                            spans.push(Span::<T>::from_usize(run_end - 1, end));
+                            is_fence.push(false);
+                            clean_len.push(end - (run_end - 1));
+                            inner.push(Some((run_end, end - 1)));
                             pos = end;
                         }
                         None => pos = run_end,
@@ -1233,11 +1307,94 @@ impl ParseContext {
             }
         }
 
-        Self {
-            spans,
-            lines,
+        let mut out = Built {
+            spans: Vec::with_capacity(spans.len()),
+            is_fence: Vec::with_capacity(spans.len()),
+            clean_len: Vec::with_capacity(spans.len()),
+            inner: Vec::with_capacity(spans.len()),
             classes,
+        };
+        for i in 0..spans.len() {
+            let over = if is_fence[i] {
+                max_block.is_some_and(|l| clean_len[i] > l as usize)
+            } else {
+                max_inline.is_some_and(|l| clean_len[i] > l as usize)
+            };
+            if !over {
+                out.spans.push(spans[i]);
+                out.is_fence.push(is_fence[i]);
+                out.clean_len.push(clean_len[i]);
+                out.inner.push(inner[i]);
+                continue;
+            }
+            if depth >= lines.max_nest {
+                continue;
+            }
+            let Some((s, e)) = inner[i] else {
+                continue;
+            };
+            if s >= e {
+                continue;
+            }
+            let sub = Self::build_inner(
+                &source[s..e],
+                escape,
+                lines,
+                sym,
+                asym,
+                chained,
+                0,
+                max_inline,
+                max_block,
+                depth + 1,
+            );
+            for j in 0..sub.spans.len() {
+                out.spans.push(Span::<T>::from_usize(
+                    sub.spans[j].start_usize() + s,
+                    sub.spans[j].end_usize() + s,
+                ));
+                out.is_fence.push(sub.is_fence[j]);
+                out.clean_len.push(sub.clean_len[j]);
+                out.inner.push(sub.inner[j].map(|(a, b)| (a + s, b + s)));
+            }
         }
+        out
+    }
+}
+
+impl ParseContext<u32> {
+    /// Build the context in one streaming pass over `source` with `u32`
+    /// offsets. See [`Self::build_with_limits_offset`] for the generic form.
+    pub fn build(
+        source: &[u8],
+        escape: u8,
+        lines: LineModel,
+        sym: &[SymSpec],
+        asym: &[AsymSpec],
+        chained: &[ChainSpec],
+        cap_hint: usize,
+    ) -> Self {
+        Self::build_with_limits(
+            source, escape, lines, sym, asym, chained, cap_hint, None, None,
+        )
+    }
+
+    /// Build the context with optional span caps and `u32` offsets.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_limits(
+        source: &[u8],
+        escape: u8,
+        lines: LineModel,
+        sym: &[SymSpec],
+        asym: &[AsymSpec],
+        chained: &[ChainSpec],
+        cap_hint: usize,
+        max_inline: Option<u64>,
+        max_block: Option<u64>,
+    ) -> Self {
+        Self::build_with_limits_offset(
+            source, escape, lines, sym, asym, chained, cap_hint, max_inline, max_block,
+        )
     }
 }
 
@@ -1494,19 +1651,19 @@ fn asym_close(
 /// parent's position: the copy starts at the parent's index, which is valid
 /// for any position `>=` the parent's last query.
 #[derive(Debug, Clone, Copy)]
-pub struct ContextCursor<'m> {
-    spans: &'m [Span],
+pub struct ContextCursor<'m, T = u32> {
+    spans: &'m [Span<T>],
     lines: &'m LineModel,
     classes: &'m ByteClasses,
     idx: usize,
 }
 
-impl ContextCursor<'_> {
+impl<T: crate::span::SpanIndex> ContextCursor<'_, T> {
     /// Is `pos` inside an opaque region? `pos` may lie behind the last
     /// query.
     #[inline]
     pub fn is_covered(&mut self, pos: usize) -> bool {
-        while self.idx > 0 && (self.spans[self.idx - 1].end as usize) > pos {
+        while self.idx > 0 && (self.spans[self.idx - 1].end_usize()) > pos {
             self.idx -= 1;
         }
         self.covering_end(pos).is_some()
@@ -1517,11 +1674,11 @@ impl ContextCursor<'_> {
     /// `pos` must not lie behind the last query.
     #[inline]
     pub fn covering_end(&mut self, pos: usize) -> Option<usize> {
-        while self.idx < self.spans.len() && (self.spans[self.idx].end as usize) <= pos {
+        while self.idx < self.spans.len() && (self.spans[self.idx].end_usize()) <= pos {
             self.idx += 1;
         }
         match self.spans.get(self.idx) {
-            Some(s) if (s.start as usize) <= pos => Some(s.end as usize),
+            Some(s) if s.start_usize() <= pos => Some(s.end_usize()),
             _ => None,
         }
     }
@@ -1537,9 +1694,9 @@ impl ContextCursor<'_> {
     /// rules admits every line it does not cover. Items come in increasing
     /// order, as a line-family iterator yields them.
     #[inline]
-    pub fn admits(&mut self, source: &[u8], item: Span, rule: RuleIndex) -> bool {
-        let le = (item.end as usize).min(source.len());
-        let mut ls = (item.start as usize).min(le);
+    pub fn admits(&mut self, source: &[u8], item: Span<T>, rule: RuleIndex) -> bool {
+        let le = item.end_usize().min(source.len());
+        let mut ls = item.start_usize().min(le);
         while ls > 0 && source[ls - 1] != self.lines.eol {
             ls -= 1;
         }

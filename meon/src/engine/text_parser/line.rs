@@ -6,8 +6,8 @@
 //! and tries to match it against a set of *line rules*, which are matched at
 //! the line start; the first rule that matches wins and no other is tried.
 //!
-//! It is called by `parse_text!` at the start of each line no block rule
-//! claims, and is not meant to be called by users directly.
+//! It is called by `parse_text!` after block handling when no block rule
+//! claimed the line, before scanning its remaining content for inline elements.
 //!
 //! # Return value
 //!
@@ -16,6 +16,14 @@
 //! inline up to the line end; the line end for a `line_simple` rule, which
 //! consumes the line whole. `None` if no rule matched; the caller
 //! (`parse_text!`) then treats the line as paragraph text.
+//!
+//! # Span limit
+//!
+//! A line rule carries an optional `max_line_span` cap. A matching span
+//! longer than the cap is not emitted in the rule's field: the span itself
+//! goes to the grammar's `blocks { fallback => ... }` field, while the line
+//! keeps its normal control flow (so trailing content is still scanned for
+//! inline elements). With no cap, the rule pushes exactly as before.
 //!
 //! # Grammar integration
 //!
@@ -38,16 +46,36 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_line {
-    ($state:ident, $src:ident, $pos:expr, $le:expr, sep = $sep:literal ; $($rules:tt)*) => {{
+    ($state:ident, $src:ident, $pos:expr, $le:expr, sep = $sep:literal ;
+     $($rules:tt)*) => {
+        $crate::parse_line!(
+            $state, $src, $pos, $le, sep = $sep,
+            max_line = [], para = _limits_unused ;
+            $($rules)*
+        )
+    };
+
+    ($state:ident, $src:ident, $pos:expr, $le:expr, sep = $sep:literal,
+     max_line = $max_line:tt, para = $para:ident ;
+     $($rules:tt)*) => {{
         let src: &[u8] = $src;
+        macro_rules! __span {
+            ($a:expr, $b:expr) => {
+                $crate::span::Span::<usize>::from_usize($a as usize, $b as usize)
+            };
+            ($a:expr, $b:expr,) => {
+                __span!($a, $b)
+            };
+        }
         let pos: usize  = $pos;
-        let le:  usize  = $le;
+        let le:  usize  = ($le as usize).min($crate::span::Span::<usize>::MAX_INPUT_LEN);
         let mut _r: Option<usize> = None;
-        $crate::parse_line!(@emit _r, $state, src, pos, le, $sep ; $($rules)*);
+        $crate::parse_line!(@emit _r, $state, src, pos, le, $sep, $max_line, $para ; $($rules)*);
         _r
     }};
 
-    (@emit $res:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal ;
+    (@emit $res:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal,
+     $max_line:tt, $para:ident ;
         line($byte:literal, max = $max:literal) |$n:ident|: $meta:expr => $field:ident
         $($rest:tt)*
     ) => {
@@ -62,16 +90,16 @@ macro_rules! parse_line {
                 if _i < $le { _i += 1; }
                 let $n    = _c;
                 let _meta = $meta;
-                $crate::paste::paste! {
-                    $st.[<push_ $field>]((_meta, $crate::span::Span::new(_i as u32, $le as u32)));
-                }
+                $crate::parse_line!(@push $max_line, $st, $field, $para, _meta,
+                    __span!(_i, $le));
                 $res = Some(_i);
             }
         }
-        $crate::parse_line!(@emit $res, $st, $src, $pos, $le, $sep ; $($rest)*)
+        $crate::parse_line!(@emit $res, $st, $src, $pos, $le, $sep, $max_line, $para ; $($rest)*)
     };
 
-    (@emit $res:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal ;
+    (@emit $res:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal,
+     $max_line:tt, $para:ident ;
         line_simple($pat:pat, min = $min:literal) |$b:ident|: $meta:expr => $field:ident
         $($rest:tt)*
     ) => {
@@ -87,21 +115,41 @@ macro_rules! parse_line {
                 if _valid && _count >= $min {
                     let $b    = _delim;
                     let _meta = $meta;
-                    $crate::paste::paste! {
-                        $st.[<push_ $field>]((_meta, $crate::span::Span::new($pos as u32, $le as u32)));
-                    }
+                    $crate::parse_line!(@push $max_line, $st, $field, $para, _meta,
+                        __span!($pos, $le));
                     $res = Some($le);
                 }
             }
         }
-        $crate::parse_line!(@emit $res, $st, $src, $pos, $le, $sep ; $($rest)*)
+        $crate::parse_line!(@emit $res, $st, $src, $pos, $le, $sep, $max_line, $para ; $($rest)*)
     };
 
-    (@emit $r:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal ; , $($rest:tt)*) => {
-        $crate::parse_line!(@emit $r, $st, $src, $pos, $le, $sep ; $($rest)*)
+    (@push [], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {
+        $crate::pastey::paste! {
+            $st.[<push_ $field>](($meta, $span));
+        }
     };
-    (@emit $r:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal ; ; $($rest:tt)*) => {
-        $crate::parse_line!(@emit $r, $st, $src, $pos, $le, $sep ; $($rest)*)
+    (@push [$n:literal], $st:ident, $field:ident, $para:ident, $meta:expr, $span:expr) => {{
+        let _span = $span;
+        if _span.len_usize() > $n as usize {
+            $crate::pastey::paste! {
+                $st.[<push_ $para>](_span);
+            }
+        } else {
+            $crate::pastey::paste! {
+                $st.[<push_ $field>](($meta, _span));
+            }
+        }
+    }};
+
+    (@emit $r:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal,
+     $max_line:tt, $para:ident ; , $($rest:tt)*) => {
+        $crate::parse_line!(@emit $r, $st, $src, $pos, $le, $sep, $max_line, $para ; $($rest)*)
     };
-    (@emit $r:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal ;) => {};
+    (@emit $r:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal,
+     $max_line:tt, $para:ident ; ; $($rest:tt)*) => {
+        $crate::parse_line!(@emit $r, $st, $src, $pos, $le, $sep, $max_line, $para ; $($rest)*)
+    };
+    (@emit $r:ident, $st:ident, $src:ident, $pos:ident, $le:ident, $sep:literal,
+     $max_line:tt, $para:ident ;) => {};
 }

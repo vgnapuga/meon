@@ -1,0 +1,5 @@
+error: `offset` is set twice
+ --> tests/ui/fail/offset_duplicate.rs:7:9
+  |
+7 |         offset = u16;
+  |         ^^^^^^

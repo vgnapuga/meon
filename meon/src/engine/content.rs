@@ -86,7 +86,7 @@
 //!
 //! Every `inline_simple` field gets one more:
 //!
-//! - `push_merge_f(&mut self, Span, floor: u32)` - append with coalescing: if
+//! - `push_merge_f(&mut self, Span, floor: usize)` - append with coalescing: if
 //!   the last span is non-empty, ends at or after `floor`, the new span is
 //!   non-empty and starts at most one byte after the last one ends, the last
 //!   span's end is extended instead of pushing a new entry. `floor` is the start
@@ -133,7 +133,13 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! define_content {
-    ( $name:ident {
+    ( $name:ident { offset = $off:ty; $($rest:tt)* }) => {
+        $crate::define_content!(@impl $name, $off { $($rest)* });
+    };
+    ( $name:ident { $($rest:tt)* }) => {
+        $crate::define_content!(@impl $name, u32 { $($rest)* });
+    };
+    (@impl $name:ident, $off:ty {
         inline {
             $( $inline_field:ident : $inline_ty:ty [$inline_div:literal] ),* $(,)?
         }
@@ -150,15 +156,15 @@ macro_rules! define_content {
             $( $block_simple_field:ident [$simple_div:literal] ),* $(,)?
         }
     }) => {
-        $crate::paste::paste! {
+        $crate::pastey::paste! {
             pub(crate) struct [<$name State>] {
                 #[allow(dead_code)]
                 src_len: usize,
                 $( pub(crate) $inline_field:        Vec<$inline_ty>, )*
-                $( pub(crate) $inline_simple_field: Vec<$crate::span::Span>, )*
-                $( pub(crate) $line_field:          Vec<($line_ty, $crate::span::Span)>, )*
-                $( pub(crate) $block_field:         Vec<($block_ty, $crate::span::Span)>, )*
-                $( pub(crate) $block_simple_field:  Vec<$crate::span::Span>, )*
+                $( pub(crate) $inline_simple_field: Vec<$crate::span::Span<$off>>, )*
+                $( pub(crate) $line_field:          Vec<($line_ty, $crate::span::Span<$off>)>, )*
+                $( pub(crate) $block_field:         Vec<($block_ty, $crate::span::Span<$off>)>, )*
+                $( pub(crate) $block_simple_field:  Vec<$crate::span::Span<$off>>, )*
             }
 
             impl [<$name State>] {
@@ -198,9 +204,11 @@ macro_rules! define_content {
                 $(
                     #[allow(dead_code)]
                     #[inline(always)]
-                    pub(crate) fn [<push_ $line_field>](
-                        &mut self, v: ($line_ty, $crate::span::Span),
+                    pub(crate) fn [<push_ $line_field>]<S: $crate::span::SpanIndex>(
+                        &mut self, v: ($line_ty, $crate::span::Span<S>),
                     ) {
+                        let v = (v.0, $crate::span::Span::<$off>::from_usize(
+                            v.1.start_usize(), v.1.end_usize()));
                         if self.$line_field.len() == self.$line_field.capacity() {
                             self.[<push_cold_ $line_field>](v);
                         } else {
@@ -212,7 +220,7 @@ macro_rules! define_content {
                     #[cold]
                     #[inline(never)]
                     fn [<push_cold_ $line_field>](
-                        &mut self, v: ($line_ty, $crate::span::Span),
+                        &mut self, v: ($line_ty, $crate::span::Span<$off>),
                     ) {
                         if self.$line_field.capacity() == 0 {
                             self.$line_field.reserve_exact(self.src_len / $line_div);
@@ -224,9 +232,11 @@ macro_rules! define_content {
                 $(
                     #[allow(dead_code)]
                     #[inline(always)]
-                    pub(crate) fn [<push_ $block_field>](
-                        &mut self, v: ($block_ty, $crate::span::Span),
+                    pub(crate) fn [<push_ $block_field>]<S: $crate::span::SpanIndex>(
+                        &mut self, v: ($block_ty, $crate::span::Span<S>),
                     ) {
+                        let v = (v.0, $crate::span::Span::<$off>::from_usize(
+                            v.1.start_usize(), v.1.end_usize()));
                         if self.$block_field.len() == self.$block_field.capacity() {
                             self.[<push_cold_ $block_field>](v);
                         } else {
@@ -238,7 +248,7 @@ macro_rules! define_content {
                     #[cold]
                     #[inline(never)]
                     fn [<push_cold_ $block_field>](
-                        &mut self, v: ($block_ty, $crate::span::Span),
+                        &mut self, v: ($block_ty, $crate::span::Span<$off>),
                     ) {
                         if self.$block_field.capacity() == 0 {
                             self.$block_field.reserve_exact(self.src_len / $block_div);
@@ -250,9 +260,11 @@ macro_rules! define_content {
                 $(
                     #[allow(dead_code)]
                     #[inline(always)]
-                    pub(crate) fn [<push_ $block_simple_field>](
-                        &mut self, s: $crate::span::Span,
+                    pub(crate) fn [<push_ $block_simple_field>]<S: $crate::span::SpanIndex>(
+                        &mut self, s: $crate::span::Span<S>,
                     ) {
+                        let s = $crate::span::Span::<$off>::from_usize(
+                            s.start_usize(), s.end_usize());
                         if self.$block_simple_field.len()
                             == self.$block_simple_field.capacity()
                         {
@@ -266,7 +278,7 @@ macro_rules! define_content {
                     #[cold]
                     #[inline(never)]
                     fn [<push_cold_ $block_simple_field>](
-                        &mut self, s: $crate::span::Span,
+                        &mut self, s: $crate::span::Span<$off>,
                     ) {
                         if self.$block_simple_field.capacity() == 0 {
                             self.$block_simple_field.reserve_exact(self.src_len / $simple_div);
@@ -278,9 +290,11 @@ macro_rules! define_content {
                 $(
                     #[allow(dead_code)]
                     #[inline(always)]
-                    pub(crate) fn [<push_ $inline_simple_field>](
-                        &mut self, s: $crate::span::Span,
+                    pub(crate) fn [<push_ $inline_simple_field>]<S: $crate::span::SpanIndex>(
+                        &mut self, s: $crate::span::Span<S>,
                     ) {
+                        let s = $crate::span::Span::<$off>::from_usize(
+                            s.start_usize(), s.end_usize());
                         if self.$inline_simple_field.len()
                             == self.$inline_simple_field.capacity()
                         {
@@ -294,7 +308,7 @@ macro_rules! define_content {
                     #[cold]
                     #[inline(never)]
                     fn [<push_cold_ $inline_simple_field>](
-                        &mut self, s: $crate::span::Span,
+                        &mut self, s: $crate::span::Span<$off>,
                     ) {
                         if self.$inline_simple_field.capacity() == 0 {
                             self.$inline_simple_field
@@ -304,15 +318,17 @@ macro_rules! define_content {
                     }
 
                     #[inline(always)]
-                    pub(crate) fn [<push_merge_ $inline_simple_field>](
-                        &mut self, s: $crate::span::Span, floor: u32,
+                    pub(crate) fn [<push_merge_ $inline_simple_field>]<S: $crate::span::SpanIndex>(
+                        &mut self, s: $crate::span::Span<S>, floor: usize,
                     ) {
+                        let s = $crate::span::Span::<$off>::from_usize(
+                            s.start_usize(), s.end_usize());
                         if let Some(last) = self.$inline_simple_field.last_mut() {
                             if last.start != last.end
                                 && s.start != s.end
-                                && last.end >= floor
-                                && s.start >= last.end
-                                && s.start - last.end <= 1
+                                && last.end_usize() >= floor
+                                && s.start_usize() >= last.end_usize()
+                                && s.start_usize() - last.end_usize() <= 1
                             {
                                 last.end = s.end;
                                 return;
@@ -340,10 +356,10 @@ macro_rules! define_content {
             pub struct $name<'a> {
                 pub source: &'a [u8],
                 $( pub $inline_field:        Vec<$inline_ty>, )*
-                $( pub $inline_simple_field: Vec<$crate::span::Span>, )*
-                $( pub $line_field:          Vec<($line_ty, $crate::span::Span)>, )*
-                $( pub $block_field:         Vec<($block_ty, $crate::span::Span)>, )*
-                $( pub $block_simple_field:  Vec<$crate::span::Span>, )*
+                $( pub $inline_simple_field: Vec<$crate::span::Span<$off>>, )*
+                $( pub $line_field:          Vec<($line_ty, $crate::span::Span<$off>)>, )*
+                $( pub $block_field:         Vec<($block_ty, $crate::span::Span<$off>)>, )*
+                $( pub $block_simple_field:  Vec<$crate::span::Span<$off>>, )*
             }
         }
     };

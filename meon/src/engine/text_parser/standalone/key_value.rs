@@ -29,9 +29,9 @@ use super::common::*;
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
-pub struct KvIter<'a, T, F>
+pub struct KvIter<'a, O: crate::span::SpanIndex, T, F>
 where
-    F: Fn(Span, Span) -> T,
+    F: Fn(Span<O>, Span<O>) -> T,
 {
     src: &'a [u8],
     eq: u8,
@@ -47,11 +47,12 @@ where
     /// last value, or at the start of input.
     floor: usize,
     _t: std::marker::PhantomData<T>,
+    _o: std::marker::PhantomData<O>,
 }
 
-impl<'a, T, F> KvIter<'a, T, F>
+impl<'a, O: crate::span::SpanIndex, T, F> KvIter<'a, O, T, F>
 where
-    F: Fn(Span, Span) -> T,
+    F: Fn(Span<O>, Span<O>) -> T,
 {
     /// Create an iterator over `key = value` pairs.
     ///
@@ -98,6 +99,7 @@ where
             pos: if max_nest == 0 { src.len() } else { 0 },
             floor: 0,
             _t: std::marker::PhantomData,
+            _o: std::marker::PhantomData,
         }
     }
 
@@ -143,9 +145,9 @@ where
     }
 }
 
-impl<T, F> Iterator for KvIter<'_, T, F>
+impl<O: crate::span::SpanIndex, T, F> Iterator for KvIter<'_, O, T, F>
 where
-    F: Fn(Span, Span) -> T,
+    F: Fn(Span<O>, Span<O>) -> T,
 {
     type Item = T;
 
@@ -186,8 +188,8 @@ where
             self.pos = next;
             self.floor = next;
             return Some((self.make)(
-                Span::new(ks as u32, key_end as u32),
-                Span::new(val_start as u32, val_end as u32),
+                Span::<O>::from_usize(ks, key_end),
+                Span::<O>::from_usize(val_start, val_end),
             ));
         }
     }
@@ -525,11 +527,11 @@ mod tests {
         #[test]
         fn test_23_generated_escape_byte() {
             for src in [&b"a^=1"[..], b"a\\=1", b"a=x^;b=1", b"a=1;;b=2"] {
-                let full = caret::CaretParser::parse(src).pairs.to_vec();
-                let find: Vec<Pair> = caret::CaretParser::find_pairs(src).collect();
+                let full = caret::CaretParser::parse_unchecked(src).pairs.to_vec();
+                let find: Vec<Pair> = caret::CaretParser::find_pairs_unchecked(src).collect();
                 assert_eq!(find, full, "{:?}", String::from_utf8_lossy(src));
             }
-            assert_eq!(caret::CaretParser::find_pairs(b"a^=1").count(), 0);
+            assert_eq!(caret::CaretParser::find_pairs_unchecked(b"a^=1").count(), 0);
         }
 
         // 24. The finder gets the grammar's `max_nest`: with 0, neither the
@@ -537,8 +539,8 @@ mod tests {
         #[test]
         fn test_24_generated_no_room() {
             let src = b"a=1;b=2";
-            assert!(no_room::NoRoomParser::parse(src).pairs.is_empty());
-            assert_eq!(no_room::NoRoomParser::find_pairs(src).count(), 0);
+            assert!(no_room::NoRoomParser::parse_unchecked(src).pairs.is_empty());
+            assert_eq!(no_room::NoRoomParser::find_pairs_unchecked(src).count(), 0);
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -577,7 +579,7 @@ mod tests {
         fn test_25_generated_opaque_keys() {
             use quoted::QuotedParser;
             let keys = |src: &[u8]| -> Vec<(u32, u32)> {
-                QuotedParser::parse(src)
+                QuotedParser::parse_unchecked(src)
                     .pairs
                     .iter()
                     .map(|p| (p.key.start, p.key.end))

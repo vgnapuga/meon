@@ -7,13 +7,29 @@ engine. They exist to track engine performance across changes and feature
 flags, and to set its flat span vectors next to parsers that build other
 output shapes (see [Scope & fairness](#scope--fairness)).
 
-| Bench                 | Measures                                                             |
-|-----------------------|----------------------------------------------------------------------|
-| `meon-md_parse`       | `MarkdownParser::parse` — full single-pass parse.                    |
+| Bench                 | Measures                                                                                                                                           |
+|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `meon-md_parse`       | `MarkdownParser::parse` — full single-pass parse.                                                                                                  |
 | `meon-md_standalone`  | `find_*` iterators — one element kind, no context; plus the `context()` map build and the context-aware `find_context_*` variants (warm and cold). |
-| `meon-md_compare`     | meon-md vs `pulldown-cmark` / `comrak` — cross-parser throughput.    |
-| `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — structural / typed parse.   |
-| `meon-json_compare`   | meon-json vs `simd-json` / `sonic-rs` — cross-parser throughput.     |
+| `meon-md_compare`     | meon-md vs `pulldown-cmark` / `comrak` — cross-parser throughput.                                                                                  |
+| `meon-md_offsets`     | small corpora with `Span<u16/u32/u64>`; 32 MiB corpora with `u32/u64`.                                                                             |
+| `meon-json_parse`     | `JsonParser::parse` (+ `type_scalars`) — structural / typed parse.                                                                                 |
+| `meon-json_standalone`| `find_*` iterators, the `context()` map and `find_context_*` variants.                                                                             |
+| `meon-json_offsets`   | small corpora with `Span<u16/u32/u64>`; 32 MiB corpora with `u32/u64`.                                                                             |
+| `meon-json_compare`   | meon-json vs `simd-json` / `sonic-rs` — cross-parser throughput.                                                                                   |
+
+### Cold and warmed scenarios
+
+- `meon-md_parse` and `meon-json_parse` — **isolated**: only the engine parser
+  is timed; no cross-parser sanity pass or other parser's timed benchmark runs
+  before it.
+- `meon-md_compare` and `meon-json_compare` — **warmed**: all compared parsers
+  run in one process after a one-time sanity/validation pass, so the allocator,
+  pages and caches are shared and already warm. `pulldown-cmark`, `comrak`,
+  `simd-json` and `sonic-rs` are measured under the same conditions as the
+  corresponding meon parser.
+- Absolute numbers from `_parse` and `_compare` answer different questions and
+  are not interchangeable.
 
 Per-corpus composition reports, full result tables, and the cross-parser
 numbers live in their own documents — this file is the overview, how-to-run,
@@ -50,8 +66,9 @@ fairness frame and test hardware. For the cross-parser comparisons see
 
 ### Markdown corpora (`meon-md_*`)
 
-Each base document is tiled `REPEAT_COUNT` times (default `10`) so the working
-set comfortably exceeds cache.
+Each base document is tiled `REPEAT_COUNT` times so the working set
+comfortably exceeds cache. The `small` feature keeps the default tiling;
+`big` multiplies it by 100. With neither feature set, `small` is used.
 
 | Corpus  | Shape                                                                  | Stresses                                                          |
 |---------|------------------------------------------------------------------------|-------------------------------------------------------------------|
@@ -75,9 +92,9 @@ Current composition and historical measurements are in
 
 ### JSON corpora (`meon-json_*`)
 
-Each corpus is one valid top-level JSON array, scaled by `COUNT`
+Each corpus is one valid top-level JSON array, scaled by `REPEAT_COUNT`
 (`benches/benches/docs_json.rs`); the `small` and `big` runs differ only in
-`COUNT`.
+that factor, selected by the corresponding Cargo feature.
 
 | Corpus    | Shape                                                                  | Stresses                                                                 |
 |-----------|------------------------------------------------------------------------|--------------------------------------------------------------------------|
@@ -104,15 +121,25 @@ Inside `nix develop`:
 cargo bench --bench meon-md_parse
 cargo bench --bench meon-md_standalone
 cargo bench --bench meon-md_compare
+cargo bench --bench meon-md_offsets
 cargo bench --bench meon-json_parse
+cargo bench --bench meon-json_standalone
+cargo bench --bench meon-json_offsets
 cargo bench --bench meon-json_compare
 
 # Nightly, AVX2 SIMD path, tuned for the host CPU:
-RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_parse        --features avx2
-RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_standalone   --features avx2
-RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_compare      --features avx2
-RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_parse      --features avx2
-RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_compare    --features avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_parse        --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_standalone   --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_compare      --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-md_offsets      --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_parse      --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_standalone --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_offsets    --features meon/avx2
+RUSTFLAGS="-C target-cpu=native" cargo bench --bench meon-json_compare    --features meon/avx2
+
+# Working-set size: `small` (default) or `big` (100x larger).
+cargo bench --bench meon-md_parse        --features benches/small
+cargo bench --bench meon-json_parse      --features benches/big
 ```
 
 Criterion knobs (`SAMPLE_SIZE`, `SAMPLE_TIME`, `WARMUP_TIME`) live in
@@ -166,7 +193,7 @@ a quick local run; raise them for publication-grade numbers.
 ```
 CPU:             AMD Ryzen 5 5625U (Zen 3)
 RAM:             16 GB
-OS:              NixOS 25.05
+OS:              NixOS 26.05
 rustc (stable):  1.86.0
 rustc (nightly): 1.98.0-nightly
 Environment:     nix develop (isolated shell)
@@ -182,100 +209,100 @@ the hardware above (`perf stat`, 10 runs, user-space counters, stable build,
 
 | Corpus  | insn/cycle   | branch-misses  | cache-misses   |
 |---------|--------------|----------------|----------------|
-| `plain` | 4.94 -> 4.82 | 0.11% -> 0.09% | 1.61% -> 1.58% |
-| `hot`   | 4.55 -> 4.27 | 0.08% -> 0.09% | 4.20% -> 3.12% |
-| `heavy` | 4.11 -> 3.85 | 0.11% -> 0.12% | 6.74% -> 2.88% |
+| `plain` | 5.09 -> 4.73 | 0.07% -> 0.06% | 1.42% -> 1.72% |
+| `hot`   | 4.32 -> 3.94 | 0.08% -> 0.09% | 4.58% -> 3.09% |
+| `heavy` | 3.86 -> 3.61 | 0.13% -> 0.11% | 6.79% -> 2.62% |
 
-IPC holds at 3.9-4.9 with branch-misses near 0.1%, and the cache-miss rate
-does not grow as the input scales ~100x from `small` to `big` — the flat
-span-vector working set stays cache-resident.
+IPC holds at 3.6-5.1 with branch-misses near 0.1%, and the cache-miss rate
+stays low as the input scales ~100x from `small` to `big` — the flat
+span-vector working set stays largely cache-resident.
 
 <details>
-<summary>small</summary>
-
-```
- Performance counter stats for 'cargo bench --bench meon-md_parse -- plain/full --profile-time 10' (10 runs):
-
-         10 159,29 msec task-clock:u                     #    1,000 CPUs utilized               ( +-  0,04% )
-    43 264 463 783      cycles:u                         #    4,259 GHz                         ( +-  0,07% )  (83,35%)
-   218 594 362 736      instructions:u                   #    5,05  insn per cycle              ( +-  0,07% )  (83,35%)
-    34 020 712 611      branches:u                       #    3,349 G/sec                       ( +-  0,06% )  (83,33%)
-        35 635 825      branch-misses:u                  #    0,10% of all branches             ( +-  0,08% )  (83,32%)
-     1 880 142 537      cache-references:u               #  185,066 M/sec                       ( +-  0,06% )  (83,35%)
-        28 214 445      cache-misses:u                   #    1,50% of all cache refs           ( +-  1,19% )  (83,33%)
-
-          10,16244 +- 0,00413 seconds time elapsed  ( +-  0,04% )
-
-
- Performance counter stats for 'cargo bench --bench meon-md_parse -- hot/full --profile-time 10' (10 runs):
-
-         10 180,13 msec task-clock:u                     #    1,000 CPUs utilized               ( +-  0,05% )
-    43 330 876 527      cycles:u                         #    4,256 GHz                         ( +-  0,06% )  (83,33%)
-   199 103 802 420      instructions:u                   #    4,59  insn per cycle              ( +-  0,05% )  (83,36%)
-    40 355 490 829      branches:u                       #    3,964 G/sec                       ( +-  0,05% )  (83,36%)
-        31 818 168      branch-misses:u                  #    0,08% of all branches             ( +-  0,14% )  (83,34%)
-       771 867 251      cache-references:u               #   75,821 M/sec                       ( +-  0,10% )  (83,33%)
-        31 139 456      cache-misses:u                   #    4,03% of all cache refs           ( +-  1,63% )  (83,31%)
-
-          10,18336 +- 0,00475 seconds time elapsed  ( +-  0,05% )
-
-
- Performance counter stats for 'cargo bench --bench meon-md_parse -- heavy/full --profile-time 10' (10 runs):
-
-         10 185,68 msec task-clock:u                     #    0,999 CPUs utilized               ( +-  0,02% )
-    43 394 650 499      cycles:u                         #    4,260 GHz                         ( +-  0,04% )  (83,31%)
-   177 936 216 759      instructions:u                   #    4,10  insn per cycle              ( +-  0,06% )  (83,35%)
-    36 857 702 085      branches:u                       #    3,619 G/sec                       ( +-  0,06% )  (83,34%)
-        37 668 617      branch-misses:u                  #    0,10% of all branches             ( +-  0,07% )  (83,33%)
-       666 666 978      cache-references:u               #   65,451 M/sec                       ( +-  0,19% )  (83,35%)
-        40 337 326      cache-misses:u                   #    6,05% of all cache refs           ( +-  1,94% )  (83,33%)
-
-          10,19303 +- 0,00501 seconds time elapsed  ( +-  0,05% )
-```
+    <summary>small</summary>
+    
+    ```
+    Performance counter stats for 'cargo bench --bench meon-md_parse --features benches/small -- plain/full --profile-time 10' (10 runs):
+    
+             10 229,55 msec task-clock:u                    #    0,999 CPUs utilized               ( +-  0,09% )
+        42 940 004 250      cycles:u                        #    4,198 GHz                         ( +-  0,09% )  (83,36%)
+       218 764 234 353      instructions:u                  #    5,09  insn per cycle              ( +-  0,10% )  (83,33%)
+        35 086 851 687      branches:u                      #    3,430 G/sec                       ( +-  0,10% )  (83,32%)
+            25 611 871      branch-misses:u                 #    0,07% of all branches             ( +-  0,56% )  (83,34%)
+         2 032 549 469      cache-references:u              #  198,694 M/sec                       ( +-  0,10% )  (83,35%)
+            28 890 576      cache-misses:u                  #    1,42% of all cache refs           ( +-  0,69% )  (83,32%)
+    
+              10,23617 +- 0,00881 seconds time elapsed  ( +-  0,09% )
+    
+    
+    Performance counter stats for 'cargo bench --bench meon-md_parse --features benches/small -- hot/full --profile-time 10' (10 runs):
+    
+            10 232,54 msec task-clock:u                     #    0,998 CPUs utilized               ( +-  0,08% )
+       43 086 199 662      cycles:u                         #    4,211 GHz                         ( +-  0,11% )  (83,36%)
+      186 214 408 966      instructions:u                   #    4,32  insn per cycle              ( +-  0,15% )  (83,34%)
+       35 219 716 781      branches:u                       #    3,442 G/sec                       ( +-  0,15% )  (83,25%)
+           28 610 837      branch-misses:u                  #    0,08% of all branches             ( +-  0,13% )  (83,34%)
+          700 157 070      cache-references:u               #   68,425 M/sec                       ( +-  0,20% )  (83,36%)
+           32 053 100      cache-misses:u                   #    4,58% of all cache refs           ( +-  1,35% )  (83,38%)
+    
+              10,25184 +- 0,00836 seconds time elapsed  ( +-  0,08% )
+    
+    
+    Performance counter stats for 'cargo bench --bench meon-md_parse --features benches/small -- heavy/full --profile-time 10' (10 runs):
+    
+            10 240,16 msec task-clock:u                     #    0,999 CPUs utilized               ( +-  0,09% )
+       43 205 511 924      cycles:u                         #    4,219 GHz                         ( +-  0,11% )  (83,33%)
+      166 772 735 749      instructions:u                   #    3,86  insn per cycle              ( +-  0,13% )  (83,32%)
+       34 276 261 321      branches:u                       #    3,347 G/sec                       ( +-  0,14% )  (83,33%)
+           44 907 899      branch-misses:u                  #    0,13% of all branches             ( +-  0,70% )  (83,34%)
+          724 374 118      cache-references:u               #   70,739 M/sec                       ( +-  0,35% )  (83,36%)
+           49 163 554      cache-misses:u                   #    6,79% of all cache refs           ( +-  2,11% )  (83,35%)
+    
+              10,25073 +- 0,00908 seconds time elapsed  ( +-  0,09% )
+    ```
 
 </details>
 
 <details>
-<summary>big</summary>
-
-```
- Performance counter stats for 'cargo bench --bench meon-md_parse -- plain/full --profile-time 10' (10 runs):
-
-         10 884,77 msec task-clock:u                     #    1,000 CPUs utilized               ( +-  0,07% )
-    45 012 693 533      cycles:u                         #    4,135 GHz                         ( +-  0,07% )  (83,36%)
-   221 459 271 552      instructions:u                   #    4,92  insn per cycle              ( +-  0,13% )  (83,33%)
-    34 666 532 531      branches:u                       #    3,185 G/sec                       ( +-  0,13% )  (83,33%)
-        31 592 758      branch-misses:u                  #    0,09% of all branches             ( +-  0,13% )  (83,32%)
-     1 927 288 769      cache-references:u               #  177,063 M/sec                       ( +-  0,14% )  (83,35%)
-        29 491 657      cache-misses:u                   #    1,53% of all cache refs           ( +-  0,79% )  (83,33%)
-
-          10,88755 +- 0,00803 seconds time elapsed  ( +-  0,07% )
-
-
- Performance counter stats for 'cargo bench --bench meon-md_parse -- hot/full --profile-time 10' (10 runs):
-
-         10 876,84 msec task-clock:u                     #    1,000 CPUs utilized               ( +-  0,16% )
-    32 806 757 908      cycles:u                         #    3,016 GHz                         ( +-  0,12% )  (83,34%)
-   139 551 699 389      instructions:u                   #    4,25  insn per cycle              ( +-  0,12% )  (83,34%)
-    28 186 238 995      branches:u                       #    2,591 G/sec                       ( +-  0,13% )  (83,34%)
-        25 475 333      branch-misses:u                  #    0,09% of all branches             ( +-  0,16% )  (83,33%)
-       675 845 164      cache-references:u               #   62,136 M/sec                       ( +-  0,16% )  (83,34%)
-        24 629 452      cache-misses:u                   #    3,64% of all cache refs           ( +-  1,79% )  (83,33%)
-
-           10,8816 +- 0,0190 seconds time elapsed  ( +-  0,17% )
-
-
- Performance counter stats for 'cargo bench --bench meon-md_parse -- heavy/full --profile-time 10' (10 runs):
-
-         10 796,42 msec task-clock:u                     #    1,000 CPUs utilized               ( +-  0,29% )
-    33 353 325 730      cycles:u                         #    3,089 GHz                         ( +-  0,32% )  (83,34%)
-   128 189 219 133      instructions:u                   #    3,84  insn per cycle              ( +-  0,32% )  (83,34%)
-    26 426 568 356      branches:u                       #    2,448 G/sec                       ( +-  0,32% )  (83,33%)
-        30 807 557      branch-misses:u                  #    0,12% of all branches             ( +-  0,32% )  (83,34%)
-       842 155 265      cache-references:u               #   78,003 M/sec                       ( +-  0,31% )  (83,34%)
-        27 096 943      cache-misses:u                   #    3,22% of all cache refs           ( +-  0,71% )  (83,34%)
-
-           10,7993 +- 0,0313 seconds time elapsed  ( +-  0,29% )
-```
+    <summary>big</summary>
+    
+    ```
+    Performance counter stats for 'cargo bench --bench meon-md_parse --features benches/big -- plain/full --profile-time 10' (10 runs):
+   
+            15 766,90 msec task-clock:u                     #    0,999 CPUs utilized               ( +-  0,13% )
+       57 415 448 091      cycles:u                         #    3,642 GHz                         ( +-  0,12% )  (83,34%)
+      271 480 901 406      instructions:u                   #    4,73  insn per cycle              ( +-  0,21% )  (83,35%)
+       46 181 629 676      branches:u                       #    2,929 G/sec                       ( +-  0,20% )  (83,33%)
+           27 370 876      branch-misses:u                  #    0,06% of all branches             ( +-  3,81% )  (83,33%)
+        2 646 265 051      cache-references:u               #  167,837 M/sec                       ( +-  0,21% )  (83,33%)
+           45 505 010      cache-misses:u                   #    1,72% of all cache refs           ( +-  0,48% )  (83,33%)
+   
+              15,7794 +- 0,0188 seconds time elapsed  ( +-  0,12% )
+    
+    
+     Performance counter stats for 'cargo bench --bench meon-md_parse --features benches/big -- hot/full --profile-time 10' (10 runs):
+    
+             15 704,54 msec task-clock:u                     #    0,999 CPUs utilized               ( +-  0,10% )
+        45 345 606 824      cycles:u                         #    2,887 GHz                         ( +-  0,14% )  (83,35%)
+       178 657 494 273      instructions:u                   #    3,94  insn per cycle              ( +-  0,19% )  (83,34%)
+        35 051 476 785      branches:u                       #    2,232 G/sec                       ( +-  0,19% )  (83,34%)
+            33 024 256      branch-misses:u                  #    0,09% of all branches             ( +-  0,44% )  (83,33%)
+         1 213 788 136      cache-references:u               #   77,289 M/sec                       ( +-  0,17% )  (83,32%)
+            37 526 901      cache-misses:u                   #    3,09% of all cache refs           ( +-  0,68% )  (83,34%)
+    
+               15,7154 +- 0,0158 seconds time elapsed  ( +-  0,10% )
+    
+    
+     Performance counter stats for 'cargo bench --bench meon-md_parse --features benches/big -- heavy/full --profile-time 10' (10 runs):
+    
+             15 703,29 msec task-clock:u                     #    0,999 CPUs utilized               ( +-  0,12% )
+        46 411 408 196      cycles:u                         #    2,956 GHz                         ( +-  0,17% )  (83,35%)
+       167 358 470 651      instructions:u                   #    3,61  insn per cycle              ( +-  0,18% )  (83,35%)
+        34 841 370 726      branches:u                       #    2,219 G/sec                       ( +-  0,18% )  (83,33%)
+            39 704 223      branch-misses:u                  #    0,11% of all branches             ( +-  0,45% )  (83,32%)
+         1 363 939 130      cache-references:u               #   86,857 M/sec                       ( +-  0,13% )  (83,31%)
+            35 731 776      cache-misses:u                   #    2,62% of all cache refs           ( +-  0,45% )  (83,36%)
+    
+               15,7176 +- 0,0194 seconds time elapsed  ( +-  0,12% )
+    ```
 
 </details>

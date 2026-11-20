@@ -19,11 +19,11 @@ fn spans(it: impl Iterator<Item = Span>) -> Vec<(u32, u32)> {
 #[test]
 fn test_01_no_opaque_no_difference() {
     let src = b"plain **bold** and *italic* text";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert!(ctx.spans().is_empty());
     assert_eq!(
-        spans(MarkdownParser::find_context_bolds(src, &ctx)),
-        spans(MarkdownParser::find_bolds(src)),
+        spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx)),
+        spans(MarkdownParser::find_bolds_unchecked(src)),
     );
 }
 
@@ -31,10 +31,10 @@ fn test_01_no_opaque_no_difference() {
 #[test]
 fn test_02_bold_inside_fence() {
     let src = b"**a**\n```\n**b**\n```\n**c**";
-    let ctx = MarkdownParser::context(src);
-    assert_eq!(spans(MarkdownParser::find_bolds(src)).len(), 3);
+    let ctx = MarkdownParser::context_unchecked(src);
+    assert_eq!(spans(MarkdownParser::find_bolds_unchecked(src)).len(), 3);
     assert_eq!(
-        spans(MarkdownParser::find_context_bolds(src, &ctx)),
+        spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx)),
         vec![(2, 3), (22, 23)],
     );
 }
@@ -43,9 +43,9 @@ fn test_02_bold_inside_fence() {
 #[test]
 fn test_03_bold_inside_code_span() {
     let src = b"code `**x**` and **real**";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        spans(MarkdownParser::find_context_bolds(src, &ctx)),
+        spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx)),
         vec![(19, 23)],
     );
 }
@@ -55,10 +55,10 @@ fn test_03_bold_inside_code_span() {
 #[test]
 fn test_04_bold_containing_code_span() {
     let src = b"**a `code` b**";
-    let ctx = MarkdownParser::context(src);
-    let bolds = spans(MarkdownParser::find_context_bolds(src, &ctx));
+    let ctx = MarkdownParser::context_unchecked(src);
+    let bolds = spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx));
     assert_eq!(bolds, vec![(2, 12)]);
-    let full = MarkdownParser::parse(src);
+    let full = MarkdownParser::parse_unchecked(src);
     assert_eq!(
         bolds,
         full.bolds
@@ -72,66 +72,72 @@ fn test_04_bold_containing_code_span() {
 #[test]
 fn test_05_heading_inside_fence() {
     let src = b"# real\n```\n# fake\n```\n## real2";
-    let ctx = MarkdownParser::context(src);
-    let aware: Vec<_> = MarkdownParser::find_context_headings(src, &ctx).collect();
+    let ctx = MarkdownParser::context_unchecked(src);
+    let aware: Vec<_> = MarkdownParser::find_context_headings_unchecked(src, &ctx).collect();
     assert_eq!(aware.len(), 2);
     assert_eq!(u8::from(aware[0].0.level), 1);
     assert_eq!(u8::from(aware[1].0.level), 2);
     // Context-free finder sees the fake one too.
-    assert_eq!(MarkdownParser::find_headings(src).count(), 3);
+    assert_eq!(MarkdownParser::find_headings_unchecked(src).count(), 3);
 }
 
 // 06. Bullet items and ordered items inside a fence are suppressed
 #[test]
 fn test_06_list_items_inside_fence() {
     let src = b"- real\n```\n- fake\n1. fake\n```\n1. real";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        MarkdownParser::find_context_bullet_items(src, &ctx).count(),
+        MarkdownParser::find_context_bullet_items_unchecked(src, &ctx).count(),
         1
     );
     assert_eq!(
-        MarkdownParser::find_context_ordered_items(src, &ctx).count(),
+        MarkdownParser::find_context_ordered_items_unchecked(src, &ctx).count(),
         1
     );
-    assert_eq!(MarkdownParser::find_bullet_items(src).count(), 2);
-    assert_eq!(MarkdownParser::find_ordered_items(src).count(), 2);
+    assert_eq!(MarkdownParser::find_bullet_items_unchecked(src).count(), 2);
+    assert_eq!(MarkdownParser::find_ordered_items_unchecked(src).count(), 2);
 }
 
 // 07. Thematic breaks inside a fence are suppressed
 #[test]
 fn test_07_thematic_break_inside_fence() {
     let src = b"---\n```\n---\n```\n";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        MarkdownParser::find_context_thematic_breaks(src, &ctx).count(),
+        MarkdownParser::find_context_thematic_breaks_unchecked(src, &ctx).count(),
         1
     );
-    assert_eq!(MarkdownParser::find_thematic_breaks(src).count(), 2);
+    assert_eq!(
+        MarkdownParser::find_thematic_breaks_unchecked(src).count(),
+        2
+    );
 }
 
 // 08. Blockquote markers inside a fence are suppressed
 #[test]
 fn test_08_blockquote_inside_fence() {
     let src = b"> real\n```\n> fake\n```\n";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        MarkdownParser::find_context_blockquotes(src, &ctx).count(),
+        MarkdownParser::find_context_blockquotes_unchecked(src, &ctx).count(),
         1
     );
-    assert_eq!(MarkdownParser::find_blockquotes(src).count(), 2);
+    assert_eq!(MarkdownParser::find_blockquotes_unchecked(src).count(), 2);
 }
 
 // 09. Unclosed fence covers to end of input
 #[test]
 fn test_09_unclosed_fence() {
     let src = b"**a**\n```\n**never** # nope - nope";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        spans(MarkdownParser::find_context_bolds(src, &ctx)),
+        spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx)),
         vec![(2, 3)],
     );
-    assert_eq!(MarkdownParser::find_context_headings(src, &ctx).count(), 0);
+    assert_eq!(
+        MarkdownParser::find_context_headings_unchecked(src, &ctx).count(),
+        0
+    );
 }
 
 // 10. Italic close candidate inside a code span is skipped; the true close
@@ -139,9 +145,9 @@ fn test_09_unclosed_fence() {
 #[test]
 fn test_10_close_candidate_inside_code_span() {
     let src = b"*a `*` b*";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        spans(MarkdownParser::find_context_italics(src, &ctx)),
+        spans(MarkdownParser::find_context_italics_unchecked(src, &ctx)),
         vec![(1, 8)],
     );
 }
@@ -150,9 +156,9 @@ fn test_10_close_candidate_inside_code_span() {
 #[test]
 fn test_11_autolink_covers_contents() {
     let src = b"<http://x/*y*z> and *real*";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(
-        spans(MarkdownParser::find_context_italics(src, &ctx)),
+        spans(MarkdownParser::find_context_italics_unchecked(src, &ctx)),
         vec![(21, 25)],
     );
 }
@@ -162,23 +168,23 @@ fn test_11_autolink_covers_contents() {
 #[test]
 fn test_12_agreement_with_full_parse() {
     let src = b"# t\n\npara **b** `c` *i*\n\n```\n**x** # h - l\n```\n\n> **q**\n";
-    let ctx = MarkdownParser::context(src);
-    let full = MarkdownParser::parse(src);
+    let ctx = MarkdownParser::context_unchecked(src);
+    let full = MarkdownParser::parse_unchecked(src);
 
-    let aware_bolds = spans(MarkdownParser::find_context_bolds(src, &ctx));
+    let aware_bolds = spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx));
     let full_bolds: Vec<_> = full.bolds.iter().map(|s| (s.start, s.end)).collect();
     assert_eq!(aware_bolds, full_bolds);
 
-    let aware_italics = spans(MarkdownParser::find_context_italics(src, &ctx));
+    let aware_italics = spans(MarkdownParser::find_context_italics_unchecked(src, &ctx));
     let full_italics: Vec<_> = full.italics.iter().map(|s| (s.start, s.end)).collect();
     assert_eq!(aware_italics, full_italics);
 
     assert_eq!(
-        MarkdownParser::find_context_headings(src, &ctx).count(),
+        MarkdownParser::find_context_headings_unchecked(src, &ctx).count(),
         full.headings.len(),
     );
     assert_eq!(
-        MarkdownParser::find_context_bullet_items(src, &ctx).count(),
+        MarkdownParser::find_context_bullet_items_unchecked(src, &ctx).count(),
         full.bullet_items.len(),
     );
 }
@@ -195,46 +201,56 @@ fn item_spans<T>(it: impl IntoIterator<Item = (T, Span)>) -> Vec<(u32, u32)> {
 
 /// Every context-aware finder agrees with the full parse on `src`.
 fn assert_agrees(src: &[u8]) {
-    let ctx = MarkdownParser::context(src);
-    let full = MarkdownParser::parse(src);
+    let ctx = MarkdownParser::context_unchecked(src);
+    let full = MarkdownParser::parse_unchecked(src);
     let text = String::from_utf8_lossy(src);
     assert_eq!(
-        spans(MarkdownParser::find_context_italics(src, &ctx)),
+        spans(MarkdownParser::find_context_italics_unchecked(src, &ctx)),
         pairs(&full.italics),
         "italics in {text:?}"
     );
     assert_eq!(
-        spans(MarkdownParser::find_context_bolds(src, &ctx)),
+        spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx)),
         pairs(&full.bolds),
         "bolds in {text:?}"
     );
     assert_eq!(
-        spans(MarkdownParser::find_context_bold_italics(src, &ctx)),
+        spans(MarkdownParser::find_context_bold_italics_unchecked(
+            src, &ctx
+        )),
         pairs(&full.bold_italics),
         "bold_italics in {text:?}"
     );
     assert_eq!(
-        spans(MarkdownParser::find_context_blockquotes(src, &ctx)),
+        spans(MarkdownParser::find_context_blockquotes_unchecked(
+            src, &ctx
+        )),
         pairs(&full.blockquotes),
         "blockquotes in {text:?}"
     );
     assert_eq!(
-        item_spans(MarkdownParser::find_context_headings(src, &ctx)),
+        item_spans(MarkdownParser::find_context_headings_unchecked(src, &ctx)),
         item_spans(full.headings.iter().copied()),
         "headings in {text:?}"
     );
     assert_eq!(
-        item_spans(MarkdownParser::find_context_thematic_breaks(src, &ctx)),
+        item_spans(MarkdownParser::find_context_thematic_breaks_unchecked(
+            src, &ctx
+        )),
         item_spans(full.thematic_breaks.iter().copied()),
         "thematic_breaks in {text:?}"
     );
     assert_eq!(
-        item_spans(MarkdownParser::find_context_bullet_items(src, &ctx)),
+        item_spans(MarkdownParser::find_context_bullet_items_unchecked(
+            src, &ctx
+        )),
         item_spans(full.bullet_items.iter().copied()),
         "bullet_items in {text:?}"
     );
     assert_eq!(
-        item_spans(MarkdownParser::find_context_ordered_items(src, &ctx)),
+        item_spans(MarkdownParser::find_context_ordered_items_unchecked(
+            src, &ctx
+        )),
         item_spans(full.ordered_items.iter().copied()),
         "ordered_items in {text:?}"
     );
@@ -328,7 +344,9 @@ fn test_19_blockquote_frames_any_order() {
     );
     assert_eq!(ctx.spans(), &[Span::new(0, 7)]);
     assert_eq!(
-        spans(MarkdownParser::find_context_blockquotes(src, &ctx)),
+        spans(MarkdownParser::find_context_blockquotes_unchecked(
+            src, &ctx
+        )),
         vec![(10, 14)],
     );
 }
@@ -338,10 +356,16 @@ fn test_19_blockquote_frames_any_order() {
 #[test]
 fn test_20_links_are_opaque() {
     let src = b"[**Docs**](https://docs.rs) and *real*\n";
-    let ctx = MarkdownParser::context(src);
+    let ctx = MarkdownParser::context_unchecked(src);
     assert_eq!(ctx.spans(), &[Span::new(0, 27)]);
-    assert_eq!(spans(MarkdownParser::find_context_bolds(src, &ctx)), vec![]);
-    assert_eq!(spans(MarkdownParser::find_bolds(src)), vec![(3, 7)]);
+    assert_eq!(
+        spans(MarkdownParser::find_context_bolds_unchecked(src, &ctx)),
+        vec![]
+    );
+    assert_eq!(
+        spans(MarkdownParser::find_bolds_unchecked(src)),
+        vec![(3, 7)]
+    );
     assert_agrees(src);
     assert_agrees(b"* [***GitHub***](https://github.com/x)\n* **crate**\n");
     assert_agrees(b"*a [b*](c) d*\n");

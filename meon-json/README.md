@@ -44,7 +44,7 @@ meon-json = "0.5"
 use meon_json::JsonParser;
 
 let src = br#"{"name":"Alice","age":30,"tags":["a","b"]}"#;
-let c = JsonParser::parse(src);
+let c = JsonParser::parse(src).unwrap();
 
 // Access by element kind — O(1) per kind
 println!("objects: {}", c.objects.len());   // 1
@@ -137,7 +137,7 @@ The content struct borrows the original source. Use the built-in helpers:
 
 ```rust
 let src = br#"{"a":[1,2,3]}"#;
-let c = JsonParser::parse(src);
+let c = JsonParser::parse(src).unwrap();
 
 // str() returns None on invalid UTF-8 instead of panicking
 println!("{}", c.str(c.members[0].key).unwrap());   // → "a"  (quotes included)
@@ -174,7 +174,7 @@ it only when you need it:
 use meon_json::{JsonParser, ScalarKind};
 
 let src = br#"{"a":1,"b":true,"c":[2,3],"d":null}"#;
-let c = JsonParser::parse(src);
+let c = JsonParser::parse(src).unwrap();
 
 // All four kinds in one cache-friendly pass, owned vectors out
 let typed = c.type_scalars();
@@ -216,15 +216,16 @@ what the engine saw.
 
 ## Standalone iterators
 
-Inherited from the engine: every structural rule generates a `find_*` method
-that scans the source without a full parse. Useful when you only need one kind
-from a large document — extracting every string, say:
+Inherited from the engine: every standalone-capable structural rule generates
+a `find_*` method that scans the source without a full parse. The fallback
+fields `scalars` and `loose` have no finder. Useful when you only need one
+kind from a large document — extracting every string, say:
 
 ```rust
 use meon_json::JsonParser;
 
 let src = document.as_bytes();
-for span in JsonParser::find_strings(src) {
+for span in JsonParser::find_strings(src).unwrap() {
     println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 ```
@@ -246,8 +247,8 @@ a map of every string region in one streaming pass, and the
 string value no longer counts as an object opener:
 
 ```rust
-let ctx = JsonParser::context(src);
-for span in JsonParser::find_context_objects(src, &ctx) { /* ... */ }
+let ctx = JsonParser::context(src).unwrap();
+for span in JsonParser::find_context_objects(src, &ctx).unwrap() { /* ... */ }
 ```
 
 See
@@ -266,22 +267,28 @@ Inherited from `meon`:
 
 ```toml
 [dependencies]
-meon-json = { version = "0.4", features = ["avx2"] }
+meon = { version = "0.7", features = ["avx2"] }
 ```
 
 ---
 
 ## Nesting
 
-This grammar sets `max_nest = 64`: objects and arrays nest up to 64 levels
-deep, and `key_value` member values survive arbitrarily deep container
-nesting within that cap. A document nested deeper than 64 levels is parsed
-without panicking, but the over-cap containers are left untracked rather than
-represented as their own spans.
+This grammar sets `max_nest = 64` in its `limits` section: objects and arrays
+nest up to 64 levels deep, and `key_value` member values survive arbitrarily
+deep container nesting within that cap. The three span caps are written as
+`0` (absent), so no span is dropped for its length. A document nested deeper
+than 64 levels is parsed without panicking, but the over-cap containers are
+left untracked rather than represented as their own spans.
+
+`max_input_bytes` is not set, so the grammar does not reject large input.
+The checked `parse`, `find_*`, `find_context_*` and `context` methods still
+return `Result`; they simply never fail on length. Use `parse_unchecked` and
+the other `_unchecked` methods to skip the `Result` wrapper.
 
 ```rust
 let pretty = b"{\n  \"a\": {\n    \"b\": { \"c\": 1 }\n  }\n}";
-let c = JsonParser::parse(pretty);
+let c = JsonParser::parse(pretty).unwrap();
 assert_eq!(c.objects.len(), 3);
 assert_eq!(c.members.len(), 3);
 ```

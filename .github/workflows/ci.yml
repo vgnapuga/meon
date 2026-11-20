@@ -4,15 +4,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  stable:
-    name: stable
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -33,20 +42,156 @@ jobs:
       # so it is excluded from every stable step.
       - name: Clippy
         run: >
-          cargo clippy --workspace --exclude fuzz --all-targets
+          cargo clippy --workspace --exclude fuzz --all-targets --locked
           -- -D warnings -A clippy::manual_is_multiple_of
 
+      - name: Documentation
+        run: >
+          RUSTDOCFLAGS="-D warnings" cargo doc
+          --workspace --exclude fuzz --no-deps --locked
+
+      # meon-md/meon-json depend on the published `meon`; their verification
+      # against crates.io only works after `meon` itself is released. The
+      # package contents and manifests are still checked here, and compilation
+      # is covered by the test matrix.
+      - name: Package
+        run: |
+          cargo package -p meon-macros --locked
+          cargo package -p meon --locked
+          cargo package -p meon-md --locked --no-verify
+          cargo package -p meon-json --locked --no-verify
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
       - name: Build
-        run: cargo build --workspace --exclude fuzz
+        run: cargo build --workspace --exclude fuzz --locked
 
       # --workspace runs meon's own lib unit tests (standalone iterators, swar,
       # span, common) that the previous per-target list silently skipped.
       - name: Test
-        run: cargo test --workspace --exclude fuzz
+        run: cargo test --workspace --exclude fuzz --locked
+
+  msrv:
+    name: msrv (1.86)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.86
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.86.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check MSRV
+        run: cargo check --workspace --exclude fuzz --locked
+
+  i686:
+    name: 32-bit (i686)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain with i686 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check 32-bit
+        run: >
+          cargo check --workspace --exclude fuzz
+          --target i686-unknown-linux-gnu --locked
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check advisories, bans and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
+  dependency-review:
+    name: dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          license-check: false
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain with llvm-tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: >
+          cargo llvm-cov --workspace --exclude fuzz --locked
+          --lcov --output-path lcov.info
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: error
 
   nightly:
     name: nightly
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -61,12 +206,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build (avx2)
-        run: cargo build --workspace --exclude fuzz --features avx2
+        run: cargo build --workspace --exclude fuzz --features avx2 --locked
 
       - name: Test (avx2)
-        run: cargo test --workspace --exclude fuzz --features avx2
+        run: cargo test --workspace --exclude fuzz --features avx2 --locked
 
-      - name: Clippy (nightly, avx2)
+      - name: Check all features (libs)
         run: >
-          cargo clippy --workspace --exclude fuzz --all-targets --features avx2
+          cargo check --workspace --exclude fuzz --exclude benches
+          --all-features --locked
+
+      - name: Clippy (nightly, all features, libs)
+        run: >
+          cargo clippy --workspace --exclude fuzz --exclude benches
+          --all-targets --all-features --locked
+          -- -D warnings -A clippy::manual_is_multiple_of
+
+      - name: Clippy bench features (small)
+        run: >
+          cargo clippy -p benches --benches --features small --locked
+          -- -D warnings -A clippy::manual_is_multiple_of
+
+      - name: Clippy bench features (big)
+        run: >
+          cargo clippy -p benches --benches --features big --locked
           -- -D warnings -A clippy::manual_is_multiple_of

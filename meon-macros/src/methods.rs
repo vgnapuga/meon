@@ -12,6 +12,7 @@ use crate::model::{CF, StandaloneRule, append_ident, crate_path, standalone_fiel
 /// Emit `impl<'a> Name<'a> { ... }` with all accessor methods.
 pub(crate) fn build_content_methods(
     name: &Ident,
+    off: &TS2,
     cf: &CF,
     sep: &impl quote::ToTokens,
     _eol: &impl quote::ToTokens,
@@ -25,7 +26,7 @@ pub(crate) fn build_content_methods(
     // outside sources (or hit a parser bug) would get an unrecoverable crash.
     let str_fn = quote! {
         #[inline]
-        pub fn str(&self, span: #mc::span::Span) -> ::core::option::Option<&str> {
+        pub fn str(&self, span: #mc::span::Span<#off>) -> ::core::option::Option<&str> {
             ::core::str::from_utf8(
                 &self.source[span.start as usize..span.end as usize]
             ).ok()
@@ -34,7 +35,7 @@ pub(crate) fn build_content_methods(
 
     let bytes_fn = quote! {
         #[inline]
-        pub fn bytes(&self, span: #mc::span::Span) -> &[u8] {
+        pub fn bytes(&self, span: #mc::span::Span<#off>) -> &[u8] {
             &self.source[span.start as usize..span.end as usize]
         }
     };

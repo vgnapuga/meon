@@ -117,7 +117,7 @@ fuzz_target!(|data: &[u8]| {
     // Markdown-shaped rules plus `key_value`, sharing the unified
     // `frames`/`fdepth` stack with transparent symmetric (`*`) frames.
     // The opaque autolink rule uses a separate forward search.
-    let kv = MdKvFuzzParser::parse(data);
+    let kv = MdKvFuzzParser::parse(data).unwrap();
     let kv_check = |start: u32, end: u32| {
         assert!(start <= end);
         let _ = &kv.source[start as usize..end as usize];
@@ -186,8 +186,8 @@ fuzz_target!(|data: &[u8]| {
     // iterator to completion is the whole check; the items are already   //
     // bounded `&[u8]` slices by construction, so just consuming them is  //
     // enough to force the arithmetic. Only the delimiter-bearing inline  //
-    // fields are exercised (their `_raw` actually moves the bounds); a   //
-    // fallback like `texts` has `_raw == _clean == identity`.            //
+    // fields are exercised (their `_raw` actually moves the bounds);     //
+    // fallback fields like `texts` have `_clean` only, no `_raw`.        //
     // ------------------------------------------------------------------ //
     macro_rules! drain {
         ($it:expr) => {{ for _x in $it {} }};
@@ -215,45 +215,45 @@ fuzz_target!(|data: &[u8]| {
     // exactly the same floor the full parse is held to. Run over `data`  //
     // (raw source), independent of `kv`.                                 //
     // ------------------------------------------------------------------ //
-    for s in MdKvFuzzParser::find_codes(data) {
+    for s in MdKvFuzzParser::find_codes(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_italics(data) {
+    for s in MdKvFuzzParser::find_italics(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_bolds(data) {
+    for s in MdKvFuzzParser::find_bolds(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_bold_italics(data) {
+    for s in MdKvFuzzParser::find_bold_italics(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_autolinks(data) {
+    for s in MdKvFuzzParser::find_autolinks(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for l in MdKvFuzzParser::find_links(data) {
+    for l in MdKvFuzzParser::find_links(data).unwrap() {
         kv_check(l.text.start, l.text.end);
         kv_check(l.url.start, l.url.end);
     }
-    for p in MdKvFuzzParser::find_pairs(data) {
+    for p in MdKvFuzzParser::find_pairs(data).unwrap() {
         kv_check(p.key.start, p.key.end);
         kv_check(p.value.start, p.value.end);
     }
-    for (_, s) in MdKvFuzzParser::find_headings(data) {
+    for (_, s) in MdKvFuzzParser::find_headings(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_thematic_breaks(data) {
+    for (_, s) in MdKvFuzzParser::find_thematic_breaks(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_bullet_items(data) {
+    for (_, s) in MdKvFuzzParser::find_bullet_items(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_ordered_items(data) {
+    for (_, s) in MdKvFuzzParser::find_ordered_items(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_blockquotes(data) {
+    for s in MdKvFuzzParser::find_blockquotes(data).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_fenced_codes(data) {
+    for s in MdKvFuzzParser::find_fenced_codes(data).unwrap() {
         kv_check(s.start, s.end);
     }
 
@@ -268,32 +268,32 @@ fuzz_target!(|data: &[u8]| {
     //     `fenced_codes`) and the `chained`/`kv` rules (`links`, `pairs`) //
     //     are absent here by construction.                                //
     // ------------------------------------------------------------------ //
-    let ctx = MdKvFuzzParser::context(data);
+    let ctx = MdKvFuzzParser::context(data).unwrap();
     for &s in ctx.spans() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_context_italics(data, &ctx) {
+    for s in MdKvFuzzParser::find_context_italics(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_context_bolds(data, &ctx) {
+    for s in MdKvFuzzParser::find_context_bolds(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_context_bold_italics(data, &ctx) {
+    for s in MdKvFuzzParser::find_context_bold_italics(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_context_headings(data, &ctx) {
+    for (_, s) in MdKvFuzzParser::find_context_headings(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_context_thematic_breaks(data, &ctx) {
+    for (_, s) in MdKvFuzzParser::find_context_thematic_breaks(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_context_bullet_items(data, &ctx) {
+    for (_, s) in MdKvFuzzParser::find_context_bullet_items(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for (_, s) in MdKvFuzzParser::find_context_ordered_items(data, &ctx) {
+    for (_, s) in MdKvFuzzParser::find_context_ordered_items(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
-    for s in MdKvFuzzParser::find_context_blockquotes(data, &ctx) {
+    for s in MdKvFuzzParser::find_context_blockquotes(data, &ctx).unwrap() {
         kv_check(s.start, s.end);
     }
 });

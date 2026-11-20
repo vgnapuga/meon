@@ -12,7 +12,7 @@ use crate::model::{CF, StandaloneRule};
 /// `mc` is the resolved crate path (`crate` when expanded inside `meon` itself,
 /// the imported crate name otherwise), so the call is always fully qualified and
 /// works from any dependent crate.
-pub(crate) fn build_define_content(name: &Ident, cf: &CF, mc: &TS2) -> TS2 {
+pub(crate) fn build_define_content(name: &Ident, off: &TS2, cf: &CF, mc: &TS2) -> TS2 {
     let il = cf
         .inline
         .iter()
@@ -35,6 +35,7 @@ pub(crate) fn build_define_content(name: &Ident, cf: &CF, mc: &TS2) -> TS2 {
         .map(|(f, cap)| quote! { #f [ #cap ], });
     quote! {
         #mc::define_content!(#name {
+            offset = #off;
             inline        { #(#il)* }
             inline_simple { #(#is)* }
             line          { #(#ln)* }
@@ -46,6 +47,7 @@ pub(crate) fn build_define_content(name: &Ident, cf: &CF, mc: &TS2) -> TS2 {
 
 /// Emit the rule list consumed by `define_standalone_fns!`, prefixed with the
 /// `sep`/`eol`/`tab`/`escape` context.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_standalone_dsl(
     sep: &Literal,
     eol: &Literal,
@@ -53,6 +55,11 @@ pub(crate) fn build_standalone_dsl(
     esc: &Literal,
     max_nest: &Literal,
     crlf: &Ident,
+    lim_inline: &TS2,
+    lim_line: &TS2,
+    lim_block: &TS2,
+    check: &TS2,
+    off: &TS2,
     rules: &[StandaloneRule],
 ) -> TS2 {
     // The context spec: the capacity divisors of every fence and opaque
@@ -204,5 +211,7 @@ pub(crate) fn build_standalone_dsl(
             quote! { block_numbered((#digits), (#ends), #ty, #num_var, #kind_var, #i) { #body } => #field; }
         }
     }).collect();
-    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest, crlf=#crlf; #ctx_hdr #(#items)* }
+    quote! { sep=#sep, eol=#eol, tab=#tab, escape=#esc, max_nest=#max_nest, crlf=#crlf,
+    max_inline=#lim_inline, max_line=#lim_line, max_block=#lim_block, check=#check, off=#off;
+    #ctx_hdr #(#items)* }
 }

@@ -1,0 +1,5 @@
+error: `max_input_bytes` is set twice
+ --> tests/ui/fail/limits_input_duplicate.rs:7:9
+  |
+7 |         max_input_bytes = _;
+  |         ^^^^^^^^^^^^^^^

@@ -412,22 +412,27 @@ mod tests {
         #[test]
         fn test_19_generated_range_marker() {
             let src: &[u8] = b"x a\n  y b\nz c\n+ d\nw e\nxy f";
-            let full = narrow::NarrowParser::parse(src);
+            let full = narrow::NarrowParser::parse_unchecked(src);
             let want = vec![(b'x', 2, 3), (b'y', 8, 9)];
             assert_eq!(items(full.items.iter().copied()), want);
-            assert_eq!(items(narrow::NarrowParser::find_items(src)), want);
-            let ctx = narrow::NarrowParser::context(src);
+            assert_eq!(items(narrow::NarrowParser::find_items_unchecked(src)), want);
+            let ctx = narrow::NarrowParser::context_unchecked(src);
             assert_eq!(
-                items(narrow::NarrowParser::find_context_items(src, &ctx)),
+                items(narrow::NarrowParser::find_context_items_unchecked(
+                    src, &ctx
+                )),
                 want
             );
 
-            let full = wide::WideParser::parse(src);
+            let full = wide::WideParser::parse_unchecked(src);
             let want = vec![(b'x', 2, 3), (b'y', 8, 9), (b'z', 12, 13), (b'+', 16, 17)];
             assert_eq!(items(full.items.iter().copied()), want);
-            assert_eq!(items(wide::WideParser::find_items(src)), want);
-            let ctx = wide::WideParser::context(src);
-            assert_eq!(items(wide::WideParser::find_context_items(src, &ctx)), want);
+            assert_eq!(items(wide::WideParser::find_items_unchecked(src)), want);
+            let ctx = wide::WideParser::context_unchecked(src);
+            assert_eq!(
+                items(wide::WideParser::find_context_items_unchecked(src, &ctx)),
+                want
+            );
         }
     }
 }

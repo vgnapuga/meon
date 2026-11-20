@@ -37,7 +37,8 @@ You describe a grammar once with `define_parser!` and get back a content struct
 where every element kind lives in its own flat `Vec`. Headings in one vec,
 bold spans in another, links in a third. No tree traversal, no allocator
 pressure from node objects, no virtual dispatch. Just contiguous arrays of
-`u32` byte-offset pairs that you iterate at native speed.
+byte-offset pairs (the offset type defaults to `u32`) that you iterate at
+native speed.
 
 ---
 
@@ -48,20 +49,20 @@ pressure from node objects, no virtual dispatch. Just contiguous arrays of
 | **O(1) access by element kind** | Every element kind is its own `Vec` of spans. "All links" or "all headings" is a field, not a tree walk with node matching. |
 | **Standalone parsing of a single kind** | Supported rules generate `find_*`: it scans the source for that one kind only and skips everything else. Need only the headings — parse only the headings. |
 | **One declaration, whole parser** | `define_parser!` is a code generator: from one grammar you get the content struct, `parse`, every `find_*` / `find_context_*` iterator and every accessor. No runtime grammar interpreter, no dispatch. |
-| **Throughput that holds as input grows** | The output is a flat table of 8-byte spans, so the working set stays small. On an input 100x larger than cache `meon-md` keeps its throughput within ~6% (nightly within ~11%) and `meon-json` loses at most ~30%, while the tree, event and tape parsers it is compared with lose a third to two thirds of theirs. |
+| **Throughput that holds as input grows** | The output is a flat table of 8-byte spans, so the working set stays small. On an input 100x larger than cache `meon-md` keeps its throughput within ~4% (nightly within ~6%) and `meon-json` loses at most ~30%, while the tree, event and tape parsers it is compared with lose a third to two thirds of theirs. |
 
 `meon-md` full parse vs CommonMark parsers, small (fits in cache) -> big
 (100x larger, exceeds L3), stable build, median throughput:
 
 | Corpus  | `meon-md`                    | `pulldown-cmark`        | `comrak`                |
 |---------|------------------------------|-------------------------|-------------------------|
-| `plain` | 2.86 -> 2.70 GiB/s (**-6%**) | 757 -> 484 MiB/s (-36%) | 280 -> 119 MiB/s (-58%) |
-| `hot`   | 946 -> 925 MiB/s (**-2%**)   | 157 -> 88 MiB/s (-44%)  | 45 -> 23 MiB/s (-49%)   |
-| `heavy` | 817 -> 827 MiB/s (**+1%**)   | 117 -> 72 MiB/s (-38%)  | 34 -> 20 MiB/s (-42%)   |
+| `plain` | 3.07 -> 2.96 GiB/s (**-4%**) | 880 -> 536 MiB/s (-39%) | 260 -> 119 MiB/s (-54%) |
+| `hot`   | 981 -> 976 MiB/s (**-1%**)   | 159 -> 86 MiB/s (-46%)  | 43 -> 23 MiB/s (-47%)   |
+| `heavy` | 806 -> 808 MiB/s (**0%**)    | 115 -> 70 MiB/s (-39%)  | 32 -> 19 MiB/s (-41%)   |
 
 Single-kind extraction on the same big corpora runs at `memchr` speed over
-that kind's markers: `find_headings` at 7-14 GiB/s on `hot` / `heavy`,
-`find_bolds` at 3.2-4.8 GiB/s. Neither CommonMark parser has an equivalent —
+that kind's markers: `find_headings` at 7-17 GiB/s on `hot` / `heavy`,
+`find_bolds` at 3.3-4.9 GiB/s. Neither CommonMark parser has an equivalent —
 pulling one kind out of them means a full parse.
 
 `meon-md` is a Markdown subset and does not aim at CommonMark compliance, so
@@ -96,7 +97,7 @@ MarkdownContent {
 }
 ```
 
-All spans are `u32` byte offsets — 8 bytes per span. Access to any element
+All spans are byte offsets. The type defaults to `u32` (8 bytes per span) and is selected by `limits { offset = ...; }`. Access to any element
 kind is O(1). Iterating all bold spans is a single forward scan over a
 contiguous array. The CPU prefetcher is happy.
 
@@ -104,13 +105,13 @@ contiguous array. The CPU prefetcher is happy.
 
 ## Spans — zero-copy access into the source
 
-Every element is represented as a `Span { start: u32, end: u32 }` — a
+Every element is represented as a `Span { start: u32, end: u32 }` by default — a
 half-open byte range `[start, end)` into the original source slice. Nothing
 is copied. Nothing is decoded unless you ask for it.
 
 ```rust
 let src = b"**bold** and *italic*\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 
 // Resolve a span to a string slice — zero copy, borrow from source.
 // Returns `None` on invalid UTF-8 instead of panicking.
@@ -120,8 +121,9 @@ assert_eq!(text, "bold");
 // Or work with raw bytes, no UTF-8 check
 let bytes: &[u8] = c.bytes(c.italics[0]);
 
-// Every field also gets a generated `_clean` (delimiters stripped) and
-// `_raw` (delimiters included) accessor — zero-copy byte-slice iterators.
+// Fields backed by a standalone rule also get a generated `_clean`
+// (delimiters stripped) and `_raw` (delimiters included) accessor —
+// zero-copy byte-slice iterators. Fallback fields get `_clean` only.
 let raw: &[u8] = c.bolds_raw().next().unwrap();
 assert_eq!(raw, b"**bold**");
 ```
@@ -140,20 +142,20 @@ escapes, balancing, nesting and blank-line limits still apply.
 
 ```rust
 // Full parse — all element kinds in one pass
-let content = MarkdownParser::parse(src);
+let content = MarkdownParser::parse(src).unwrap();
 
 // Standalone — only bold spans, nothing else computed
-for span in MarkdownParser::find_bolds(src) {
+for span in MarkdownParser::find_bolds(src).unwrap() {
     println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 
 // Headings with metadata — level and content span
-for (heading, span) in MarkdownParser::find_headings(src) {
+for (heading, span) in MarkdownParser::find_headings(src).unwrap() {
     println!("h{}: {}", heading.level, std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 
 // Links and images — structured type, two spans inside
-for link in MarkdownParser::find_links(src) {
+for link in MarkdownParser::find_links(src).unwrap() {
     let text = std::str::from_utf8(&src[link.text.start as usize..link.text.end as usize]).unwrap();
     let url  = std::str::from_utf8(&src[link.url.start  as usize..link.url.end  as usize]).unwrap();
     println!("[{}]({})  image={}", text, url, link.is_image);
@@ -168,10 +170,10 @@ inside a fenced code block will be matched by `find_bolds` but suppressed by
 the full parser. This divergence is by design and documented — and closable:
 
 ```rust
-// Build the opaque-region map once (fenced blocks, code spans, autolinks),
-// then run any number of context-aware finders over it.
-let ctx = MarkdownParser::context(src);
-for span in MarkdownParser::find_context_bolds(src, &ctx) {
+// Build the opaque-region map once (fenced blocks, code spans, autolinks,
+// links), then run any number of context-aware finders over it.
+let ctx = MarkdownParser::context(src).unwrap();
+for span in MarkdownParser::find_context_bolds(src, &ctx).unwrap() {
     // bold markers inside code spans and fenced blocks are skipped,
     // matching the full parse
 }
@@ -195,7 +197,16 @@ use std::num::NonZeroU8;
 pub struct Heading { pub level: NonZeroU8 }
 
 define_parser!(MyFormat {
-    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\', max_nest = 4;
+    sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+
+    limits {
+        offset = u32;
+        max_nest = 4;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+        max_input_bytes = 0;
+    }
 
     inline {
         on_trigger(b'*') {
@@ -221,11 +232,15 @@ define_parser!(MyFormat {
 });
 
 // Generated:
-// MyFormatParser::parse(src) -> MyFormatContent<'_>
-// MyFormatParser::find_bolds(src) -> impl Iterator<Item = Span>
-// MyFormatParser::find_headings(src) -> impl Iterator<Item = (Heading, Span)>
-// MyFormatParser::context(src) -> ParseContext
-// MyFormatParser::find_context_bolds(src, &ctx) -> impl Iterator<Item = Span>
+// MyFormatParser::parse(src) -> Result<MyFormatContent<'_>, InputBytesTooLarge>
+// MyFormatParser::parse_unchecked(src) -> MyFormatContent<'_>
+// MyFormatParser::find_bolds(src) -> Result<impl Iterator<Item = Span>, InputBytesTooLarge>
+// MyFormatParser::find_bolds_unchecked(src) -> impl Iterator<Item = Span>
+// MyFormatParser::find_headings(src) -> Result<impl Iterator<Item = (Heading, Span)>, InputBytesTooLarge>
+// MyFormatParser::context(src) -> Result<ParseContext, InputBytesTooLarge>
+// MyFormatParser::context_unchecked(src) -> ParseContext
+// MyFormatParser::find_context_bolds(src, &ctx) -> Result<impl Iterator<Item = Span>, InputBytesTooLarge>
+// MyFormatParser::find_context_bolds_unchecked(src, &ctx) -> impl Iterator<Item = Span>
 // MyFormatContent::bolds_clean() -> impl Iterator<Item = &[u8]>
 // MyFormatContent::bolds_raw()   -> impl Iterator<Item = &[u8]>
 // ... and more
@@ -234,6 +249,25 @@ define_parser!(MyFormat {
 Everything — the content struct, the parse method, all find_* iterators, all
 accessors — is generated at compile time. There is no runtime dispatch, no
 vtable, no grammar interpreter.
+
+### Limits
+
+`limits { ... }` is optional. `offset` selects the span offset type (`u8`, `u16`, `u32`, `u64`, default `u32`). `max_nest` sets the shared nesting cap;
+`max_inline_span`, `max_line_span` and `max_block_span` cap the length of an
+emitted span in bytes, measured on the clean span without delimiters. `0` and
+the offset type's maximum mean absent: no check and no fallback code is
+generated for that cap. A value above the offset maximum is a compile error.
+
+When a span exceeds its cap it is not emitted: transparent inline elements
+keep their inner spans and text, opaque inline elements are reparsed inside,
+line and block items go to `blocks { fallback => ... }`, and an over-long
+fence is reparsed as paragraph runs.
+
+`max_input_bytes` caps the source length. `0` and the offset type's maximum
+mean that maximum; the checked methods reject input over it. `_` or an absent
+key means no check, and the parser reads only the prefix that fits. The check runs before any parser state is
+allocated. The checked methods return `Result<_, InputBytesTooLarge>`; the
+`_unchecked` variants skip the check and keep the old behaviour.
 
 ---
 

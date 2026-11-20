@@ -9,10 +9,16 @@
 //! This is an intra-engine benchmark (meon-json against itself). For the
 //! cross-parser comparison against simd-json and others see `meon-json_compare`.
 
+//! Scenario: **isolated single-parser run.** Only `meon-json` is timed; there
+//! is no cross-parser validation gate or other parser's timed benchmark before
+//! it. `meon-json_compare` is the warmed multi-parser scenario; absolute
+//! numbers across the two are not interchangeable.
+//!
 mod docs_json;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon_json::JsonParser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_parse(c: &mut Criterion) {
@@ -29,14 +35,14 @@ fn bench_parse(c: &mut Criterion) {
 
         group.bench_function("structural", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });
 
         group.bench_function("typed", |b| {
             b.iter(|| {
-                let content = JsonParser::parse(black_box(bytes));
+                let content = JsonParser::parse(black_box(bytes)).unwrap();
                 let typed = content.type_scalars();
                 black_box(typed);
             });

@@ -16,7 +16,7 @@
 //! resolution, no rendering); pulldown-cmark/comrak parse full CommonMark. meon
 //! will look faster because it does less. `Throughput::Bytes` measures *ingest
 //! of different work*, not "equivalent result per second". See
-//! `benches/COMPARISON.md` for the full fairness frame (feature delta, corpus
+//! `benches/MD_COMPARE.md` for the full fairness frame (feature delta, corpus
 //! bias, SIMD/build-flag parity).
 //!
 //! Fairness knobs, identical to the intra-engine benches:
@@ -26,13 +26,20 @@
 //! - The `&str` view of each corpus is taken once, outside the timed region.
 //! - `Throughput::Bytes` reports GiB/s, comparable across builds on the *same*
 //!   corpora.
-
+//!
+//! Scenario: **warmed multi-parser process.** A one-time sanity pass runs
+//! meon-md, pulldown-cmark and comrak before timing, so the allocator, pages
+//! and caches are shared and already warm. `meon-md_parse` is the isolated
+//! single-parser scenario; absolute numbers across the two are not
+//! interchangeable.
+//!
 mod docs_md;
 
 use comrak::{Arena, Options, parse_document};
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon_md::MarkdownParser;
 use pulldown_cmark::Parser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_compare(c: &mut Criterion) {
@@ -50,7 +57,7 @@ fn bench_compare(c: &mut Criterion) {
         // against a build picking up an incompatible API or a degenerate
         // corpus.)
         {
-            let _ = black_box(MarkdownParser::parse(bytes));
+            let _ = black_box(MarkdownParser::parse(bytes).unwrap());
             let _ = black_box(Parser::new(text).count());
             let arena = Arena::new();
             let _ = black_box(parse_document(&arena, text, &Options::default()));
@@ -65,7 +72,7 @@ fn bench_compare(c: &mut Criterion) {
         // meon-md: flat-span structural parse.
         group.bench_function("meon-md", |b| {
             b.iter(|| {
-                let content = MarkdownParser::parse(black_box(bytes));
+                let content = MarkdownParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });

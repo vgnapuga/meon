@@ -17,5 +17,5 @@ define_parser! {
 }
 
 fn main() {
-    let _ = MiniParser::parse(b"hello world\n");
+    let _ = MiniParser::parse_unchecked(b"hello world\n");
 }

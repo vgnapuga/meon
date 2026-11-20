@@ -29,6 +29,7 @@ mod codegen;
 mod collect;
 mod cursor;
 mod error;
+mod limits;
 mod methods;
 mod model;
 mod normalize;
@@ -42,6 +43,7 @@ use crate::codegen::{build_define_content, build_standalone_dsl};
 use crate::collect::{collect_blocks, collect_inline, collect_lines};
 use crate::cursor::Cursor;
 use crate::error::{Error, Result};
+use crate::limits::{Limits, literal_u64};
 use crate::methods::build_content_methods;
 use crate::model::{CF, crate_path};
 use crate::normalize::canonicalize_inline;
@@ -55,10 +57,16 @@ use crate::strip::{flatten_invisible, strip};
 ///
 /// - `<Name>Content<'a>` — the output struct with one `pub` field per grammar
 ///   rule, borrowing the source slice for its lifetime.
-/// - `<Name>Parser` — a unit struct with two kinds of methods:
-///   - `parse(source: &[u8]) -> <Name>Content<'_>` — full single-pass parse.
-///   - `find_<field>(source: &[u8]) -> impl Iterator` — standalone per-element
-///     iterators that scan without full-parse context.
+/// - `<Name>Parser` — a unit struct with checked and unchecked methods:
+///   - `parse(source: &[u8]) -> Result<<Name>Content<'_>, InputBytesTooLarge>`
+///     — full single-pass parse;
+///   - `parse_unchecked(source: &[u8]) -> <Name>Content<'_>` — the same
+///     parse without the `max_input_bytes` check;
+///   - `find_<field>` / `find_<field>_unchecked` — standalone per-element
+///     iterators, checked and unchecked;
+///   - `context` / `context_unchecked` and `find_context_<field>` /
+///     `find_context_<field>_unchecked` — the opaque-region map and its
+///     context-aware finders, checked and unchecked.
 /// - Accessor methods `<field>_clean` and `<field>_raw` on `<Name>Content`
 ///   for ergonomic span-to-slice conversion.
 ///
@@ -68,13 +76,21 @@ use crate::strip::{flatten_invisible, strip};
 /// define_parser!(Name {
 ///     sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
 ///
+///     limits {
+///         max_nest = 4;
+///         max_inline_span = 1_024;
+///         max_line_span = 0;
+///         max_block_span = 0;
+///         max_input_bytes = 0;
+///     }
+///
 ///     inline  { ... }
 ///     lines   { ... }
 ///     blocks  { ... }
 /// });
 /// ```
 ///
-/// ## Context bytes (required header, plus one optional)
+/// ## Context bytes
 ///
 /// | Key         | Meaning                                                        |
 /// |-------------|----------------------------------------------------------------|
@@ -82,16 +98,57 @@ use crate::strip::{flatten_invisible, strip};
 /// | `eol`       | Line terminator (typically `\n`)                               |
 /// | `tab`       | Tab character                                                  |
 /// | `escape`    | Escape prefix that suppresses the next byte                    |
-/// | `max_nest`  | Optional, default `1`. Nesting cap shared by the inline        |
-/// |             | stack (`symmetric` and `asymmetric` with `parse_inside =       |
-/// |             | true`, `key_value`) and the block stack (`cont` / `fence`).    |
-/// |             | At `1` nothing self-nests. Declared alongside the other        |
-/// |             | context bytes: `sep = ..., escape = ..., max_nest = 4;`        |
 /// | `crlf`      | Optional, default `false`. With `true`, a `\r` right before    |
 /// |             | `eol` is part of the line end: no line content, text or        |
 /// |             | element takes it, and a line of it alone, or of it after       |
 /// |             | `sep`/`tab` bytes, is blank. A `\r` anywhere else is a byte    |
-/// |             | like any other. May come before or after `max_nest`.           |
+/// |             | like any other.                                                |
+///
+/// `max_nest` is also accepted in the header for existing grammars, but
+/// `limits` is the current home for it. When both are present they must
+/// agree.
+///
+/// ## `limits { ... }` section
+///
+/// Optional. Settings may be written in any order; `;` and `,` are optional.
+///
+/// | Key               | Meaning                                                     |
+/// |-------------------|-------------------------------------------------------------|
+/// | `offset`          | Default `u32`. Span offset type: `u8`, `u16`, `u32` or `u64`.|
+/// | `max_nest`        | Default `1`. Shared nesting cap of the inline stack and     |
+/// |                   | the block stack (`cont` / `fence`). At `1` nothing nests.   |
+/// | `max_inline_span` | Default absent. Longest emitted inline span, in bytes.      |
+/// | `max_line_span`   | Default absent. Longest emitted line span, in bytes.        |
+/// | `max_block_span`  | Default absent. Longest emitted block span, in bytes.       |
+/// | `max_input_bytes` | Default absent. Longest accepted source, in bytes.          |
+///
+/// `offset` selects the type of every generated `Span` and the hard upper
+/// bound on the input. `u8`/`u16`/`u32` use that type for span offsets; `u64`
+/// uses `u64` spans with `usize` positions internally. The checked methods
+/// reject input longer than the selected type only when `max_input_bytes` is
+/// set; otherwise they read the prefix that fits.
+///
+/// The span caps are measured on the clean span — `end - start` of the
+/// stored `Span`, without delimiters. `0` and the selected offset type's
+/// maximum mean absent: no check is generated. A value above that maximum is
+/// a compile error. When a cap is absent, the corresponding checks and
+/// fallback code are not generated.
+///
+/// `max_input_bytes` follows different rules. `0` and the selected offset
+/// type's maximum mean that maximum: the checked methods reject a larger
+/// source. `_` or an absent key means no check at all. A value above the
+/// selected maximum is a compile error. The check runs before any parser
+/// state or `Vec` is allocated.
+///
+/// A span longer than its cap is not emitted:
+///
+/// - an inline transparent span keeps its inner spans and its text;
+/// - an inline `parse_inside = false` span is dropped and its interior is
+///   reparsed;
+/// - a `chained` element is dropped and its interior is reparsed;
+/// - a `key_value` pair is dropped and is not reparsed;
+/// - a line or block item span goes to `blocks { fallback => ... }`;
+/// - an over-long fence is reparsed as paragraph runs and no longer opaque.
 ///
 /// A line of `sep` and `tab` bytes alone is as blank as an empty line: it
 /// ends a paragraph and closes the open blocks, outside a fence.
@@ -216,7 +273,7 @@ use crate::strip::{flatten_invisible, strip};
 ///
 /// A malformed grammar emits a located `compile_error!` at the offending token
 /// rather than panicking. The error message includes the parsing context
-/// (e.g. `"expected literal (fence min)"`).
+/// (e.g. `` "`fence` rule needs `min = N`" ``).
 ///
 /// # Cross-crate hygiene
 ///
@@ -230,6 +287,33 @@ pub fn define_parser(input: TokenStream) -> TokenStream {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
     }
+}
+
+/// The inline rules `parse_inline!` consumes: the canonicalised section
+/// without `merge_simple` and the fallback field, which `parse_text!` reads
+/// separately.
+fn inline_rules(tokens: &[TT]) -> TS2 {
+    let mut out = TS2::new();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if let TT::Ident(id) = &tokens[i] {
+            if id == "merge_simple" || id == "fallback" {
+                i += 1;
+                while i < tokens.len()
+                    && !matches!(&tokens[i], TT::Punct(p) if p.as_char() == ';' || p.as_char() == ',')
+                {
+                    i += 1;
+                }
+                if i < tokens.len() {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.extend([tokens[i].clone()]);
+        i += 1;
+    }
+    out
 }
 
 /// Fallible core of [`define_parser`].
@@ -259,7 +343,16 @@ fn expand(input: TS2) -> Result<TS2> {
         bc.advance();
         let span = bc.span();
         match bc.peek_str().as_deref() {
-            Some("max_nest") if max_nest.is_none() => max_nest = Some(bc.named_lit("max_nest")?),
+            Some("max_nest") if max_nest.is_none() => {
+                let lit = bc.named_lit("max_nest")?;
+                if literal_u64(&lit).is_none() {
+                    return Err(Error::new(
+                        lit.span(),
+                        "expected a non-negative integer after `max_nest =`",
+                    ));
+                }
+                max_nest = Some(lit);
+            }
             Some("crlf") if crlf.is_none() => crlf = Some(bc.named_flag("crlf")?),
             Some(name @ ("max_nest" | "crlf")) => {
                 return Err(Error::new(span, format!("`{name}` is set twice")));
@@ -272,16 +365,26 @@ fn expand(input: TS2) -> Result<TS2> {
             }
         }
     }
-    let max_nest = max_nest.unwrap_or_else(|| Literal::usize_unsuffixed(1));
     let crlf = crlf.unwrap_or_else(|| Ident::new("false", PS::call_site()));
     bc.skip(';');
 
     let mut inline_ts = TS2::new();
     let mut lines_ts = TS2::new();
     let mut blocks_ts = TS2::new();
+    let mut limits = Limits::default();
+    let mut limits_seen = false;
 
     loop {
         match bc.peek_str().as_deref() {
+            Some("limits") => {
+                let span = bc.span();
+                if limits_seen {
+                    return Err(Error::new(span, "`limits` is set twice"));
+                }
+                bc.advance();
+                limits = Limits::parse(bc.next_group(Delimiter::Brace, "limits")?.stream())?;
+                limits_seen = true;
+            }
             Some("inline") => {
                 bc.advance();
                 inline_ts = bc.next_group(Delimiter::Brace, "inline")?.stream();
@@ -297,6 +400,70 @@ fn expand(input: TS2) -> Result<TS2> {
             _ => break,
         }
     }
+    while matches!(bc.peek(), Some(TT::Punct(p)) if p.as_char() == ';' || p.as_char() == ',') {
+        bc.advance();
+    }
+    if let Some(tt) = bc.peek() {
+        return Err(Error::new(
+            tt.span(),
+            format!("unknown grammar section or setting: {tt:?}"),
+        ));
+    }
+
+    // `max_nest` may be written in the header or in `limits`. The header form
+    // is kept for existing grammars; when both are present they must agree.
+    let max_nest = match (max_nest, limits.max_nest.take()) {
+        (Some(header), Some(section)) => {
+            if literal_u64(&header) != literal_u64(&section) {
+                return Err(Error::new(
+                    section.span(),
+                    "`max_nest` differs from the value in the grammar header",
+                ));
+            }
+            header
+        }
+        (Some(header), None) => header,
+        (None, Some(section)) => section,
+        (None, None) => Literal::usize_unsuffixed(1),
+    };
+    // Resolve the runtime crate path once; used for every qualified macro call
+    // in the expansion so it works correctly from any dependent crate.
+    let mc = crate_path();
+
+    let off_tt = limits.offset_tt();
+    let lim_inline = limits.inline_tt();
+    let lim_line = limits.line_tt();
+    let lim_block = limits.block_tt();
+    let input_limit = limits.max_input_bytes.as_ref().map(|limit| limit.literal());
+    let check_tt = if input_limit.is_some() {
+        quote! { [__meon_check_input] }
+    } else {
+        quote! { [] }
+    };
+    let check_call = if input_limit.is_some() {
+        quote! { Self::__meon_check_input(source)?; }
+    } else {
+        TS2::new()
+    };
+    let check_fn = if let Some(lit) = &input_limit {
+        quote! {
+            #[inline]
+            fn __meon_check_input(
+                source: &[u8],
+            ) -> ::core::result::Result<(), #mc::InputBytesTooLarge<#off_tt>> {
+                if source.len() > #lit as usize {
+                    ::core::result::Result::Err(#mc::InputBytesTooLarge {
+                        len: source.len(),
+                        max: #lit,
+                    })
+                } else {
+                    ::core::result::Result::Ok(())
+                }
+            }
+        }
+    } else {
+        TS2::new()
+    };
 
     let mut cf = CF::default();
     collect_inline(inline_ts.clone(), &mut cf)?;
@@ -304,30 +471,170 @@ fn expand(input: TS2) -> Result<TS2> {
     collect_blocks(blocks_ts.clone(), &mut cf)?;
 
     let pt_inline: Vec<_> = canonicalize_inline(strip(inline_ts)).into_iter().collect();
+    let pt_inline_rules = inline_rules(&pt_inline);
     let pt_lines: Vec<_> = strip(lines_ts).into_iter().collect();
     let pt_blocks: Vec<_> = strip(blocks_ts).into_iter().collect();
 
-    // Resolve the runtime crate path once; used for every qualified macro call
-    // in the expansion so it works correctly from any dependent crate.
-    let mc = crate_path();
+    // A reparse helper is emitted only when an inline cap is configured. It
+    // scans an oversized opaque construct's interior with the same grammar.
+    let reparse_helper = Ident::new(&format!("__meon_reparse_{}", name), name.span());
+    let has_inline_limit = limits.max_inline_span.is_some() || limits.max_block_span.is_some();
+    let reparse_fn = if let (Some(tx), true) = (&cf.inline_fallback, has_inline_limit) {
+        let merge = cf
+            .merge_simple
+            .clone()
+            .unwrap_or_else(|| Ident::new("false", PS::call_site()));
+        quote! {
+            #[allow(dead_code, non_snake_case, clippy::too_many_arguments)]
+            fn #reparse_helper(
+                state: &mut ParseState,
+                src: &[u8],
+                start: usize,
+                end: usize,
+                _reparse_depth: usize,
+                cont_bytes: &[u8],
+                cd: usize,
+                split: bool,
+            ) {
+                if _reparse_depth > #max_nest {
+                    return;
+                }
+                if split {
+                    let mut pos = start;
+                    let mut run_start: Option<usize> = None;
+                    let trim_end = |s: usize, mut e: usize| -> usize {
+                        if e > s && src[e - 1] == #eol {
+                            e -= 1;
+                            if #crlf && e > s && src[e - 1] == b'\r' {
+                                e -= 1;
+                            }
+                        }
+                        e
+                    };
+                    while pos < end {
+                        let line_end = #mc::memchr::memchr(#eol, &src[pos..end])
+                            .map_or(end, |i| pos + i);
+                        let content_end = if #crlf
+                            && line_end > pos
+                            && src[line_end - 1] == b'\r'
+                        {
+                            line_end - 1
+                        } else {
+                            line_end
+                        };
+                        let mut content = pos;
+                        let mut k = 0;
+                        while k < cd
+                            && content < content_end
+                            && src[content] == cont_bytes[k]
+                        {
+                            content += if content + 1 < content_end
+                                && (src[content + 1] == #sep || src[content + 1] == #tab)
+                            {
+                                2
+                            } else {
+                                1
+                            };
+                            k += 1;
+                        }
+                        let blank = content == content_end
+                            || src[content..content_end]
+                                .iter()
+                                .all(|&b| b == #sep || b == #tab);
+                        if blank {
+                            if let Some(s) = run_start.take() {
+                                #reparse_helper(
+                                    state, src, s, trim_end(s, pos), _reparse_depth,
+                                    cont_bytes, cd, false,
+                                );
+                            }
+                        } else if run_start.is_none() {
+                            run_start = Some(pos);
+                        }
+                        pos = if line_end < end { line_end + 1 } else { end };
+                    }
+                    if let Some(s) = run_start {
+                        #reparse_helper(
+                            state, src, s, trim_end(s, end), _reparse_depth,
+                            cont_bytes, cd, false,
+                        );
+                    }
+                    return;
+                }
+                let mut start = start;
+                let mut _k = 0;
+                while _k < cd && start < end && src[start] == cont_bytes[_k] {
+                    start += if start + 1 < end
+                        && (src[start + 1] == #sep || src[start + 1] == #tab)
+                    {
+                        2
+                    } else {
+                        1
+                    };
+                    _k += 1;
+                }
+                #mc::parse_inline!(@off #off_tt,
+                    state, src, start, end, #tx, #merge, #esc, #sep, #tab, #eol, #max_nest,
+                    cont(cont_bytes, cd), crlf = #crlf, max_inline = #lim_inline,
+                    reparse = [ #reparse_helper ], depth = _reparse_depth ;
+                    #pt_inline_rules
+                );
+            }
+        }
+    } else {
+        TS2::new()
+    };
+    let reparse_tt = if has_inline_limit {
+        quote! { [ #reparse_helper ] }
+    } else {
+        quote! { [] }
+    };
 
-    let dc = build_define_content(&content_name, &cf, &mc);
-    let cm = build_content_methods(&content_name, &cf, &sep, &eol, &tab, &esc);
-    let dsl = build_standalone_dsl(&sep, &eol, &tab, &esc, &max_nest, &crlf, &cf.standalone);
+    let dc = build_define_content(&content_name, &off_tt, &cf, &mc);
+    let cm = build_content_methods(&content_name, &off_tt, &cf, &sep, &eol, &tab, &esc);
+    let dsl = build_standalone_dsl(
+        &sep,
+        &eol,
+        &tab,
+        &esc,
+        &max_nest,
+        &crlf,
+        &lim_inline,
+        &lim_line,
+        &lim_block,
+        &check_tt,
+        &off_tt,
+        &cf.standalone,
+    );
 
     Ok(quote! {
         #dc
+        #reparse_fn
 
         #[allow(missing_docs)]
         pub struct #parser_name;
 
         #[allow(missing_docs)]
         impl #parser_name {
-            pub fn parse(source: &[u8]) -> #content_name<'_> {
+            #check_fn
+
+            pub fn parse(
+                source: &[u8],
+            ) -> ::core::result::Result<#content_name<'_>, #mc::InputBytesTooLarge<#off_tt>> {
+                #check_call
+                ::core::result::Result::Ok(Self::parse_unchecked(source))
+            }
+
+            pub fn parse_unchecked(source: &[u8]) -> #content_name<'_> {
                 #mc::parse_text!(
                     source;
+                    off = #off_tt,
                     sep = #sep, eol = #eol, tab = #tab, escape = #esc,
-                    max_nest = #max_nest, crlf = #crlf;
+                    max_nest = #max_nest, crlf = #crlf,
+                    max_inline_span = #lim_inline,
+                    max_line_span = #lim_line,
+                    max_block_span = #lim_block,
+                    reparse = #reparse_tt;
                     inline { #(#pt_inline)* }
                     lines  { #(#pt_lines)* }
                     blocks { #(#pt_blocks)* }
@@ -604,6 +911,83 @@ mod tests {
         );
     }
 
+    // 24. A set input limit emits the check and the unchecked parse
+    #[test]
+    fn test_24_input_limit_emits_check() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                limits { max_input_bytes = 8; }
+                inline { fallback => texts [10]; }
+            }
+        };
+        let s = expand_str(g);
+        assert!(s.contains("__meon_check_input"), "{s}");
+        assert!(s.contains("parse_unchecked"), "{s}");
+    }
+
+    // 25. `_` means no check code is generated
+    #[test]
+    fn test_25_input_limit_underscore_emits_no_check() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                limits { max_input_bytes = _; }
+                inline { fallback => texts [10]; }
+            }
+        };
+        let s = expand_str(g);
+        assert!(!s.contains("__meon_check_input"), "{s}");
+        assert!(s.contains("parse_unchecked"), "{s}");
+    }
+
+    // 26. An absent key emits no check code
+    #[test]
+    fn test_26_absent_input_limit_emits_no_check() {
+        let s = expand_str(valid());
+        assert!(!s.contains("__meon_check_input"), "{s}");
+    }
+
+    // 27. `0` means the maximum input limit
+    #[test]
+    fn test_27_input_limit_zero_is_the_maximum() {
+        let g = quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                limits { max_input_bytes = 0; }
+                inline { fallback => texts [10]; }
+            }
+        };
+        let s = expand_str(g);
+        assert!(s.contains("__meon_check_input"), "{s}");
+        assert!(s.contains("4294967295"), "{s}");
+    }
+
+    // 28. Header `max_nest` must be a non-negative integer literal.
+    #[test]
+    fn test_28_header_max_nest_must_be_an_integer() {
+        let e = expand_err(quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\',
+                max_nest = "four";
+            }
+        });
+        assert!(e.contains("non-negative integer"), "{e}");
+    }
+
+    // 29. An unknown top-level section is a located error instead of silently
+    //     dropping the rest of the grammar.
+    #[test]
+    fn test_29_unknown_top_level_section_err() {
+        let e = expand_err(quote! {
+            Demo {
+                sep = b' ', eol = b'\n', tab = b'\t', escape = b'\\';
+                blokcs { fallback => paragraphs [10]; }
+            }
+        });
+        assert!(e.contains("unknown grammar section"), "{e}");
+    }
+
     // 21. A `chained` rule with both components opaque feeds `context()`; one
     //     with a transparent component does not
     #[test]
@@ -658,9 +1042,10 @@ mod tests {
             }
         };
         let s = expand_str(g);
-        assert_eq!(s.matches("max_nest = 2 , crlf = true ;").count(), 2, "{s}");
+        assert_eq!(s.matches("max_nest = 2").count(), 2, "{s}");
+        assert!(s.contains("crlf = true"), "{s}");
         let s = expand_str(valid());
-        assert!(s.contains("crlf = false ;"), "{s}");
+        assert!(s.contains("crlf = false"), "{s}");
     }
 
     // 23. A context setting set twice, an unknown one, or a `crlf` that is

@@ -7,6 +7,147 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [1.0.1] - 2026.11.21
+
+### Fixed
+- **`meon`** — replaced the unmaintained `paste` dependency with `pastey`.
+- **`benches`** — updated `criterion` and `pulldown-cmark`; the lockfile
+  updates `crossbeam-epoch`.
+
+## [1.0.0] - 2026.11.20
+
+### Added
+
+- **`meon`, `meon-macros`** — optional `limits { ... }` grammar section:
+  `offset`, `max_nest`, `max_inline_span`, `max_line_span`,
+  `max_block_span` and `max_input_bytes`. `max_nest` is still accepted in
+  the header for existing grammars; when both places are present they must
+  agree.
+- **`meon`, `meon-macros`** — `limits { offset = u8 | u16 | u32 | u64; }`
+  selects the span offset type (default `u32`). `Span<T>` and `SpanIndex` are
+  public; generated content, finders and context use the selected type.
+- **`meon`, `meon-macros`** — optional `max_input_bytes` in `limits`. `0` and
+  the offset type's maximum mean that maximum; `_` or an absent key means no
+  check and the parser reads only the prefix that fits. The checked methods
+  reject an over-limit source with `InputBytesTooLarge` before allocating any
+  parser state; when no limit is set, no check code is generated.
+- **`meon`** — span caps are measured on the clean span, `end - start`
+  without delimiters. `0` and the offset type's maximum mean absent; a value
+  above the offset maximum is a compile error. When a cap is absent, no
+  comparison, fallback or reparse code is generated for that level.
+- **`meon`** — an over-limit span is not emitted: a transparent inline span
+  keeps its text and inner spans; an opaque inline span and a `chained`
+  element are reparsed inside; a `key_value` pair is dropped without reparse;
+  a line or block item span goes to `blocks { fallback => ... }`; an over-long
+  fence is reparsed as paragraph runs, skipping the `cont` markers of the
+  frames that held it.
+- **`meon`** — `find_*` and `find_context_*` apply the caps. `ParseContext`
+  drops an over-limit opaque region and rescans its interior for nested
+  regions.
+
+### Changed
+
+- **`meon`** — `Span` is generic over its offset type. `Span` without a
+  parameter is `Span<u32>`; `Span::new` keeps the `u32` constructor and
+  `from_usize`/`from_parts` cover the other types. `MAX_INPUT_LEN` remains
+  `u32::MAX`; `Span<T>::MAX_INPUT_LEN` gives the selected type's bound.
+- **`meon`** — `InputBytesTooLarge<T = u32>` and `ParseContext<T = u32>` are
+  generic. The default `u32` keeps existing type paths valid.
+- **`meon`** — `parse`, `find_*`, `find_context_*` and `context` return
+  `Result<_, InputBytesTooLarge<O>>`. `parse_unchecked`, `find_*_unchecked`,
+  `find_context_*_unchecked` and `context_unchecked` keep the previous
+  infallible behaviour.
+- **`meon`** — `max_inline_span`, `max_line_span`, `max_block_span` and
+  `max_input_bytes` are bounded by the selected offset type. `u8` and `u16`
+  grammars read only the prefix that fits when no `max_input_bytes` is set.
+- **`meon-md`, `meon-json`** — grammars leave `max_input_bytes` unset and use
+  the default `offset = u32`, so their checked methods never fail on length.
+- **`meon`** — `parse_text!`, `parse_inline!`, `parse_line!` and
+  `parse_block!` accept optional `[]`/`[N]` cap tokens and an `off` type
+  token; direct callers default to `u32`.
+- **`meon-md`, `meon-json`** — grammars now declare `max_nest` in `limits`,
+  with `max_inline_span = 0`, `max_line_span = 0` and `max_block_span = 0`.
+  The header form is still accepted.
+
+### Fixed
+
+- **`meon`** — a `chained` over-limit match keeps its delimiters in source
+  order.
+- **`meon`** — an opaque key keeps its full span through the key-value parser.
+- **`meon`** — context caps are measured on the clean span, not on the
+  delimiter-inclusive region.
+- **`meon`** — chained and key-value close offsets are stored in the selected
+  span type.
+- **`meon`** — the no-limit inline scan keeps its state by value instead of a
+  redundant mutable borrow.
+- **`meon`** — full-parse span construction keeps positions in `usize`/the
+  selected offset type, so `offset = u64` no longer truncates inline, line or
+  block spans above the `u32` range.
+- **`meon-macros`** — the front-end rejects a non-integer header `max_nest`,
+  an unknown top-level section, invalid `merge_simple` values, malformed
+  `hard_break`/`on_trigger` argument lists, a non-`max` second `line`
+  argument, and a stacked `asymmetric` rule with no `1 => field` arm.
+
+### Documentation
+
+- `README.md`, crate `README.md`s, `ARCHITECTURE.md` and rustdoc describe
+  `offset`, `Span<T>`, the per-type input bound, the checked/unchecked API,
+  block and inline internals, accessor/finder/context coverage and the DSL
+  requirements.
+- `benches/README.md`, `MD_COMPARE.md` and `JSON_COMPARE.md` document the
+  `small`/`big` Cargo features, the isolated (`_parse`) and warmed
+  (`_compare`) scenarios, and the current benchmark targets.
+- `FAQ.md` and `fuzz/README.md` are updated to the current behavior.
+
+### Benchmarks
+
+- **`benches`** — `small` and `big` Cargo features select the working-set
+  size; `big` is 100× `small`. Benchmarks call the checked parser APIs with
+  `unwrap`. New `meon-md_offsets` and `meon-json_offsets` targets parse their
+  respective small corpora with `Span<u16>`, `Span<u32>` and `Span<u64>`
+  offsets, and 32 MiB corpora with `Span<u32>` and `Span<u64>`; the offset
+  benchmarks also report output heap.
+
+Median full-parse throughput from the comparison runs, `small → big`:
+
+| Corpus                     | Stable            | Nightly + AVX2          |
+|----------------------------|-------------------|-------------------------|
+| Markdown `plain`           | 3.07 → 2.96 GiB/s | 4.41 → 4.18 GiB/s       |
+| Markdown `hot`             | 981 → 976 MiB/s   | 1.228 → 1.229 GiB/s     |
+| Markdown `heavy`           | 806 → 808 MiB/s   | 930 → 950 MiB/s         |
+| JSON `numbers`, structural | 854 → 904 MiB/s   | 962 MiB/s → 1.043 GiB/s |
+| JSON `objects`, structural | 401 → 303 MiB/s   | 424 → 315 MiB/s         |
+| JSON `nested`, structural  | 248 → 193 MiB/s   | 269 → 202 MiB/s         |
+
+The Markdown composition report agrees with pulldown-cmark on the three
+generated corpora under its mapping of element counts and plain-text byte
+coverage. On the large JSON `nested` corpus, the structural pass reaches
+193 MiB/s on stable and the parse with scalar typing reaches 161 MiB/s.
+The corresponding nightly + AVX2 figures are 202 and 160 MiB/s. On the
+small stable corpora, Markdown `find_links` reaches 5.77 GiB/s on `heavy`,
+and JSON `find_objects` reaches 1.56 GiB/s on `nested`. The JSON
+`find_context_objects` pass reaches 1.22 GiB/s with a prebuilt context and
+130 MiB/s when building the context is included.
+
+### Testing
+
+- **Fuzzing (`v1.0.0` campaign, 2026-11-20).** The `parse_text` target ran
+  ~220M executions on nightly-2026-05-22 at ~6k exec/s and 808 MB RSS. The
+  campaign log reports `cov` 4980 → 5115, `ft` 30787 → 31657 and corpus
+  6775/2134 KB → 7175/1728 KB compared with the `v0.7.0` entry.
+- Unit, UI (`trybuild`) and mechanism tests cover the `limits` section,
+  `max_input_bytes`, and `offset = u8/u16/u32/u64`; the full workspace test
+  suite passes.
+
+### CI
+
+- The lint job runs formatting, clippy, rustdoc with warnings denied, and
+  package checks with locked dependencies.
+- Tests run on Linux, macOS and Windows, plus MSRV and 32-bit checks; nightly
+  covers all features and both bench feature sets.
+- Security covers advisories and dependency review; Dependabot keeps
+  dependencies current, and a coverage job publishes an lcov artifact.
+
 ## [0.7.0] - 2026-11-19
 
 ### Fixed

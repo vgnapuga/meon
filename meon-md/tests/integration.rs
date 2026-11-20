@@ -12,7 +12,7 @@ fn txt(src: &[u8], s: meon::span::Span) -> &str {
 #[test]
 fn integ_para_01_single() {
     let src = b"hello world\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
 }
 
@@ -20,7 +20,7 @@ fn integ_para_01_single() {
 #[test]
 fn integ_para_02_two_paragraphs() {
     let src = b"first\n\nsecond\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 2);
 }
 
@@ -28,7 +28,7 @@ fn integ_para_02_two_paragraphs() {
 #[test]
 fn integ_para_03_three_paragraphs() {
     let src = b"one\n\ntwo\n\nthree\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 3);
 }
 
@@ -36,7 +36,7 @@ fn integ_para_03_three_paragraphs() {
 #[test]
 fn integ_para_04_with_inline() {
     let src = b"text **bold** text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -45,7 +45,7 @@ fn integ_para_04_with_inline() {
 #[test]
 fn integ_para_05_empty_lines_only() {
     let src = b"\n\n\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 0);
 }
 
@@ -57,7 +57,7 @@ fn integ_para_05_empty_lines_only() {
 #[test]
 fn integ_heading_01_h1() {
     let src = b"# Hello\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.headings[0].0.level.get(), 1);
 }
@@ -66,7 +66,7 @@ fn integ_heading_01_h1() {
 #[test]
 fn integ_heading_02_h2() {
     let src = b"## Hello\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings[0].0.level.get(), 2);
 }
 
@@ -74,7 +74,7 @@ fn integ_heading_02_h2() {
 #[test]
 fn integ_heading_03_h6() {
     let src = b"###### Hello\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings[0].0.level.get(), 6);
 }
 
@@ -82,7 +82,7 @@ fn integ_heading_03_h6() {
 #[test]
 fn integ_heading_04_multiple() {
     let src = b"# H1\n## H2\n### H3\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 3);
 }
 
@@ -90,7 +90,7 @@ fn integ_heading_04_multiple() {
 #[test]
 fn integ_heading_05_with_inline() {
     let src = b"# Title **bold**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -99,7 +99,7 @@ fn integ_heading_05_with_inline() {
 #[test]
 fn integ_heading_06_then_paragraph() {
     let src = b"# Title\nSome text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.paragraphs.len(), 1);
 }
@@ -112,7 +112,7 @@ fn integ_heading_06_then_paragraph() {
 #[test]
 fn integ_tb_01_dash() {
     let src = b"---\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
 }
 
@@ -120,7 +120,7 @@ fn integ_tb_01_dash() {
 #[test]
 fn integ_tb_02_star() {
     let src = b"***\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
 }
 
@@ -128,7 +128,7 @@ fn integ_tb_02_star() {
 #[test]
 fn integ_tb_03_heading_then_tb() {
     let src = b"# Title\n---\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.thematic_breaks.len(), 1);
 }
@@ -137,7 +137,7 @@ fn integ_tb_03_heading_then_tb() {
 #[test]
 fn integ_tb_04_between_paragraphs() {
     let src = b"before\n\n---\n\nafter\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert_eq!(c.paragraphs.len(), 2);
 }
@@ -150,7 +150,7 @@ fn integ_tb_04_between_paragraphs() {
 #[test]
 fn integ_inline_01_bold() {
     let src = b"**bold**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(txt(src, c.bolds[0]), "bold");
 }
@@ -159,7 +159,7 @@ fn integ_inline_01_bold() {
 #[test]
 fn integ_inline_02_italic() {
     let src = b"*italic*\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.italics.len(), 1);
     assert_eq!(txt(src, c.italics[0]), "italic");
 }
@@ -168,7 +168,7 @@ fn integ_inline_02_italic() {
 #[test]
 fn integ_inline_03_bold_italic() {
     let src = b"***bi***\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bold_italics.len(), 1);
 }
 
@@ -176,7 +176,7 @@ fn integ_inline_03_bold_italic() {
 #[test]
 fn integ_inline_04_bold_and_italic() {
     let src = b"**bold** and *italic*\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
 }
@@ -185,7 +185,7 @@ fn integ_inline_04_bold_and_italic() {
 #[test]
 fn integ_inline_05_multiple_bolds() {
     let src = b"**a** **b** **c**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 3);
 }
 
@@ -193,7 +193,7 @@ fn integ_inline_05_multiple_bolds() {
 #[test]
 fn integ_inline_06_all_in_paragraph() {
     let src = b"Text **bold** and *italic* and `code`\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
     assert_eq!(c.codes.len(), 1);
@@ -207,7 +207,7 @@ fn integ_inline_06_all_in_paragraph() {
 #[test]
 fn integ_code_01_span() {
     let src = b"`code`\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.codes.len(), 1);
     assert_eq!(txt(src, c.codes[0]), "code");
 }
@@ -216,7 +216,7 @@ fn integ_code_01_span() {
 #[test]
 fn integ_code_02_double_backtick() {
     let src = b"``code``\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.codes.len(), 0);
 }
 
@@ -224,7 +224,7 @@ fn integ_code_02_double_backtick() {
 #[test]
 fn integ_code_03_verbatim_stars() {
     let src = b"`**not bold**`\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.codes.len(), 1);
     assert_eq!(c.bolds.len(), 0);
 }
@@ -237,7 +237,7 @@ fn integ_code_03_verbatim_stars() {
 #[test]
 fn integ_link_01_standard() {
     let src = b"[text](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(!c.links[0].is_image);
     assert_eq!(txt(src, c.links[0].text), "text");
@@ -248,7 +248,7 @@ fn integ_link_01_standard() {
 #[test]
 fn integ_link_02_image() {
     let src = b"![alt](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(c.links[0].is_image);
 }
@@ -257,7 +257,7 @@ fn integ_link_02_image() {
 #[test]
 fn integ_link_03_link_and_image() {
     let src = b"[link](url1) ![img](url2)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 2);
     assert!(!c.links[0].is_image);
     assert!(c.links[1].is_image);
@@ -267,7 +267,7 @@ fn integ_link_03_link_and_image() {
 #[test]
 fn integ_link_04_autolink() {
     let src = b"<https://example.com>\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.autolinks.len(), 1);
 }
 
@@ -275,7 +275,7 @@ fn integ_link_04_autolink() {
 #[test]
 fn integ_link_05_with_bold_text() {
     let src = b"[**bold**](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
 }
 
@@ -287,7 +287,7 @@ fn integ_link_05_with_bold_text() {
 #[test]
 fn integ_hb_01_spaces() {
     let src = b"line  \n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.hard_breaks.len(), 1);
 }
 
@@ -295,7 +295,7 @@ fn integ_hb_01_spaces() {
 #[test]
 fn integ_hb_02_backslash() {
     let src = b"line\\\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.hard_breaks.len(), 1);
 }
 
@@ -307,7 +307,7 @@ fn integ_hb_02_backslash() {
 #[test]
 fn integ_fenced_01_backtick() {
     let src = b"```\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
 }
 
@@ -315,7 +315,7 @@ fn integ_fenced_01_backtick() {
 #[test]
 fn integ_fenced_02_with_lang() {
     let src = b"```rust\nfn main() {}\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
 }
 
@@ -323,7 +323,7 @@ fn integ_fenced_02_with_lang() {
 #[test]
 fn integ_fenced_03_no_inline_inside() {
     let src = b"```\n**not bold**\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
     assert_eq!(c.bolds.len(), 0);
 }
@@ -332,7 +332,7 @@ fn integ_fenced_03_no_inline_inside() {
 #[test]
 fn integ_fenced_04_two_blocks() {
     let src = b"```\nfirst\n```\n\n```\nsecond\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 2);
 }
 
@@ -340,7 +340,7 @@ fn integ_fenced_04_two_blocks() {
 #[test]
 fn integ_fenced_05_paragraph_then_code() {
     let src = b"text\n\n```\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.fenced_codes.len(), 1);
 }
@@ -353,7 +353,7 @@ fn integ_fenced_05_paragraph_then_code() {
 #[test]
 fn integ_quote_01_single() {
     let src = b"> quote\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
 }
 
@@ -361,7 +361,7 @@ fn integ_quote_01_single() {
 #[test]
 fn integ_quote_02_multiline() {
     let src = b"> line one\n> line two\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
 }
 
@@ -369,7 +369,7 @@ fn integ_quote_02_multiline() {
 #[test]
 fn integ_quote_03_with_inline() {
     let src = b"> **bold** text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -378,7 +378,7 @@ fn integ_quote_03_with_inline() {
 #[test]
 fn integ_quote_04_two_blockquotes() {
     let src = b"> first\n\n> second\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
 }
 
@@ -386,7 +386,7 @@ fn integ_quote_04_two_blockquotes() {
 #[test]
 fn integ_quote_05_then_paragraph() {
     let src = b"> quote\n\nparagraph\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.paragraphs.len(), 1);
 }
@@ -395,7 +395,7 @@ fn integ_quote_05_then_paragraph() {
 #[test]
 fn integ_quote_06_then_bullet() {
     let src = b"> quote\n- bullet\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.bullet_items.len(), 1);
 }
@@ -408,7 +408,7 @@ fn integ_quote_06_then_bullet() {
 #[test]
 fn integ_bullet_01_single() {
     let src = b"- item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
 }
 
@@ -416,7 +416,7 @@ fn integ_bullet_01_single() {
 #[test]
 fn integ_bullet_02_three_bullets() {
     let src = b"- a\n- b\n- c\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 3);
 }
 
@@ -424,7 +424,7 @@ fn integ_bullet_02_three_bullets() {
 #[test]
 fn integ_bullet_03_star() {
     let src = b"* item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.bullet_items[0].0.kind, b'*');
 }
@@ -433,7 +433,7 @@ fn integ_bullet_03_star() {
 #[test]
 fn integ_bullet_04_plus() {
     let src = b"+ item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.bullet_items[0].0.kind, b'+');
 }
@@ -442,7 +442,7 @@ fn integ_bullet_04_plus() {
 #[test]
 fn integ_bullet_05_with_inline() {
     let src = b"- **bold** item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -451,7 +451,7 @@ fn integ_bullet_05_with_inline() {
 #[test]
 fn integ_bullet_06_nested() {
     let src = b"- parent\n  - child\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 2);
 }
 
@@ -459,7 +459,7 @@ fn integ_bullet_06_nested() {
 #[test]
 fn integ_bullet_07_deeply_nested_bullets() {
     let src = b"- a\n  - b\n    - c\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 3);
 }
 
@@ -471,7 +471,7 @@ fn integ_bullet_07_deeply_nested_bullets() {
 #[test]
 fn integ_ordered_01_single() {
     let src = b"1. item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 1);
     assert_eq!(c.ordered_items[0].0.num, 1);
 }
@@ -480,7 +480,7 @@ fn integ_ordered_01_single() {
 #[test]
 fn integ_ordered_02_three_ordered() {
     let src = b"1. a\n2. b\n3. c\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 3);
 }
 
@@ -488,7 +488,7 @@ fn integ_ordered_02_three_ordered() {
 #[test]
 fn integ_ordered_03_paren() {
     let src = b"1) item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 1);
     assert_eq!(c.ordered_items[0].0.kind, b')');
 }
@@ -497,7 +497,7 @@ fn integ_ordered_03_paren() {
 #[test]
 fn integ_ordered_04_with_inline() {
     let src = b"1. **bold** item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 1);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -506,7 +506,7 @@ fn integ_ordered_04_with_inline() {
 #[test]
 fn integ_ordered_05_nested() {
     let src = b"1. parent\n   1. child\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 2);
 }
 
@@ -518,7 +518,7 @@ fn integ_ordered_05_nested() {
 #[test]
 fn integ_combo_01_heading_paragraph_code() {
     let src = b"# Title\n\nSome text\n\n```\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.fenced_codes.len(), 1);
@@ -528,7 +528,7 @@ fn integ_combo_01_heading_paragraph_code() {
 #[test]
 fn integ_combo_02_full_document_structure() {
     let src = b"# Title\n---\nParagraph\n> Quote\n- Bullet\n1. Ordered\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert_eq!(c.paragraphs.len(), 1);
@@ -541,7 +541,7 @@ fn integ_combo_02_full_document_structure() {
 #[test]
 fn integ_combo_03_blockquote_then_fenced_code() {
     let src = b"> quote\n> second\n```rust\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.fenced_codes.len(), 1);
 }
@@ -550,7 +550,7 @@ fn integ_combo_03_blockquote_then_fenced_code() {
 #[test]
 fn integ_combo_04_bullets_then_ordered() {
     let src = b"- bullet\n- bullet2\n1. ordered\n2. ordered2\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 2);
     assert_eq!(c.ordered_items.len(), 2);
 }
@@ -559,7 +559,7 @@ fn integ_combo_04_bullets_then_ordered() {
 #[test]
 fn integ_combo_05_inline_all_types() {
     let src = b"**bold** *italic* ***bi*** `code` [link](url) ![img](url) <auto>\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
     assert_eq!(c.bold_italics.len(), 1);
@@ -572,7 +572,7 @@ fn integ_combo_05_inline_all_types() {
 #[test]
 fn integ_combo_06_heading_with_all_inline() {
     let src = b"# **bold** *italic* `code`\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -583,7 +583,7 @@ fn integ_combo_06_heading_with_all_inline() {
 #[test]
 fn integ_combo_07_blockquote_with_all_inline() {
     let src = b"> **bold** *italic* `code` [link](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -595,7 +595,7 @@ fn integ_combo_07_blockquote_with_all_inline() {
 #[test]
 fn integ_combo_08_bullet_with_all_inline() {
     let src = b"- **bold** *italic* `code` [link](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -607,7 +607,7 @@ fn integ_combo_08_bullet_with_all_inline() {
 #[test]
 fn integ_combo_09_ordered_with_all_inline() {
     let src = b"1. **bold** *italic* `code` [link](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -619,7 +619,7 @@ fn integ_combo_09_ordered_with_all_inline() {
 #[test]
 fn integ_combo_10_doc_heavy_chunk() {
     let src = b"# Title 0\n---\nText with **bold** and *italic* [text](url).\n> Blockquote with **bold**.\n> Second line.\n```rust\ncode\n```\n- Bullet **bold**\n- Second bullet\n- Third bullet\n1. Ordered\n2. Second\n\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert_eq!(c.blockquotes.len(), 1);
@@ -632,7 +632,7 @@ fn integ_combo_10_doc_heavy_chunk() {
 #[test]
 fn integ_combo_11_repeated_headings_paragraphs() {
     let src = b"# H1\npara1\n\n## H2\npara2\n\n### H3\npara3\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 3);
     assert_eq!(c.paragraphs.len(), 3);
 }
@@ -641,7 +641,7 @@ fn integ_combo_11_repeated_headings_paragraphs() {
 #[test]
 fn integ_combo_12_mixed_lists() {
     let src = b"- bullet\n* bullet2\n+ bullet3\n1. ordered\n2. ordered2\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 3);
     assert_eq!(c.ordered_items.len(), 2);
 }
@@ -650,7 +650,7 @@ fn integ_combo_12_mixed_lists() {
 #[test]
 fn integ_combo_13_escape_in_paragraph() {
     let src = b"\\*not italic\\*\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.italics.len(), 0);
     assert_eq!(c.paragraphs.len(), 1);
 }
@@ -659,7 +659,7 @@ fn integ_combo_13_escape_in_paragraph() {
 #[test]
 fn integ_combo_14_escape_heading() {
     let src = b"\\# not heading\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 0);
     assert_eq!(c.paragraphs.len(), 1);
 }
@@ -668,7 +668,7 @@ fn integ_combo_14_escape_heading() {
 #[test]
 fn integ_combo_15_fenced_code_after_bullets() {
     let src = b"- item1\n- item2\n```\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 2);
     assert_eq!(c.fenced_codes.len(), 1);
 }
@@ -677,7 +677,7 @@ fn integ_combo_15_fenced_code_after_bullets() {
 #[test]
 fn integ_combo_16_fenced_code_after_blockquote() {
     let src = b"> quote\n```\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.fenced_codes.len(), 1);
 }
@@ -686,7 +686,7 @@ fn integ_combo_16_fenced_code_after_blockquote() {
 #[test]
 fn integ_combo_17_multiple_blockquotes_with_inline() {
     let src = b"> **bold** quote\n\n> *italic* quote\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -696,7 +696,7 @@ fn integ_combo_17_multiple_blockquotes_with_inline() {
 #[test]
 fn integ_combo_18_paragraph_multiline() {
     let src = b"line one\nline two\nline three\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
 }
 
@@ -704,7 +704,7 @@ fn integ_combo_18_paragraph_multiline() {
 #[test]
 fn integ_combo_19_paragraph_multiline_with_inline() {
     let src = b"line one\nline **bold** two\nline three\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -713,7 +713,7 @@ fn integ_combo_19_paragraph_multiline_with_inline() {
 #[test]
 fn integ_combo_20_ordered_after_heading() {
     let src = b"# Title\n1. first\n2. second\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.ordered_items.len(), 2);
 }
@@ -722,7 +722,7 @@ fn integ_combo_20_ordered_after_heading() {
 #[test]
 fn integ_combo_21_bullet_after_heading() {
     let src = b"# Title\n- first\n- second\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.bullet_items.len(), 2);
 }
@@ -731,7 +731,7 @@ fn integ_combo_21_bullet_after_heading() {
 #[test]
 fn integ_combo_22_link_in_bullet() {
     let src = b"- [link](url) text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.links.len(), 1);
 }
@@ -740,7 +740,7 @@ fn integ_combo_22_link_in_bullet() {
 #[test]
 fn integ_combo_23_image_in_blockquote() {
     let src = b"> ![alt](url)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.links.len(), 1);
     assert!(c.links[0].is_image);
@@ -750,7 +750,7 @@ fn integ_combo_23_image_in_blockquote() {
 #[test]
 fn integ_combo_24_autolink_in_bullet() {
     let src = b"- <https://example.com>\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.autolinks.len(), 1);
 }
@@ -759,7 +759,7 @@ fn integ_combo_24_autolink_in_bullet() {
 #[test]
 fn integ_combo_25_code_in_heading() {
     let src = b"# Title `code`\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.codes.len(), 1);
 }
@@ -768,7 +768,7 @@ fn integ_combo_25_code_in_heading() {
 #[test]
 fn integ_combo_26_spans_valid_bounds() {
     let src = b"# Title\n**bold** *italic* `code` [link](url)\n> quote\n- bullet\n1. ordered\n```\ncode\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     let len = src.len() as u32;
     for s in &c.texts {
         assert!(s.start <= s.end && s.end <= len);
@@ -810,7 +810,7 @@ fn integ_combo_26_spans_valid_bounds() {
 #[test]
 fn integ_combo_27_empty_source() {
     let src = b"";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 0);
     assert_eq!(c.headings.len(), 0);
     assert_eq!(c.texts.len(), 0);
@@ -820,7 +820,7 @@ fn integ_combo_27_empty_source() {
 #[test]
 fn integ_combo_28_single_newline() {
     let src = b"\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 0);
 }
 
@@ -828,7 +828,7 @@ fn integ_combo_28_single_newline() {
 #[test]
 fn integ_combo_29_no_trailing_newline() {
     let src = b"hello";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
 }
 
@@ -836,7 +836,7 @@ fn integ_combo_29_no_trailing_newline() {
 #[test]
 fn integ_combo_30_heading_no_trailing_newline() {
     let src = b"# Title";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
 }
 
@@ -844,7 +844,7 @@ fn integ_combo_30_heading_no_trailing_newline() {
 #[test]
 fn integ_combo_31_fenced_code_no_trailing_newline() {
     let src = b"```\ncode\n```";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
 }
 
@@ -852,7 +852,7 @@ fn integ_combo_31_fenced_code_no_trailing_newline() {
 #[test]
 fn integ_combo_32_bold_across_multiple_paragraphs() {
     let src = b"**bold1**\n\n**bold2**\n\n**bold3**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 3);
     assert_eq!(c.paragraphs.len(), 3);
 }
@@ -861,7 +861,7 @@ fn integ_combo_32_bold_across_multiple_paragraphs() {
 #[test]
 fn integ_combo_33_doc_hot_chunk() {
     let src = b"## Section\nPlain text with **bold** and *italic* words.\nAnother line with [text](url) and `code` and <link>.\n\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -874,7 +874,7 @@ fn integ_combo_33_doc_hot_chunk() {
 #[test]
 fn integ_combo_34_thematic_break_then_blockquote() {
     let src = b"---\n> quote\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert_eq!(c.blockquotes.len(), 1);
 }
@@ -883,7 +883,7 @@ fn integ_combo_34_thematic_break_then_blockquote() {
 #[test]
 fn integ_combo_35_thematic_break_then_bullet() {
     let src = b"---\n- item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert_eq!(c.bullet_items.len(), 1);
 }
@@ -892,7 +892,7 @@ fn integ_combo_35_thematic_break_then_bullet() {
 #[test]
 fn integ_combo_36_thematic_break_then_ordered() {
     let src = b"---\n1. item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert_eq!(c.ordered_items.len(), 1);
 }
@@ -901,7 +901,7 @@ fn integ_combo_36_thematic_break_then_ordered() {
 #[test]
 fn integ_combo_37_blockquote_multiline_with_inline() {
     let src = b"> **bold** line\n> *italic* line\n> `code` line\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -912,7 +912,7 @@ fn integ_combo_37_blockquote_multiline_with_inline() {
 #[test]
 fn integ_combo_38_ordered_multidigit() {
     let src = b"10. item\n11. item\n12. item\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 3);
     assert_eq!(c.ordered_items[0].0.num, 10);
 }
@@ -921,7 +921,7 @@ fn integ_combo_38_ordered_multidigit() {
 #[test]
 fn integ_combo_39_mixed_inline_in_paragraph() {
     let src = b"Text **bold** more *italic* and `code` end\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -933,7 +933,7 @@ fn integ_combo_39_mixed_inline_in_paragraph() {
 #[test]
 fn integ_combo_40_fenced_code_between_lists() {
     let src = b"- before\n```\ncode\n```\n- after\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
     assert_eq!(c.bullet_items.len(), 2);
 }
@@ -942,7 +942,7 @@ fn integ_combo_40_fenced_code_between_lists() {
 #[test]
 fn integ_combo_41_heading_counts() {
     let src = b"# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 6);
     for (i, (h, _)) in c.headings.iter().enumerate() {
         assert_eq!(h.level.get() as usize, i + 1);
@@ -957,7 +957,7 @@ fn integ_combo_41_heading_counts() {
 #[test]
 fn integ_edge_01_hard_break_in_multiline_paragraph() {
     let src = b"line one  \nline two\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.hard_breaks.len(), 1);
 }
@@ -966,7 +966,7 @@ fn integ_edge_01_hard_break_in_multiline_paragraph() {
 #[test]
 fn integ_edge_02_autolink_in_paragraph() {
     let src = b"Visit <https://example.com> today\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.autolinks.len(), 1);
 }
@@ -975,7 +975,7 @@ fn integ_edge_02_autolink_in_paragraph() {
 #[test]
 fn integ_edge_03_image_in_paragraph() {
     let src = b"See ![alt](url) here\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.paragraphs.len(), 1);
     assert_eq!(c.links.len(), 1);
     assert!(c.links[0].is_image);
@@ -985,7 +985,7 @@ fn integ_edge_03_image_in_paragraph() {
 #[test]
 fn integ_edge_04_list_followed_by_paragraph() {
     let src = b"- item\n\nparagraph\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bullet_items.len(), 1);
     assert_eq!(c.paragraphs.len(), 1);
 }
@@ -994,7 +994,7 @@ fn integ_edge_04_list_followed_by_paragraph() {
 #[test]
 fn integ_edge_05_ordered_followed_by_bullet() {
     let src = b"1. first\n- second\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.ordered_items.len(), 1);
     assert_eq!(c.bullet_items.len(), 1);
 }
@@ -1018,7 +1018,7 @@ fn integ_edge_05_ordered_followed_by_bullet() {
 #[test]
 fn integ_nest_01_blockquote_two_levels() {
     let src = b"> > nested text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
 }
 
@@ -1028,7 +1028,7 @@ fn integ_nest_01_blockquote_two_levels() {
 #[test]
 fn integ_nest_02_blockquote_two_levels_containment() {
     let src = b"> > nested text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
     let (outer, inner) = if c.blockquotes[0].start <= c.blockquotes[1].start {
         (&c.blockquotes[0], &c.blockquotes[1])
@@ -1043,7 +1043,7 @@ fn integ_nest_02_blockquote_two_levels_containment() {
 #[test]
 fn integ_nest_03_blockquote_three_levels() {
     let src = b"> > > deep\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 3);
 }
 
@@ -1052,7 +1052,7 @@ fn integ_nest_03_blockquote_three_levels() {
 #[test]
 fn integ_nest_04_blockquote_nested_with_inline() {
     let src = b"> > **bold** text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
     assert_eq!(c.bolds.len(), 1);
 }
@@ -1064,7 +1064,7 @@ fn integ_nest_04_blockquote_nested_with_inline() {
 #[test]
 fn integ_nest_05_fence_inside_blockquote() {
     let src = b"> ```rust\n> code line\n> ```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.fenced_codes.len(), 1);
 }
@@ -1074,7 +1074,7 @@ fn integ_nest_05_fence_inside_blockquote() {
 #[test]
 fn integ_nest_06_fence_inside_blockquote_no_inline() {
     let src = b"> ```\n> **not bold**\n> ```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
     assert_eq!(c.bolds.len(), 0);
 }
@@ -1085,7 +1085,7 @@ fn integ_nest_06_fence_inside_blockquote_no_inline() {
 #[test]
 fn integ_nest_07_nested_emphasis_bold_then_italic() {
     let src = b"**bold *italic* still-bold**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
     assert_eq!(txt(src, c.bolds[0]), "bold *italic* still-bold");
@@ -1097,7 +1097,7 @@ fn integ_nest_07_nested_emphasis_bold_then_italic() {
 #[test]
 fn integ_nest_08_nested_emphasis_two_italics_in_one_bold() {
     let src = b"**bold *one* mid *two* end**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 2);
     assert_eq!(txt(src, c.italics[0]), "one");
@@ -1109,7 +1109,7 @@ fn integ_nest_08_nested_emphasis_two_italics_in_one_bold() {
 #[test]
 fn integ_nest_09_blockquote_and_emphasis_nested_together() {
     let src = b"> > **bold *italic* bold** text\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(c.italics.len(), 1);
@@ -1120,7 +1120,7 @@ fn integ_nest_09_blockquote_and_emphasis_nested_together() {
 #[test]
 fn integ_nest_10_nested_blockquote_then_paragraph() {
     let src = b"> > quote\n\nparagraph\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 2);
     assert_eq!(c.paragraphs.len(), 1);
 }
@@ -1133,7 +1133,7 @@ fn integ_nest_10_nested_blockquote_then_paragraph() {
 #[test]
 fn integ_unclosed_01_lone_star_multi_line() {
     let src = b"5 * 3 is fifteen\nand so on\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.italics.is_empty());
     assert_eq!(c.texts.len(), 1);
     assert_eq!(txt(src, c.texts[0]), "5 * 3 is fifteen\nand so on");
@@ -1144,7 +1144,7 @@ fn integ_unclosed_01_lone_star_multi_line() {
 #[test]
 fn integ_unclosed_02_opener_at_start() {
     let src = b"*a\nb\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.italics.is_empty());
     assert_eq!(c.texts.len(), 1);
     assert_eq!(txt(src, c.texts[0]), "*a\nb");
@@ -1154,7 +1154,7 @@ fn integ_unclosed_02_opener_at_start() {
 #[test]
 fn integ_unclosed_03_bold_with_newline() {
     let src = b"**unclosed bold\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.bolds.is_empty());
     assert_eq!(c.texts.len(), 1);
     assert_eq!(txt(src, c.texts[0]), "**unclosed bold");
@@ -1165,7 +1165,7 @@ fn integ_unclosed_03_bold_with_newline() {
 #[test]
 fn integ_unclosed_04_closed_across_newline() {
     let src = b"see **note\nhere** end\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(txt(src, c.bolds[0]), "note\nhere");
     assert_eq!(c.texts.len(), 2);
@@ -1182,7 +1182,7 @@ fn integ_unclosed_04_closed_across_newline() {
 fn integ_dead_01_many_unclosed_brackets_linear() {
     let src: Vec<u8> = b"[a".repeat(200_000);
     let started = std::time::Instant::now();
-    let c = MarkdownParser::parse(&src);
+    let c = MarkdownParser::parse_unchecked(&src);
     assert!(c.links.is_empty());
     assert_eq!(c.paragraphs.len(), 1);
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
@@ -1193,7 +1193,7 @@ fn integ_dead_01_many_unclosed_brackets_linear() {
 fn integ_dead_02_many_unclosed_autolinks_linear() {
     let src: Vec<u8> = b"<a".repeat(200_000);
     let started = std::time::Instant::now();
-    let c = MarkdownParser::parse(&src);
+    let c = MarkdownParser::parse_unchecked(&src);
     assert!(c.autolinks.is_empty());
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
@@ -1202,7 +1202,7 @@ fn integ_dead_02_many_unclosed_autolinks_linear() {
 #[test]
 fn integ_dead_03_failed_autolink_then_link() {
     let src = b"x < y then [t](u) end\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.autolinks.is_empty());
     assert_eq!(c.links.len(), 1);
     assert_eq!(txt(src, c.links[0].url), "u");
@@ -1216,7 +1216,7 @@ fn integ_dead_03_failed_autolink_then_link() {
 #[test]
 fn integ_alloc_01_unused_fields_do_not_allocate() {
     let src = b"Just a paragraph of prose, and a second line of it.\nNothing else.\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.capacity(), 0);
     assert_eq!(c.italics.capacity(), 0);
     assert_eq!(c.bold_italics.capacity(), 0);
@@ -1244,7 +1244,7 @@ fn integ_alloc_02_each_category_reserves_its_hint() {
         doc.push_str("filler prose line to grow the source\n");
     }
     let src = doc.as_bytes();
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
 
     assert!(c.headings.capacity() >= src.len() / 200);
     assert!(c.bullet_items.capacity() >= src.len() / 80);
@@ -1258,7 +1258,7 @@ fn integ_alloc_02_each_category_reserves_its_hint() {
 #[test]
 fn integ_alloc_03_output_is_unaffected() {
     let src = b"# T\n\n> quote\n\n- a\n1. b\n\n**x** *y* `z` <u> [t](u) ![i](v)\n\n```\nc\n```\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.bullet_items.len(), 1);
@@ -1283,7 +1283,7 @@ fn texts(src: &[u8], c: &meon_md::MarkdownContent<'_>) -> Vec<String> {
 #[test]
 fn integ_gap_01_blank_lines_split_text() {
     let src = b"a\n\n\nb";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["a", "b"]);
 }
 
@@ -1291,7 +1291,7 @@ fn integ_gap_01_blank_lines_split_text() {
 #[test]
 fn integ_gap_02_trailing_blank_lines() {
     let src = b"x\n\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["x"]);
 }
 
@@ -1299,7 +1299,7 @@ fn integ_gap_02_trailing_blank_lines() {
 #[test]
 fn integ_gap_03_thematic_break_line() {
     let src = b"---\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.thematic_breaks.len(), 1);
     assert!(c.texts.is_empty());
 }
@@ -1307,7 +1307,7 @@ fn integ_gap_03_thematic_break_line() {
 // 04. A lone eol is not text
 #[test]
 fn integ_gap_04_lone_eol() {
-    let c = MarkdownParser::parse(b"\n");
+    let c = MarkdownParser::parse_unchecked(b"\n");
     assert!(c.texts.is_empty());
 }
 
@@ -1315,7 +1315,7 @@ fn integ_gap_04_lone_eol() {
 #[test]
 fn integ_gap_05_fence_content() {
     let src = b"```a\n\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
     assert!(c.texts.is_empty());
 }
@@ -1324,7 +1324,7 @@ fn integ_gap_05_fence_content() {
 #[test]
 fn integ_gap_06_empty_blockquote_line() {
     let src = b">\n\nb";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(texts(src, &c), vec!["b"]);
 }
@@ -1333,7 +1333,7 @@ fn integ_gap_06_empty_blockquote_line() {
 #[test]
 fn integ_gap_07_heading_then_paragraph() {
     let src = b"# h\n\n\nb";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["h", "b"]);
 }
 
@@ -1341,7 +1341,7 @@ fn integ_gap_07_heading_then_paragraph() {
 #[test]
 fn integ_gap_08_space_hard_break_on_last_line() {
     let src = b"a  \n\nb";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["a", "b"]);
     assert_eq!(c.hard_breaks.len(), 1);
     assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
@@ -1351,7 +1351,7 @@ fn integ_gap_08_space_hard_break_on_last_line() {
 #[test]
 fn integ_gap_09_backslash_hard_break_on_last_line() {
     let src = b"a\\\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["a"]);
     assert_eq!(c.hard_breaks.len(), 1);
     assert_eq!((c.hard_breaks[0].start, c.hard_breaks[0].end), (1, 1));
@@ -1361,7 +1361,7 @@ fn integ_gap_09_backslash_hard_break_on_last_line() {
 #[test]
 fn integ_gap_10_heading_text_does_not_merge_into_paragraph() {
     let src = b"# a\nb";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["a", "b"]);
 }
 
@@ -1369,7 +1369,7 @@ fn integ_gap_10_heading_text_does_not_merge_into_paragraph() {
 #[test]
 fn integ_gap_11_blockquote_text_does_not_merge_into_paragraph() {
     let src = b"> a\nb";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["a", "b"]);
 }
 
@@ -1377,7 +1377,7 @@ fn integ_gap_11_blockquote_text_does_not_merge_into_paragraph() {
 #[test]
 fn integ_gap_12_list_item_text_does_not_merge_into_paragraph() {
     let src = b"- x\ny";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["x", "y"]);
 }
 
@@ -1385,7 +1385,7 @@ fn integ_gap_12_list_item_text_does_not_merge_into_paragraph() {
 #[test]
 fn integ_gap_13_paragraph_lines_still_merge() {
     let src = b"a\nb\nc";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(texts(src, &c), vec!["a\nb\nc"]);
 }
 
@@ -1397,7 +1397,7 @@ fn integ_gap_13_paragraph_lines_still_merge() {
 #[test]
 fn integ_undeclared_01_double_angle_is_text() {
     let src = b"use x << 2 when y > 0\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.autolinks.is_empty());
     assert_eq!(texts(src, &c), vec!["use x << 2 when y > 0"]);
 }
@@ -1407,7 +1407,7 @@ fn integ_undeclared_01_double_angle_is_text() {
 #[test]
 fn integ_undeclared_02_double_backtick_is_text() {
     let src = b"x ``*a*`` y\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.codes.is_empty());
     assert_eq!(c.italics.len(), 1);
     assert_eq!(texts(src, &c), vec!["x ``", "`` y"]);
@@ -1421,7 +1421,7 @@ fn integ_undeclared_02_double_backtick_is_text() {
 #[test]
 fn integ_unclosed_01_inner_italic_kept() {
     let src = b"*a **b *c* d** e\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.italics.len(), 1);
     assert_eq!(txt(src, c.italics[0]), "c");
     assert_eq!(c.bolds.len(), 1);
@@ -1432,7 +1432,7 @@ fn integ_unclosed_01_inner_italic_kept() {
 #[test]
 fn integ_unclosed_02_inner_bold_kept() {
     let src = b"**a *b **c** d* e\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(txt(src, c.bolds[0]), "c");
     assert_eq!(c.italics.len(), 1);
@@ -1447,7 +1447,7 @@ fn integ_unclosed_02_inner_bold_kept() {
 #[test]
 fn integ_bracket_run_01_extra_bracket_is_text() {
     let src = b"see [[a](u) here\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert_eq!(txt(src, c.links[0].text), "a");
     assert_eq!(texts(src, &c), vec!["see [", " here"]);
@@ -1457,7 +1457,7 @@ fn integ_bracket_run_01_extra_bracket_is_text() {
 #[test]
 fn integ_bracket_run_02_bang_before_run_is_text() {
     let src = b"![[a](u)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(!c.links[0].is_image);
     assert_eq!(texts(src, &c), vec!["!["]);
@@ -1471,7 +1471,7 @@ fn integ_bracket_run_02_bang_before_run_is_text() {
 #[test]
 fn integ_line_end_01_escaped_backslash() {
     let src = b"a\\\\\nb\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.hard_breaks.is_empty());
     assert_eq!(texts(src, &c), vec!["a\\\\\nb"]);
 }
@@ -1480,7 +1480,7 @@ fn integ_line_end_01_escaped_backslash() {
 #[test]
 fn integ_line_end_02_single_space() {
     let src = b"a \nb\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert!(c.hard_breaks.is_empty());
     assert_eq!(texts(src, &c), vec!["a \nb"]);
 }
@@ -1489,7 +1489,7 @@ fn integ_line_end_02_single_space() {
 #[test]
 fn integ_line_end_03_markers() {
     let src = b"a  \nb\\\nc\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.hard_breaks.len(), 2);
     assert_eq!(texts(src, &c), vec!["a", "b", "c"]);
 }
@@ -1503,7 +1503,7 @@ fn integ_line_end_03_markers() {
 #[test]
 fn integ_link_bal_01_nested_brackets_and_parens() {
     let src = b"[a [b] c](https://x.y/a_(b)) d\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert_eq!(txt(src, c.links[0].text), "a [b] c");
     assert_eq!(txt(src, c.links[0].url), "https://x.y/a_(b)");
@@ -1513,7 +1513,7 @@ fn integ_link_bal_01_nested_brackets_and_parens() {
 #[test]
 fn integ_link_bal_02_badge() {
     let src = b"[![ci](https://x.y/b.svg)](https://x.y/ci)\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.links.len(), 1);
     assert!(!c.links[0].is_image);
     assert_eq!(txt(src, c.links[0].text), "![ci](https://x.y/b.svg)");
@@ -1528,7 +1528,7 @@ fn integ_link_bal_02_badge() {
 #[test]
 fn integ_crlf_01_fence_and_text() {
     let src = b"```\r\ncode\r\n```\r\nafter\r\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.fenced_codes.len(), 1);
     assert_eq!(texts(src, &c), vec!["after"]);
 }
@@ -1537,7 +1537,7 @@ fn integ_crlf_01_fence_and_text() {
 #[test]
 fn integ_crlf_02_line_rules() {
     let src = b"# Title\r\n---\r\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.headings.len(), 1);
     assert_eq!(txt(src, c.headings[0].1), "Title");
     assert_eq!(c.thematic_breaks.len(), 1);
@@ -1551,7 +1551,7 @@ fn integ_crlf_02_line_rules() {
 #[test]
 fn integ_quote_run_01_bold_across_lines() {
     let src = b"> **a\n> b**\n";
-    let c = MarkdownParser::parse(src);
+    let c = MarkdownParser::parse_unchecked(src);
     assert_eq!(c.blockquotes.len(), 1);
     assert_eq!(c.bolds.len(), 1);
     assert_eq!(txt(src, c.bolds[0]), "a\n> b");

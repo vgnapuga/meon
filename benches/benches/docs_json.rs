@@ -17,9 +17,17 @@
 
 use meon_json::JsonParser;
 
-/// Scales every corpus. `REPEAT_COUNT` top-level array elements (×30 for `numbers`,
-/// which are cheaper per element). Raise it for a `big` run that exceeds cache.
-pub const REPEAT_COUNT: usize = 10000;
+/// Scales every corpus. `REPEAT_COUNT` top-level array elements (×30 for
+/// `numbers`, which are cheaper per element). The `big` feature multiplies the
+/// default working set by 100.
+#[cfg(all(feature = "small", feature = "big"))]
+compile_error!("features `small` and `big` are mutually exclusive");
+
+#[cfg(feature = "big")]
+pub const REPEAT_COUNT: usize = 10_000 * 100;
+
+#[cfg(not(feature = "big"))]
+pub const REPEAT_COUNT: usize = 10_000;
 
 // Criterion knobs, shared with the markdown benches' values.
 pub const WARMUP_TIME: u64 = 3;
@@ -27,9 +35,13 @@ pub const SAMPLE_TIME: u64 = 10;
 pub const SAMPLE_SIZE: usize = 20;
 
 pub fn doc_numbers() -> String {
-    let mut s = String::with_capacity(REPEAT_COUNT * 30 * 8);
+    doc_numbers_with(REPEAT_COUNT)
+}
+
+pub fn doc_numbers_with(repeat: usize) -> String {
+    let mut s = String::with_capacity(repeat * 30 * 8);
     s.push('[');
-    for i in 0..REPEAT_COUNT * 30 {
+    for i in 0..repeat * 30 {
         if i > 0 {
             s.push(',');
         }
@@ -50,9 +62,13 @@ pub fn doc_numbers() -> String {
 }
 
 pub fn doc_objects() -> String {
-    let mut s = String::with_capacity(REPEAT_COUNT * 2 * 80);
+    doc_objects_with(REPEAT_COUNT)
+}
+
+pub fn doc_objects_with(repeat: usize) -> String {
+    let mut s = String::with_capacity(repeat * 2 * 80);
     s.push('[');
-    for i in 0..REPEAT_COUNT * 2 {
+    for i in 0..repeat * 2 {
         if i > 0 {
             s.push(',');
         }
@@ -66,9 +82,13 @@ pub fn doc_objects() -> String {
 }
 
 pub fn doc_nested() -> String {
-    let mut s = String::with_capacity(REPEAT_COUNT * 130);
+    doc_nested_with(REPEAT_COUNT)
+}
+
+pub fn doc_nested_with(repeat: usize) -> String {
+    let mut s = String::with_capacity(repeat * 130);
     s.push('[');
-    for i in 0..REPEAT_COUNT {
+    for i in 0..repeat {
         if i > 0 {
             s.push(',');
         }
@@ -90,11 +110,55 @@ pub fn corpora() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// The same three JSON documents with a small element count, all fitting
+/// `u16` offsets.
+pub fn corpora_u16() -> Vec<(&'static str, String)> {
+    const REPEAT: usize = 250;
+    let docs = vec![
+        ("numbers", doc_numbers_with(REPEAT)),
+        ("objects", doc_objects_with(REPEAT)),
+        ("nested", doc_nested_with(REPEAT)),
+    ];
+    for (label, doc) in &docs {
+        assert!(
+            doc.len() <= u16::MAX as usize,
+            "corpus {label:?} is {} bytes, does not fit u16",
+            doc.len()
+        );
+    }
+    docs
+}
+
+/// The same three JSON documents, grown until each reaches `target` bytes.
+pub fn corpora_large(target: usize) -> Vec<(&'static str, String)> {
+    type Maker = (&'static str, fn(usize) -> String);
+    let makers: [Maker; 3] = [
+        ("numbers", doc_numbers_with),
+        ("objects", doc_objects_with),
+        ("nested", doc_nested_with),
+    ];
+    makers
+        .into_iter()
+        .map(|(label, make)| {
+            let mut count = 1usize;
+            let doc = loop {
+                let doc = make(count);
+                if doc.len() >= target {
+                    break doc;
+                }
+                count = count.saturating_mul(2);
+                assert!(count > 0, "corpus {label:?} cannot reach {target} bytes");
+            };
+            (label, doc)
+        })
+        .collect()
+}
+
 /// Parse once with meon-json and print a size + structural + typed composition
 /// report, so every throughput figure can be read against the exact structure
 /// the parser produced. Runs once, before timing.
 pub fn report(label: &str, bytes: &[u8]) {
-    let c = JsonParser::parse(bytes);
+    let c = JsonParser::parse(bytes).unwrap();
     let t = c.type_scalars();
 
     let size = bytes.len();

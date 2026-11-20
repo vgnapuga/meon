@@ -1,0 +1,5 @@
+error: expected `u8`, `u16`, `u32` or `u64` after `offset =`, got `u128`
+ --> tests/ui/fail/offset_unknown.rs:5:23
+  |
+5 |     limits { offset = u128; }
+  |                       ^^^^

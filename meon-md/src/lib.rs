@@ -12,7 +12,7 @@
 //! ```rust
 //! use meon_md::MarkdownParser;
 //!
-//! let content = MarkdownParser::parse(b"# Hello\n**world**\n");
+//! let content = MarkdownParser::parse(b"# Hello\n**world**\n").unwrap();
 //! assert_eq!(content.headings.len(), 1);
 //! assert_eq!(content.bolds.len(), 1);
 //! ```
@@ -31,11 +31,15 @@
 //! Lines end at `\n` or `\r\n` (`crlf = true`). A line of spaces and tabs
 //! alone is blank.
 //!
-//! # Nesting
+//! # Limits
 //!
-//! This grammar sets `max_nest = 4`, the engine's bounded-nesting depth cap
-//! (see [`meon::define_parser!`] for the mechanism). Two independent rule
-//! families opt into it:
+//! The grammar sets `max_nest = 4` in its `limits` section, the engine's
+//! bounded-nesting depth cap (see [`meon::define_parser!`] for the mechanism).
+//! The three span caps — `max_inline_span`, `max_line_span` and
+//! `max_block_span` — are written as `0`, which the engine treats as absent:
+//! no span is dropped for its length.
+//!
+//! Two independent rule families opt into `max_nest`:
 //!
 //! - **Blockquotes and fences** (`cont(b'>')`, `fence(b'`', min = 3)`) share
 //!   the block-level active-block stack. A line like `"> > text"` opens two
@@ -85,8 +89,14 @@ define_parser!(Markdown {
     eol = b'\n',
     tab = b'\t',
     escape = b'\\',
-    max_nest = 4,
     crlf = true;
+
+    limits {
+        max_nest = 4;
+        max_inline_span = 0;
+        max_line_span = 0;
+        max_block_span = 0;
+    }
 
     inline {
         merge_simple = true;

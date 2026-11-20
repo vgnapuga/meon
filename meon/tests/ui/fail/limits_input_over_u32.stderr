@@ -1,0 +1,5 @@
+error: `max_input_bytes` must not exceed `4294967295`
+ --> tests/ui/fail/limits_input_over_u32.rs:6:27
+  |
+6 |         max_input_bytes = 4_294_967_296;
+  |                           ^^^^^^^^^^^^^

@@ -414,12 +414,15 @@ mod tests {
         #[test]
         fn test_19_generated_range_pattern() {
             let src: &[u8] = b"===\n555\n5 5 5\n565\n44\n7777 x";
-            let full = RulesParser::parse(src);
+            let full = RulesParser::parse_unchecked(src);
             let want = vec![(b'=', 0, 3), (b'5', 4, 7), (b'5', 8, 13)];
             assert_eq!(items(full.rules.iter().copied()), want);
-            assert_eq!(items(RulesParser::find_rules(src)), want);
-            let ctx = RulesParser::context(src);
-            assert_eq!(items(RulesParser::find_context_rules(src, &ctx)), want);
+            assert_eq!(items(RulesParser::find_rules_unchecked(src)), want);
+            let ctx = RulesParser::context_unchecked(src);
+            assert_eq!(
+                items(RulesParser::find_context_rules_unchecked(src, &ctx)),
+                want
+            );
         }
     }
 }

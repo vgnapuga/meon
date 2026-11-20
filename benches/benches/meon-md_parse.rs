@@ -19,10 +19,16 @@
 //! reference resolution, or rendering. A fair cross-parser comparison would
 //! pin both to parse-only and document the feature delta.
 
+//! Scenario: **isolated single-parser run.** Only meon-md is timed; there is
+//! no cross-parser sanity pass or other parser's timed benchmark before it.
+//! `meon-md_compare` is the warmed multi-parser scenario; absolute numbers
+//! across the two are not interchangeable.
+//!
 mod docs_md;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use meon_md::MarkdownParser;
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_parse(c: &mut Criterion) {
@@ -40,7 +46,7 @@ fn bench_parse(c: &mut Criterion) {
 
         group.bench_function("full", |b| {
             b.iter(|| {
-                let content = MarkdownParser::parse(black_box(bytes));
+                let content = MarkdownParser::parse(black_box(bytes)).unwrap();
                 black_box(content);
             });
         });

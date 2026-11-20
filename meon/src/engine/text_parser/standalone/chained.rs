@@ -393,9 +393,9 @@ enum Phase {
 ///
 /// Obtained via the generated `Parser::find_*` methods; rarely constructed
 /// directly.
-pub struct ChainedIter<'a, T, F>
+pub struct ChainedIter<'a, O: crate::span::SpanIndex, T, F>
 where
-    F: Fn(bool, Span, Span) -> T,
+    F: Fn(bool, Span<O>, Span<O>) -> T,
 {
     src: &'a [u8],
     spec: ChainSpec,
@@ -408,11 +408,12 @@ where
     memo: ChainMemo,
     phase: Phase,
     _t: std::marker::PhantomData<T>,
+    _o: std::marker::PhantomData<O>,
 }
 
-impl<'a, T, F> ChainedIter<'a, T, F>
+impl<'a, O: crate::span::SpanIndex, T, F> ChainedIter<'a, O, T, F>
 where
-    F: Fn(bool, Span, Span) -> T,
+    F: Fn(bool, Span<O>, Span<O>) -> T,
 {
     /// Create an iterator over a `chained` rule's matches.
     ///
@@ -452,6 +453,7 @@ where
             memo: ChainMemo::default(),
             phase: Phase::Idle,
             _t: std::marker::PhantomData,
+            _o: std::marker::PhantomData,
         }
     }
 
@@ -500,8 +502,8 @@ where
                 let prefix = self.prefixed(from - 1);
                 return Some((self.make)(
                     prefix,
-                    Span::new(from as u32, ct as u32),
-                    Span::new((ct + 2) as u32, cu as u32),
+                    Span::<O>::from_usize(from, ct),
+                    Span::<O>::from_usize(ct + 2, cu),
                 ));
             }
         }
@@ -619,8 +621,8 @@ where
                         self.pos = cu + 1;
                         return Some((self.make)(
                             prefix,
-                            Span::new(first.0 as u32, first.1 as u32),
-                            Span::new(start as u32, cu as u32),
+                            Span::<O>::from_usize(first.0, first.1),
+                            Span::<O>::from_usize(start, cu),
                         ));
                     }
                 }
@@ -629,9 +631,9 @@ where
     }
 }
 
-impl<T, F> Iterator for ChainedIter<'_, T, F>
+impl<O: crate::span::SpanIndex, T, F> Iterator for ChainedIter<'_, O, T, F>
 where
-    F: Fn(bool, Span, Span) -> T,
+    F: Fn(bool, Span<O>, Span<O>) -> T,
 {
     type Item = T;
 
@@ -1597,17 +1599,17 @@ mod tests {
                 b"x ![a](b) [c [d]](e) [f](g",
                 b"[a\nb](c)\n\n[d](e\n\nf)",
             ] {
-                let full = OpaqueParser::parse(src);
+                let full = OpaqueParser::parse_unchecked(src);
                 let want: Vec<(u32, u32)> = full
                     .links
                     .iter()
                     .map(|l| (l.text.start - 1, l.url.end + 1))
                     .collect();
-                assert_eq!(regions(&OpaqueParser::context(src)), want);
+                assert_eq!(regions(&OpaqueParser::context_unchecked(src)), want);
             }
             // The first component nests, the second component does not.
             assert_eq!(
-                regions(&OpaqueParser::context(b"[a [b] c](d (e) f)")),
+                regions(&OpaqueParser::context_unchecked(b"[a [b] c](d (e) f)")),
                 vec![(0, 15)]
             );
         }
@@ -1616,8 +1618,8 @@ mod tests {
         #[test]
         fn test_28_generated_transparent_rule_is_no_context_source() {
             let src = b"[a](b)";
-            assert_eq!(MixedParser::parse(src).links.len(), 1);
-            assert!(MixedParser::context(src).spans().is_empty());
+            assert_eq!(MixedParser::parse_unchecked(src).links.len(), 1);
+            assert!(MixedParser::context_unchecked(src).spans().is_empty());
         }
 
         // 29. The finder gets the rule's flags: a failed opaque match resumes
@@ -1632,18 +1634,30 @@ mod tests {
                 b"![[a](u)",
                 b"[a\\]b](u)",
             ] {
-                let full: Vec<L> = OpaqueParser::parse(src).links.iter().map(link).collect();
-                let find: Vec<L> = OpaqueParser::find_links(src).map(|l| link(&l)).collect();
+                let full: Vec<L> = OpaqueParser::parse_unchecked(src)
+                    .links
+                    .iter()
+                    .map(link)
+                    .collect();
+                let find: Vec<L> = OpaqueParser::find_links_unchecked(src)
+                    .map(|l| link(&l))
+                    .collect();
                 assert_eq!(find, full, "{:?}", String::from_utf8_lossy(src));
-                let full: Vec<L> = NestedParser::parse(src).links.iter().map(link).collect();
-                let find: Vec<L> = NestedParser::find_links(src).map(|l| link(&l)).collect();
+                let full: Vec<L> = NestedParser::parse_unchecked(src)
+                    .links
+                    .iter()
+                    .map(link)
+                    .collect();
+                let find: Vec<L> = NestedParser::find_links_unchecked(src)
+                    .map(|l| link(&l))
+                    .collect();
                 assert_eq!(find, full, "{:?}", String::from_utf8_lossy(src));
             }
-            let find: Vec<L> = OpaqueParser::find_links(b"[a [b](u)")
+            let find: Vec<L> = OpaqueParser::find_links_unchecked(b"[a [b](u)")
                 .map(|l| link(&l))
                 .collect();
             assert_eq!(find, vec![(false, (4, 5), (7, 8))]);
-            assert_eq!(NestedParser::find_links(b"[a [b](u)").count(), 0);
+            assert_eq!(NestedParser::find_links_unchecked(b"[a [b](u)").count(), 0);
         }
 
         mod marked {
@@ -1690,10 +1704,18 @@ mod tests {
             use marked::MarkedParser;
             use marked_tr::MarkedTrParser;
             let opaque = |src: &[u8]| -> Vec<L> {
-                MarkedParser::parse(src).links.iter().map(link).collect()
+                MarkedParser::parse_unchecked(src)
+                    .links
+                    .iter()
+                    .map(link)
+                    .collect()
             };
             let transparent = |src: &[u8]| -> Vec<L> {
-                MarkedTrParser::parse(src).links.iter().map(link).collect()
+                MarkedTrParser::parse_unchecked(src)
+                    .links
+                    .iter()
+                    .map(link)
+                    .collect()
             };
             for links in [&opaque as &dyn Fn(&[u8]) -> Vec<L>, &transparent] {
                 assert_eq!(links(b"![a](u)"), vec![(false, (2, 3), (5, 6))]);

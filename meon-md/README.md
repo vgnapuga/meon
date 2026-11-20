@@ -41,7 +41,7 @@ meon-md = "0.6"
 use meon_md::MarkdownParser;
 
 let src = b"# Hello\n**world** and *italic* with `code`\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 
 // Access by element kind — O(1) per kind
 println!("headings:  {}", c.headings.len());
@@ -133,7 +133,7 @@ resolve spans:
 
 ```rust
 let src = b"**bold** and *italic*\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 
 // str() returns None on invalid UTF-8 instead of panicking
 if let Some(text) = c.str(c.bolds[0]) {
@@ -158,8 +158,10 @@ for raw in c.bolds_raw() {
 
 ## Standalone iterators
 
-Every element kind has a `find_*` method that scans the source without a full
-parse. Use it when you only need one element kind from a large document:
+Every standalone-capable element kind has a `find_*` method that scans the
+source without a full parse. Fallback fields (`texts`, `paragraphs`) and
+`hard_breaks` have no finder. Use it when you only need one element kind from
+a large document:
 
 ```rust
 use meon_md::MarkdownParser;
@@ -167,15 +169,15 @@ use meon_md::MarkdownParser;
 let src = long_document.as_bytes();
 
 // ~2–5× faster than a full parse for a single element kind
-for span in MarkdownParser::find_bolds(src) {
+for span in MarkdownParser::find_bolds(src).unwrap() {
     println!("{}", std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 
-for link in MarkdownParser::find_links(src) {
+for link in MarkdownParser::find_links(src).unwrap() {
     // link.text, link.url, link.is_image
 }
 
-for (heading, span) in MarkdownParser::find_headings(src) {
+for (heading, span) in MarkdownParser::find_headings(src).unwrap() {
     println!("h{}: {}", heading.level, std::str::from_utf8(&src[span.start as usize..span.end as usize]).unwrap());
 }
 ```
@@ -190,15 +192,16 @@ To close the opacity gap, build the context map once and use the
 `find_context_*` variants:
 
 ```rust
-let ctx = MarkdownParser::context(src);
-// Bold markers inside code spans, autolinks and fenced blocks are skipped:
-for span in MarkdownParser::find_context_bolds(src, &ctx) { /* ... */ }
+let ctx = MarkdownParser::context(src).unwrap();
+// Bold markers inside code spans, autolinks, links and fenced blocks are skipped:
+for span in MarkdownParser::find_context_bolds(src, &ctx).unwrap() { /* ... */ }
 ```
 
-Every non-opaque element kind has one (`find_context_bolds`,
-`find_context_headings`, `find_context_blockquotes`, ...); code spans,
-autolinks and fenced blocks are the context sources and keep only their
-context-free `find_*`. See
+Every non-opaque standalone-capable element kind has one
+(`find_context_bolds`, `find_context_headings`, `find_context_blockquotes`,
+...); code spans, autolinks, links and fenced blocks are the context sources
+and keep only their context-free `find_*`. Fallback fields and `hard_breaks`
+have no context-aware finder either. See
 [`ARCHITECTURE.md §12`](https://github.com/vgnapuga/meon/blob/main/ARCHITECTURE.md#12-standalone-iterators) - *GitHub*
 for details.
 
@@ -215,14 +218,14 @@ Inherited from `meon`:
 
 ```toml
 [dependencies]
-meon-md = { version = "0.5", features = ["avx2"] }
+meon = { version = "0.7", features = ["avx2"] }
 ```
 
 ---
 
 ## Nesting
 
-This grammar sets `max_nest = 4`. Two independent mechanisms opt into it:
+This grammar sets `max_nest = 4` in its `limits` section. Two independent mechanisms opt into it:
 
 - **Blockquotes and fences** nest up to 4 levels deep. `> > text` opens two
   distinct, correctly-bounded `blockquotes` spans rather than one collapsed
@@ -234,11 +237,20 @@ This grammar sets `max_nest = 4`. Two independent mechanisms opt into it:
 
 ```rust
 let src = b"> > nested quote with **bold *italic* text**\n";
-let c = MarkdownParser::parse(src);
+let c = MarkdownParser::parse(src).unwrap();
 assert_eq!(c.blockquotes.len(), 2);
 assert_eq!(c.bolds.len(), 1);
 assert_eq!(c.italics.len(), 1);
 ```
+
+The three span caps are written as `0` (absent): `max_inline_span = 0`,
+`max_line_span = 0`, `max_block_span = 0`. The engine treats `0` as no cap,
+so no span is dropped for its length.
+
+`max_input_bytes` is not set, so the grammar does not reject large input.
+The checked `parse`, `find_*`, `find_context_*` and `context` methods still
+return `Result`; they simply never fail on length. Use `parse_unchecked` and
+the other `_unchecked` methods to skip the `Result` wrapper.
 
 Link and image components are opaque and balanced. `[a [b] c](url)` and
 `[t](https://x/a_(b))` each produce one link; bracket/parenthesis bytes inside

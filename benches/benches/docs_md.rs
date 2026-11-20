@@ -20,6 +20,16 @@
 //! `REPEAT_COUNT` tiles each base document so the working set is large enough
 //! for a stable measurement and clearly larger than L2/L3.
 
+#[cfg(all(feature = "small", feature = "big"))]
+compile_error!("features `small` and `big` are mutually exclusive");
+
+/// Tiling factor for the Markdown corpora. `big` multiplies the default
+/// working set by 100.
+#[cfg(feature = "big")]
+pub const REPEAT_COUNT: usize = 10 * 100;
+
+/// Tiling factor for the Markdown corpora.
+#[cfg(not(feature = "big"))]
 pub const REPEAT_COUNT: usize = 10;
 
 // Criterion knobs. Tuned for a sane local run time while staying statistically
@@ -128,6 +138,27 @@ pub fn corpora() -> Vec<(&'static str, String)> {
         ("hot", doc_hot().repeat(REPEAT_COUNT)),
         ("heavy", doc_heavy().repeat(REPEAT_COUNT)),
     ]
+}
+
+/// Corpora truncated to fit `u16` offsets. Same shapes as [`corpora`].
+pub fn corpora_u16() -> Vec<(&'static str, String)> {
+    let limit = u16::MAX as usize;
+    [
+        ("plain", doc_plain()),
+        ("hot", doc_hot()),
+        ("heavy", doc_heavy()),
+    ]
+    .into_iter()
+    .map(|(label, doc)| (label, truncate_at_line(doc, limit)))
+    .collect()
+}
+
+fn truncate_at_line(mut doc: String, limit: usize) -> String {
+    if doc.len() > limit {
+        let cut = doc[..limit].rfind('\n').map_or(limit, |i| i + 1);
+        doc.truncate(cut);
+    }
+    doc
 }
 
 /// Columns of the composition table printed by [`report`].
@@ -326,7 +357,7 @@ fn pulldown_reference(text: &str) -> Reference {
 /// bug - it marks where the two parsers read the corpus differently.
 pub fn report(label: &str, bytes: &[u8]) {
     use meon_md::MarkdownParser;
-    let c = MarkdownParser::parse(bytes);
+    let c = MarkdownParser::parse(bytes).unwrap();
 
     // Order: block/line structure first, then inline, then text runs.
     let counts: [(&str, usize); 15] = [

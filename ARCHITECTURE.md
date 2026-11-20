@@ -50,6 +50,7 @@ deeper than the public API.
 16. [Cross-crate macro hygiene](#16-cross-crate-macro-hygiene)
 17. [Known limitations and deliberate trade-offs](#17-known-limitations-and-deliberate-trade-offs)
 18. [Extension points](#18-extension-points)
+19. [Span limits](#19-span-limits)
 
 ---
 
@@ -122,8 +123,9 @@ multi-line fallthrough run rather than a single line (§7, §9), but it still
 streams strictly forward — a run is accumulated, never re-scanned.
 
 **Flat SoA output.** The content struct stores one `Vec` per element kind.
-All spans are `u32` byte offsets into the original source slice, which is
-borrowed for the content lifetime. This layout gives O(1) access per element
+All spans are byte offsets into the original source slice, which is
+borrowed for the content lifetime. The offset type defaults to `u32` and is
+selected by `limits { offset = ...; }`. This layout gives O(1) access per element
 kind and is cache-friendly for downstream processing.
 
 **Declarative grammar, zero hand-written scanning.** The grammar author writes
@@ -203,8 +205,10 @@ Source tokens (grammar DSL)
   Final token stream handed back to rustc
 ```
 
-The front-end reads the grammar by keyword, so sub-rules and settings may be
-declared in any order and a trailing `;` or `,` is optional. The runtime macros
+The front-end reads the grammar by keyword, so sub-rules and settings within a
+section may be declared in any order and a trailing `;` or `,` is optional.
+The four header context bytes keep their fixed order (`sep`, `eol`, `tab`,
+`escape`), followed by the optional `max_nest` and `crlf`. The runtime macros
 are `macro_rules!` patterns and match exactly one token shape: inside an
 `on_trigger { ... }` block the sub-rules in the order `symmetric`,
 `asymmetric`, `chained`, `key_value`; only `parse_inside` in a symmetric
@@ -232,39 +236,44 @@ The collected fields (CF) is a plain struct accumulated by the front-end:
 
 ```rust
 struct CF {
-    inline:       Vec<(Ident, TokenStream, Literal)>,  // field, Type, div
-    inline_simple: Vec<(Ident, Literal)>,              // field, div
-    line:         Vec<(Ident, TokenStream, Literal)>,
-    block:        Vec<(Ident, TokenStream, Literal)>,
-    block_simple: Vec<(Ident, Literal)>,
-    standalone:   Vec<StandaloneRule>,
+    inline:          Vec<(Ident, TokenStream, Literal)>,  // field, Type, div
+    inline_simple:   Vec<(Ident, Literal)>,               // field, div
+    line:            Vec<(Ident, TokenStream, Literal)>,
+    block:           Vec<(Ident, TokenStream, Literal)>,
+    block_simple:    Vec<(Ident, Literal)>,
+    inline_fallback: Option<Ident>,
+    merge_simple:    Option<Ident>,
+    standalone:      Vec<StandaloneRule>,
 }
 ```
 
 `StandaloneRule` is an enum with one variant per grammar construct that
-supports standalone scanning:
+supports standalone scanning. The pattern-bearing variants keep the pattern
+tokens as written, not a single byte:
 
 ```
-SymmetricExact  { field, byte, count }
-AsymmetricExact { field, open, close, count }
-Chained         { field, open1, close1, open2, close2, prefix, ty, pf, ff, sf }
+SymmetricExact  { field, byte, count, opaque, cap }
+AsymmetricExact { field, open, close, count, opaque, balanced, cap }
+Chained         { field, open1, close1, open2, close2, prefix, ty,
+                  pf, ff, sf, first_flags, second_flags, cap }
 KeyValue        { field, eq, end, allow_sep, ty, kf, vf }
 LineMarker      { field, byte, max, ty, var, body }
-LineUniform     { field, bytes, min, ty, var, body }
-Fence           { field, byte, min }
+LineUniform     { field, pat, min, ty, var, body }
+Fence           { field, pat, min, cap }
 Cont            { field, byte }
-BlockMarker     { field, bytes, ty, var, body }
-BlockNumbered   { field, end_bytes, ty, num_var, kind_var, body }
+BlockMarker     { field, pat, ty, var, body }
+BlockNumbered   { field, digits, ends, ty, num_var, kind_var, body }
 ```
 
-Each variant carries exactly the literals and identifiers needed to emit both
-the `find_*` method (via `define_standalone_fns!`) and the `_clean` / `_raw`
-accessors (via `methods.rs`). Nothing more is stored.
+Each variant carries exactly the literals, types and identifiers needed to
+emit both the `find_*` method (via `define_standalone_fns!`) and the
+`_clean` / `_raw` accessors (via `methods.rs`). Nothing more is stored.
 
-Note that `max_nest` itself is *not* part of `CF` — it is parsed directly in
-`lib.rs`'s `expand()` as a standalone `Literal`, alongside `sep`/`eol`/`tab`/
-`escape`, and forwarded straight through to `parse_text!`'s call site rather
-than being threaded through the collected-fields structure.
+The optional `limits` section is parsed by `limits.rs` from `expand()`. Its
+`max_nest` and the three span caps are *not* part of `CF`: they are forwarded
+as literals or optional tokens to `parse_text!`, `parse_inline!`,
+`parse_line!`, `parse_block!` and the standalone DSL, rather than being
+threaded through the collected-fields structure.
 
 ---
 
@@ -305,7 +314,23 @@ The `define_parser!` expansion emits:
 pub struct NameParser;
 
 impl NameParser {
-    pub fn parse(source: &[u8]) -> NameContent<'_> {
+    // Emitted only when `max_input_bytes` is set.
+    fn __meon_check_input(source: &[u8]) -> Result<(), InputBytesTooLarge> {
+        if source.len() > MAX as usize {
+            Err(InputBytesTooLarge { len: source.len(), max: MAX })
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn parse(
+        source: &[u8],
+    ) -> Result<NameContent<'_>, InputBytesTooLarge> {
+        Self::__meon_check_input(source)?; // omitted when no limit
+        Ok(Self::parse_unchecked(source))
+    }
+
+    pub fn parse_unchecked(source: &[u8]) -> NameContent<'_> {
         mc::parse_text!(
             source;
             sep = ..., eol = ..., tab = ..., escape = ..., max_nest = ...;
@@ -320,8 +345,9 @@ impl NameParser {
 ```
 
 `max_nest` is always forwarded explicitly to `parse_text!`, even when the
-grammar omitted it — `lib.rs`'s `expand()` defaults the literal to `1` before
-emitting this call, rather than relying on `parse_text!`'s own default arm.
+grammar omitted it — `expand()` defaults the literal to `1` before emitting
+this call. The three span caps are forwarded as optional `[]`/`[N]` tokens:
+`[]` means no cap and generates no limit code.
 
 The grammar sections passed to `parse_text!` have been stripped of their
 `=> field [N]` annotations by `strip.rs` — those annotations are only
@@ -411,9 +437,11 @@ while pos < len:
 
 The loop invariant is that `pos` always advances. A fallthrough run is scanned
 once over its whole multi-line extent, not per line, so the unified inline
-stack persists across the `\n` bytes inside it. The hard-break check and text
-flushing happen at run boundaries, not inside the per-character `parse_inline!`
-loop.
+stack persists across the `\n` bytes inside it. Inside that call
+`parse_inline!` handles each internal `eol` itself: it checks for a hard-break
+marker, flushes the text before it and steps past any `cont` markers. The run
+boundaries — blank line, matched line/block rule, end of input — are decided
+by `parse_text!`.
 
 ---
 
@@ -428,7 +456,7 @@ layout that directly reflects parsing semantics:
 | `inline_simple`| `Vec<Span>`             | `parse_inline!`     |
 | `line`         | `Vec<(T, Span)>`        | `parse_line!`       |
 | `block`        | `Vec<(T, Span)>`        | `parse_block!`      |
-| `block_simple` | `Vec<Span>`             | `parse_block!`      |
+| `block_simple` | `Vec<Span>`             | `parse_block!`; `hard_break` via `parse_inline!` |
 
 `Vec<T>` — user-defined type with multiple `Span` fields (links, key-values).
 `Vec<Span>` — single byte range, no extra metadata.
@@ -484,13 +512,14 @@ on one shared stack**, bounded by the grammar-wide `max_nest` (forwarded from
 `parse_text!`; default `1`):
 
 ```
-frames:        [(u8, u8, u32); max_nest]   // (byte, count, vidx)
+frames:        [(u8, u8, off); max_nest]   // (byte, count, vidx)
 fdepth:        usize                        // single budget for ALL kinds
-kv_pending:    [(u32, u32, u32); max_nest]  // (key_start, key_end, value_start)
-held_base:     [(u32, u32); max_nest]       // fallback-vector snapshot per frame
+kv_pending:    [(off, off, off); max_nest]  // (key_start, key_end, value_start)
+held_base:     [(off, off); max_nest]       // fallback-vector snapshot per frame
 asym_overflow: u32                          // one-shot counter for balanced opens past the cap
 ```
 
+`off` is the grammar's selected offset type (`u8`, `u16`, `u32` or `u64`).
 A frame stores only `(byte, count, vidx)` — **there is no kind tag**. Each
 frame's kind, close byte and field routing are recovered at the point
 of use by matching the stored `byte` against each rule's own compile-time
@@ -674,15 +703,12 @@ bounded by `max_nest`.
 
 ### Active block stack (`max_nest`)
 
-The active block state is a bounded stack `[(u8, u8, u8, u32); max_nest]`
-plus a depth counter, sharing the grammar-wide `max_nest` cap with the inline
-engine (§9). `max_nest = 1` reduces it to a single slot: at most one block
-open at a time, no block opening inside another.
-
-| Discriminant (field 0) | Meaning            | Field 1  | Field 2 | Field 3  |
-|-------------------------|---------------------|----------|---------|----------|
-| `0`                     | Open fence          | `byte`   | `count` | `start`  |
-| `1`                     | Continuation (`>`)  | `byte`   | `0`     | `start`  |
+The active block state is a bounded stack `[(usize, usize); max_nest]` plus a
+depth counter, sharing the grammar-wide `max_nest` cap with the inline engine
+(§9). Each entry is `(count, start)`: `count == 0` is a continuation frame
+(the marker byte is read from `src[start]`), and `count > 0` is a fence with
+that opening run length. `max_nest = 1` reduces the stack to a single slot:
+at most one block open at a time, no block opening inside another.
 
 Two structural invariants make the stack tractable:
 
@@ -745,7 +771,9 @@ paragraph, block-line, fence and same-marker continuation boundaries.
 | Type                | Matching rule         | Item type       |
 |---------------------|------------------------|-----------------|
 | `SymmetricExactIter`| `symmetric N =>`      | `Span`          |
-| `AsymmetricExactIter`| `asymmetric N =>`    | `Span`          |
+| `AsymmetricExactIter`| `asymmetric N =>` (opaque, unbalanced) | `Span` |
+| `AsymmetricBalancedIter` | `asymmetric` (opaque, balanced) | `Span` |
+| `AsymmetricStackIter` | `asymmetric` (transparent) | `Span` |
 | `ChainedIter`       | `chained`             | `T`             |
 | `KvIter`            | `key_value`           | `T`             |
 | `LineMarkerIter`    | `line`                | `(T, Span)`     |
@@ -755,7 +783,7 @@ paragraph, block-line, fence and same-marker continuation boundaries.
 | `BlockMarkerIter`   | `block (pattern)`     | `(T, Span)`     |
 | `BlockNumberedIter` | `block num(...)`        | `(T, Span)`     |
 | `ContextSymmetricExactIter`  | `symmetric N =>` (transparent)  | `Span` |
-| `ContextAsymmetricExactIter` | `asymmetric N =>` (transparent) | `Span` |
+| `ContextAsymmetricStackIter` | `asymmetric` (transparent)      | `Span` |
 
 ### Context-aware variants — `ParseContext` and `find_context_*`
 
@@ -765,7 +793,8 @@ The generated `Parser::context(source)` builds a `ParseContext` — a sorted,
 non-overlapping set of every opaque region — in one streaming pass whose
 needle set unifies the fence bytes and the opaque triggers (one
 `memchr`/`memchr2`/`memchr3` search per iteration up to three distinct
-bytes, `swar::find_any` beyond). The region vector is preallocated from the
+bytes, `swar::find_any` up to the needle buffer's capacity, then a byte
+table for a wider set). The region vector is preallocated from the
 grammar's own `[cap]` divisors. Opaque inline matching inside the builder is
 escape-aware and paragraph-bounded, and a fence-opening line ends the
 paragraph, mirroring the full parser.
@@ -858,19 +887,23 @@ away entirely when a SIMD feature is active.
 ## 14. Span representation
 
 ```rust
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
+pub struct Span<T = u32> {
+    pub start: T,
+    pub end: T,
 }
 ```
 
 A half-open byte range `[start, end)`. All values produced by the parser
 satisfy `start <= end <= source.len()`.
 
-`u32` was chosen over `usize` to halve the span size (8 bytes vs 16 bytes
-on 64-bit). This matters when a document produces tens of thousands of spans —
-the vecs stay in fewer cache lines. The trade-off is the 4 GiB input limit
-(`MAX_INPUT_LEN = u32::MAX as usize`), which exceeds any realistic document.
+`u32` is the default. It was chosen over `usize` to halve the span size
+(8 bytes vs 16 bytes on 64-bit), which matters when a document produces tens
+of thousands of spans — the vecs stay in fewer cache lines. The default's
+trade-off is the 4 GiB input limit (`MAX_INPUT_LEN = u32::MAX as usize`).
+A grammar can select `u8`, `u16`, `u32` or `u64` with
+`limits { offset = ...; }`. Its checked methods reject an input over the
+selected type only when `max_input_bytes` is set; an absent key or `_` reads
+only the prefix that fits.
 
 Zero-length spans (`start == end`) are used for position-only markers such as
 hard-break anchors.
@@ -891,13 +924,18 @@ user-controlled input from a library is unsound.
 
 **`bytes(span) -> &[u8]`** — slice the source by span, no UTF-8 check.
 
-**`<field>_clean()`** — iterator over inner content slices (between delimiters).
+**`<field>_clean()`** — iterator over the stored span (inner content for
+delimiter-bearing rules).
 
-**`<field>_raw()`** — iterator over full slices including delimiter bytes.
-Delimiter arithmetic uses saturating/clamped bounds where applicable; caller-
-mutated invalid content spans may still panic through checked slice indexing.
+**`<field>_raw()`** — iterator over the full slice including delimiter bytes.
+It is generated only for fields backed by a `StandaloneRule`; fallback and
+`hard_break` fields get `_clean` only. Delimiter arithmetic uses
+saturating/clamped bounds where applicable; caller-mutated invalid content
+spans may still panic through checked slice indexing.
 
-The raw accessor logic differs per rule type:
+`Fence`, `Cont` and `LineUniform` have no delimiter to strip: their `_clean`
+and `_raw` both return the stored span. The raw accessor logic differs per
+rule type:
 
 - `SymmetricExact`: `start - count .. end + count`
 - `AsymmetricExact`: `start - count .. end + 1`
@@ -1020,10 +1058,11 @@ actually needs it.
 A `chained` rule with a transparent component (`parse_inside = true` on
 either the text or url side) tracks its in-progress match in a small set of
 local variables shared across every `chained` rule in the grammar, not a
-per-rule array. A rule-byte discriminator prevents another chained rule from advancing the
-active rule's phases, but there is still only one active transparent match at
-a time. Fully opaque rules have independent search memos and are not subject
-to that active-phase restriction.
+per-rule array. There is only one active transparent match at a time; the
+grammar's rule literals decide which rule the active bytes belong to, and
+there is no separate per-rule discriminator slot. Fully opaque rules have
+independent search memos and are not subject to that active-phase
+restriction.
 
 ### `key_value` is scoped to one rule per grammar
 
@@ -1077,9 +1116,11 @@ context-aware consumer.
 
 ### 4 GiB input limit
 
-Spans store byte offsets as `u32`. Inputs larger than `u32::MAX` bytes would
-produce silently truncated spans. The fuzz harness guards against this with an
-early return. In practice no text document approaches this limit.
+Spans store byte offsets in the selected `offset` type. Inputs larger than its
+maximum produce truncated spans unless a limit is set. A grammar can set
+`max_input_bytes = 0` (or the offset maximum) to make its checked methods
+reject them; an absent key or `_` reads only the prefix that fits. The fuzz harness guards against this with an early return.
+In practice no text document approaches this limit.
 
 ---
 
@@ -1125,6 +1166,77 @@ gating on `portable_simd`, and adding a `search_simd!` invocation inside
 `meon` uses the global allocator for all `Vec` allocations. Replacing it with
 `mimalloc` or another allocator is the responsibility of the binary/grammar
 crate, not the engine. No changes to `meon` are needed.
+
+---
+
+## 19. Span and input limits
+
+The optional `limits { ... }` section carries the offset type, the
+grammar-wide nesting cap, three span-length caps and an input-length cap:
+
+| Key               | Meaning                                                     |
+|-------------------|-------------------------------------------------------------|
+| `offset`          | Span offset type: `u8`, `u16`, `u32` or `u64`; default `u32`.|
+| `max_nest`        | Shared cap of the inline and block stacks; default `1`.     |
+| `max_inline_span` | Longest emitted inline span, in bytes; default absent.      |
+| `max_line_span`   | Longest emitted line span, in bytes; default absent.        |
+| `max_block_span`  | Longest emitted block span, in bytes; default absent.       |
+| `max_input_bytes` | Longest accepted source, in bytes; default absent.          |
+
+`max_nest` is also accepted in the header for existing grammars; if both are
+present they must agree. The span caps are measured on the clean span,
+`end - start` of the stored `Span`, without delimiters. `0` and the offset
+type's maximum are normalized to absent; a value above the offset maximum is
+a compile error.
+
+`max_input_bytes` is not normalized to absent. `0` and the offset type's
+maximum both mean that maximum; the checked methods reject a larger source.
+`_` or an absent key means no check, and the parser reads only the prefix that
+fits. A value above the offset maximum is a compile error. The check runs at the start of every
+checked method — `parse`, `find_*`, `find_context_*`, `context` — before any
+parser state, context map or `Vec` is allocated. The unchecked variants skip
+it.
+
+The front-end emits each cap as an optional token, `[]` or `[N]`. `[]` means
+no cap: the runtime macros emit no comparison, no fallback push and no reparse
+helper for that level. `[N]` is emitted as the smallest unsigned literal that
+holds the value (`u8`, `u16`, `u32` or `u64`); comparisons are done in
+`usize`.
+
+### Full parse
+
+- **Inline simple spans** — a span longer than the cap is not emitted. A
+  transparent symmetric/asymmetric frame is removed and its plain text stays
+  in the fallback field; its completed inner elements remain.
+- **Opaque inline spans** (`parse_inside = false`) — the span is dropped and
+  its interior is reparsed with the same grammar. The delimiters become text.
+  A `chained` element over the cap is dropped and its interior reparsed.
+  A `key_value` pair is dropped and is not reparsed: its value text is
+  consumed with the pair, while completed inner elements remain.
+- **Line and block spans** — a line rule, block item or `cont` span over its
+  cap is not emitted; the span itself is pushed to the grammar's
+  `blocks { fallback => ... }` field, while inline content keeps being
+  scanned. A fence over the cap is also reparsed: its content is split into
+  paragraph runs at blank lines, `cont` markers of the frames below it are
+  skipped, and the fence is no longer opaque.
+- **Fallback fields** — `inline` fallback text is never capped. The block
+  fallback paragraph is not pushed when its own span exceeds the block cap.
+
+The reparse helper is generated only when a cap needs it. Its recursion depth
+is bounded by `max_nest`. It scans an interior as an inline run; for fence
+content it first splits the content into paragraph runs and skips the
+continuation markers of the frames that held the fence.
+
+### Standalone and context
+
+Every `find_*` and `find_context_*` iterator applies the same caps: a yielded
+span longer than its level's cap is skipped. Context-free opaque finders skip
+an over-limit match and resume after it; they do not search its interior for
+the same kind. `ParseContext` drops an over-limit opaque region and rescans
+its interior for nested regions, so context-aware finders see the same
+structure the full parse reparses. A fence over `max_block_span` is not added
+to the context map and its content is rescanned. Over-limit line and block
+items are filtered by their finders.
 
 ---
 
