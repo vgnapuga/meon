@@ -112,7 +112,7 @@ pub use crate::parse_block;
 /// # Loop state
 ///
 /// - `pos` always advances; the loop is O(n) in the source length.
-/// - `_active_stack: [(u32, u32); max_nest]` and `_active_depth` —
+/// - `_active_stack: [(usize, usize); max_nest]` and `_active_depth` —
 ///   the open block frames (see [`crate::parse_block!`] for the encoding).
 /// - `para_start` — start of the current fallthrough run, `None` when no run
 ///   is open. Also the run's inline-scan start.
@@ -157,8 +157,10 @@ pub use crate::parse_block;
 ///
 /// # Known limitations
 ///
-/// - Precedence between overlapping inline rules follows declaration order;
-///   there is no precedence table.
+/// - Overlapping inline rules are dispatched by a fixed kind order
+///   (`symmetric`, `asymmetric`, `chained`, `key_value`); declaration order
+///   is preserved only within a kind. There is no format-specific precedence
+///   table.
 #[macro_export]
 macro_rules! parse_text {
     // `max_nest` and `crlf` are always present: `define_parser!` defaults

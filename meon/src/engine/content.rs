@@ -86,7 +86,7 @@
 //!
 //! Every `inline_simple` field gets one more:
 //!
-//! - `push_merge_f(&mut self, Span, floor: $off)` - append with coalescing: if
+//! - `push_merge_f(&mut self, Span, floor: usize)` - append with coalescing: if
 //!   the last span is non-empty, ends at or after `floor`, the new span is
 //!   non-empty and starts at most one byte after the last one ends, the last
 //!   span's end is extended instead of pushing a new entry. `floor` is the start

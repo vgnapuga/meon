@@ -20,12 +20,13 @@
 //! - **Unknown keywords are errors.** An identifier in statement position that
 //!   this module does not recognise (a typo, a keyword from the wrong section)
 //!   is reported here, located, with the list of what was expected.
-//! - **Everything the runtime needs is required.** A `symmetric` /
-//!   `asymmetric` body and every `chained` component must state both
-//!   `parse_inside` and `balanced`; a `chained` rule needs its two components
-//!   and its `prefix`; a `key_value` rule needs `eq`, `allow_sep`, `end`,
-//!   `key` and `value`. A missing one is a located error, not a silently
-//!   skipped standalone rule.
+//! - **Everything the runtime needs is required.** A `symmetric` body must
+//!   state `parse_inside` (and rejects `balanced`); an `asymmetric` body and
+//!   every `chained` component must state both `parse_inside` and `balanced`;
+//!   a `chained` rule needs its two components and its `prefix`; a
+//!   `key_value` rule needs `eq`, `allow_sep`, `end`, `key` and `value`.
+//!   A missing one is a located error, not a silently skipped standalone
+//!   rule.
 //! - **No arm that can never match.** An `asymmetric` rule with `balanced`
 //!   or `parse_inside` set opens one frame per open byte, so its only arm is
 //!   `1 => field`; any other arm, a second one included, is a located error.

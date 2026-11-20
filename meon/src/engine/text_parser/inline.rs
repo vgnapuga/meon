@@ -41,8 +41,9 @@
 //!
 //! Every construct that tracks nesting — `symmetric` and `asymmetric` with
 //! `parse_inside = true`, and `key_value` — lives on one bounded stack,
-//! `frames: [(u8, u8, u32); max_nest]`, with a single depth counter
-//! `fdepth`. A frame stores `(byte, count, vidx)` and no kind tag:
+//! `frames: [(u8, u8, off); max_nest]`, with a single depth counter
+//! `fdepth`. `off` is the grammar's selected offset type. A frame stores
+//! `(byte, count, vidx)` and no kind tag:
 //!
 //! | kind         | `byte`         | `count`    | `vidx`                          |
 //! |--------------|----------------|------------|---------------------------------|

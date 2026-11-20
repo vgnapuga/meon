@@ -13,7 +13,9 @@
 //! streaming pass over the source — a single unified needle search per
 //! iteration (fence bytes and opaque-rule triggers share one deduplicated
 //! set, dispatched to `memchr`/`memchr2`/`memchr3` or, beyond three distinct
-//! bytes, to the SWAR [`crate::swar::find_any`]) — resolving every opaque
+//! bytes, to the SWAR [`crate::swar::find_any`]; a set wider than the
+//! compile-time needle buffer is scanned byte by byte through a table) —
+//! resolving every opaque
 //! construct with the same leftmost-wins semantics the full parser uses.
 //!
 //! # Lines

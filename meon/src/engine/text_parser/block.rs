@@ -21,7 +21,7 @@
 //!
 //! # Active block stack (`max_nest`)
 //!
-//! The active block state is a bounded stack `[(u32, u32); max_nest]` of
+//! The active block state is a bounded stack `[(usize, usize); max_nest]` of
 //! `(count, start)` frames plus a depth counter, sharing the grammar-wide
 //! `max_nest` cap with the inline engine (see [`crate::parse_inline!`]). At
 //! `max_nest = 1` it is a single slot: at most one block open at a time, no
@@ -35,8 +35,8 @@
 //! The frame's byte is `src[start]`, and the rule that owns it is the one
 //! that opened it: the first `cont` rule of that byte for a continuation,
 //! the first `fence` rule whose pattern takes the byte and whose `min` the
-//! count reaches for a fence. A frame is 8 bytes, and a fence counts its run
-//! exactly at any length.
+//! count reaches for a fence. A frame is two `usize` values (16 bytes on
+//! 64-bit), and a fence counts its run exactly at any length.
 //!
 //! Two structural invariants make the stack tractable:
 //!
