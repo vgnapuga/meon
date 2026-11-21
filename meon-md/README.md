@@ -34,7 +34,7 @@ demonstrating what `meon` can express in a single `define_parser!` invocation.
 
 ```toml
 [dependencies]
-meon-md = "0.6"
+meon-md = "1.0"
 ```
 
 ```rust

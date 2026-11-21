@@ -8,7 +8,7 @@ parser: a `parse` method for a full scan with bounded forward searches, and
 
 ```toml
 [dependencies]
-meon = "0.7"
+meon = "1.0"
 ```
 
 * **meon**    <--

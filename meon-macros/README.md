@@ -36,7 +36,7 @@ Do not add `meon-macros` to your `Cargo.toml` directly.
 
 ```toml
 [dependencies]
-meon = "0.7"
+meon = "1.0"
 ```
 
 ```rust

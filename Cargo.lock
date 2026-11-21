@@ -490,7 +490,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "meon"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "memchr",
  "meon-macros",
@@ -500,14 +500,14 @@ dependencies = [
 
 [[package]]
 name = "meon-json"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "meon",
 ]
 
 [[package]]
 name = "meon-macros"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "meon-md"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "meon",
 ]

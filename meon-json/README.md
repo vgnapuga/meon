@@ -37,7 +37,7 @@ hot loop — a caller that never types pays nothing.
 
 ```toml
 [dependencies]
-meon-json = "0.5"
+meon-json = "1.0"
 ```
 
 ```rust
