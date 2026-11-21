@@ -7,6 +7,16 @@ This repository is a Cargo workspace of independently published crates —
 `meon`, `meon-macros`, `meon-md`, and `meon-json` — each versioned on its own;
 every entry below is labelled with the crate(s) it applies to.
 
+## [1.0.2] - 2026.11.21
+
+### Changed
+- **`meon`** — version `1.0.1` → `1.0.2`; **`meon-macros`, `meon-md`,
+  `meon-json`** — version `1.0.0` → `1.0.1`.
+- Crate README dependency examples now point to `1.0`.
+- `Cargo.lock` refreshed for the new versions.
+
+No API or behavior changes.
+
 ## [1.0.1] - 2026.11.21
 
 ### Fixed
