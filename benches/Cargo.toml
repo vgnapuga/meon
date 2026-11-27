@@ -17,7 +17,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 
 [dev-dependencies]
 pulldown-cmark = { version = "0.13.6", default-features = false }
-comrak = { version = "0.52.0", default-features = false }
+comrak = { version = "1.2.0", default-features = false }
 simd-json = "0.17.0"
 sonic-rs = "0.5.8"
 
